@@ -14,6 +14,10 @@
 #   not-ported     calls a helper that nvmimic still hands to the real nvm it
 #                  carries, and the test empties PATH, so no shell can start
 #                  for it. Comes off this list when the helper is ported
+#   shell-error    empties PATH and compares stderr, where real nvm's shell
+#                  reports the missing program with nvm.sh's file name and
+#                  line number ("nvm.sh: line 2336: uname: command not
+#                  found"). nvmimic has no such line to name
 #   real-node      installs real Node releases from nodejs.org (0.8 to 9.x and
 #                  io.js, some built from source), which the offline test
 #                  mirror does not hold
@@ -81,4 +85,4 @@ mock-tool: fast/Unit tests/nvm_command_info
 network: fast/Unit tests/nvm_download
 not-ported: fast/Unit tests/nvm_download and curl helpers bypass shadowed curl
 not-ported: fast/Unit tests/nvm_download no eval injection
-not-ported: fast/Unit tests/nvm_supports_xz
+shell-error: fast/Unit tests/nvm_supports_xz

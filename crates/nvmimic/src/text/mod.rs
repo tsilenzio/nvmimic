@@ -2,4 +2,5 @@
 //! a new nvm release is a one-line change here.
 
 pub mod help;
+pub mod install;
 pub mod messages;

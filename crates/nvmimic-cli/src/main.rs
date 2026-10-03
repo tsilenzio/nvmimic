@@ -75,6 +75,12 @@ fn main() -> ExitCode {
         vars: caller_vars(),
         dialect: dialect(),
         stdout_is_tty: is_tty(1),
+        aliases: env::var("__NVMIMIC_ALIASES")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect(),
+        direct_output: true,
     };
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();

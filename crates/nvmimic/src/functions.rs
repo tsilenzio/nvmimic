@@ -4,7 +4,7 @@
 
 use crate::cmd::{self, fallback};
 use crate::context::Nvm;
-use crate::nvm::{alias, colors, local, npm, nvmrc, output, paths, remote, version};
+use crate::nvm::{alias, colors, local, npm, nvmrc, output, paths, platform, remote, version};
 
 /// Runs helper `name`. `fd3` receives what nvm writes to file descriptor 3.
 pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str)) -> i32 {
@@ -191,6 +191,29 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
             };
             print(nvm, result)
         }
+        "nvm_get_os" => {
+            let os = platform::get_os(nvm);
+            nvm.io.echo(&os);
+            0
+        }
+        "nvm_get_arch" => {
+            let arch = platform::get_arch(nvm);
+            nvm.io.echo(&arch);
+            0
+        }
+        "nvm_get_minor_version" => match platform::get_minor_version(nvm, arg(0)) {
+            Ok(minor) => {
+                nvm.io.echo(&minor);
+                0
+            }
+            Err(status) => status,
+        },
+        "nvm_is_merged_node_version" => platform::is_merged_node_version(arg(0)),
+        "nvm_binary_available" => platform::binary_available(arg(0)),
+        "nvm_iojs_version_has_solaris_binary" => platform::iojs_version_has_solaris_binary(arg(0)),
+        "nvm_node_version_has_solaris_binary" => platform::node_version_has_solaris_binary(arg(0)),
+        "nvm_has_solaris_binary" => platform::has_solaris_binary(arg(0)),
+        "nvm_supports_xz" => platform::supports_xz(nvm, arg(0)),
         "__nvm_aliases" => {
             completion_aliases(nvm);
             0

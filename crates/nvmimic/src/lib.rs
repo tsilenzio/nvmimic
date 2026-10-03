@@ -24,6 +24,12 @@ pub struct Caller {
     pub vars: Vars,
     pub dialect: Dialect,
     pub stdout_is_tty: bool,
+    /// Names that are aliases in the shell, see [`context::Nvm::aliases`].
+    pub aliases: Vec<String>,
+    /// Whether `out` and `err` passed to [`run`] are the process's own
+    /// stdout and stderr. Programs nvm starts (curl with its progress bar,
+    /// npm, make) then write to the terminal directly.
+    pub direct_output: bool,
 }
 
 /// What one call left behind.
@@ -47,8 +53,13 @@ pub fn run(
         cache: Default::default(),
         dialect: caller.dialect,
         stdout_is_tty: caller.stdout_is_tty,
-        io: Io::new(out, err),
+        io: if caller.direct_output {
+            Io::new(out, err).direct()
+        } else {
+            Io::new(out, err)
+        },
         backend,
+        aliases: std::rc::Rc::new(caller.aliases),
     };
     let status = functions::call(&mut nvm, function, args, fd3);
     nvm.io.flush();

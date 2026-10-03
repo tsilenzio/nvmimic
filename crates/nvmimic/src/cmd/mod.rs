@@ -1,6 +1,7 @@
 //! The `nvm` command: its help scan, then one module per subcommand.
 
 pub mod alias;
+pub mod cache;
 pub mod deactivate;
 pub mod exec;
 pub mod fallback;
@@ -62,8 +63,10 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
         "set-colors" => set_colors(nvm, rest),
         "ls-remote" | "list-remote" => remote::ls_remote(nvm, rest),
         "version-remote" => remote::version_remote(nvm, rest),
-        "install" | "i" | "uninstall" | "cache" | "debug" | "install-latest-npm"
-        | "reinstall-packages" | "copy-packages" | "clear-cache" => fallback::run_nvm(nvm, args),
+        "cache" => cache::run(nvm, rest),
+        "clear-cache" => cache::clear_cache(nvm),
+        "install" | "i" | "uninstall" | "debug" | "install-latest-npm" | "reinstall-packages"
+        | "copy-packages" => fallback::run_nvm(nvm, args),
         _ => {
             nvm.to_stderr(|nvm| print_help(nvm, &["--help".to_string()]));
             127

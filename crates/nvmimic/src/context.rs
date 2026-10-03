@@ -13,6 +13,21 @@ pub struct Io<'a> {
     out_muted: u32,
     err_muted: u32,
     out_to_err: u32,
+    /// Whether `out` and `err` are this process's own stdout and stderr, so
+    /// a program nvm starts can write to them directly.
+    direct: bool,
+}
+
+/// Where a program nvm starts should send one of its output streams.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChildStream {
+    /// Straight to this process's own stream, as it happens.
+    Inherit,
+    /// To this process's stderr, for a stdout that nvm redirected there.
+    InheritErr,
+    /// Collected, then written through [`Io`].
+    Forward,
+    Discard,
 }
 
 impl<'a> Io<'a> {
@@ -23,6 +38,40 @@ impl<'a> Io<'a> {
             out_muted: 0,
             err_muted: 0,
             out_to_err: 0,
+            direct: false,
+        }
+    }
+
+    /// Says that `out` and `err` are the process's real stdout and stderr.
+    pub fn direct(mut self) -> Io<'a> {
+        self.direct = true;
+        self
+    }
+
+    /// Where a started program's stdout should go.
+    pub fn child_stdout(&self) -> ChildStream {
+        if self.out_to_err > 0 {
+            match self.child_stderr() {
+                ChildStream::Inherit => ChildStream::InheritErr,
+                other => other,
+            }
+        } else if self.out_muted > 0 {
+            ChildStream::Discard
+        } else if self.direct {
+            ChildStream::Inherit
+        } else {
+            ChildStream::Forward
+        }
+    }
+
+    /// Where a started program's stderr should go.
+    pub fn child_stderr(&self) -> ChildStream {
+        if self.err_muted > 0 {
+            ChildStream::Discard
+        } else if self.direct {
+            ChildStream::Inherit
+        } else {
+            ChildStream::Forward
         }
     }
 
@@ -77,6 +126,9 @@ pub struct Nvm<'a> {
     pub stdout_is_tty: bool,
     pub io: Io<'a>,
     pub backend: &'a dyn Backend,
+    /// Names that are aliases in the calling shell, among the ones the shell
+    /// side reports. nvm skips a checksum program that is aliased.
+    pub aliases: std::rc::Rc<Vec<String>>,
 }
 
 /// A variable's value before a `local` declaration hid it.
@@ -180,6 +232,7 @@ impl<'a> Nvm<'a> {
         let mut buffer: Vec<u8> = Vec::new();
         {
             let err_muted = self.io.err_muted;
+            let aliases = self.aliases.clone();
             let mut err = ErrForward(&mut self.io);
             let mut inner = Nvm {
                 vars: self.vars.snapshot(),
@@ -192,8 +245,12 @@ impl<'a> Nvm<'a> {
                     out_muted: 0,
                     err_muted,
                     out_to_err: 0,
+                    // Both streams pass through buffers here, so a started
+                    // program's output has to be collected to stay in order.
+                    direct: false,
                 },
                 backend: self.backend,
+                aliases,
             };
             body(&mut inner);
         }
