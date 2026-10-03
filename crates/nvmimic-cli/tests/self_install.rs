@@ -14,6 +14,7 @@ struct Home {
 
 impl Home {
     fn new() -> Home {
+        sweep_stale();
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let root = std::env::temp_dir().join(format!("nvmimic-self-{}-{id}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
@@ -50,10 +51,34 @@ impl Home {
     }
 }
 
-impl Drop for Home {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
-    }
+// A `Home` is left behind on purpose and swept by a later run. Each test
+// copies the nvmimic program into its home and runs it, and macOS scans a
+// new program the first time it runs. Deleting the copy while that scan may
+// still be queued is part of what crashed the scanning service in an earlier run.
+
+/// Removes homes that earlier runs left behind, once they are half an hour old.
+fn sweep_stale() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let ours = entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("nvmimic-self-");
+            let old = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > 1800);
+            if ours && old {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    });
 }
 
 fn reference() -> PathBuf {

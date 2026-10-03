@@ -194,6 +194,16 @@ impl Default for Options {
     }
 }
 
+/// What one run does after its sandbox is ready.
+struct Run<'a> {
+    /// Arguments for `. nvm.sh`, or `None` to leave nvm.sh unsourced.
+    source_args: Option<&'a str>,
+    setup: &'a str,
+    body: &'a str,
+    /// Install from the mirror's real-file releases.
+    plain_files: bool,
+}
+
 pub struct World {
     pub root: PathBuf,
     pub mirror: &'static Mirror,
@@ -223,6 +233,44 @@ impl World {
         self.run_with(which, shell, "", "", body)
     }
 
+    /// Runs one case: its body after sourcing nvm.sh, or its test from nvm's
+    /// own suite.
+    ///
+    /// A suite test runs in `suite_side`, a sandbox that is set up once and
+    /// then reused for every suite test, the way nvm's own test runner works
+    /// through one checkout. The caller keeps one per implementation.
+    pub fn run_case(
+        &self,
+        which: Impl,
+        shell: &Shell,
+        case: &crate::cases::Case,
+        suite_side: &Path,
+    ) -> Outcome {
+        match &case.suite {
+            Some(test) => {
+                prepare_suite_side(which, suite_side);
+                let body = test.command(&shell.path);
+                let run = Run {
+                    source_args: None,
+                    setup: "",
+                    body: &body,
+                    plain_files: false,
+                };
+                self.run_script(which, shell, run, Some(suite_side))
+            }
+            None => {
+                let source = Some(case.source.as_str());
+                let run = Run {
+                    source_args: source,
+                    setup: &case.setup,
+                    body: &case.body,
+                    plain_files: case.plain_files,
+                };
+                self.run_script(which, shell, run, None)
+            }
+        }
+    }
+
     /// Sources nvm.sh with `source_args`, runs `setup` with its output
     /// discarded, then runs `body`, which is what gets compared. A second run
     /// of the same implementation and shell gets its own side directory.
@@ -234,23 +282,51 @@ impl World {
         setup: &str,
         body: &str,
     ) -> Outcome {
+        let run = Run {
+            source_args: Some(source_args),
+            setup,
+            body,
+            plain_files: false,
+        };
+        self.run_script(which, shell, run, None)
+    }
+
+    /// `reuse` names a sandbox that is already set up, used in place of a
+    /// fresh one.
+    fn run_script(&self, which: Impl, shell: &Shell, run: Run, reuse: Option<&Path>) -> Outcome {
+        let Run {
+            source_args,
+            setup,
+            body,
+            plain_files,
+        } = run;
+        let mirror = match plain_files {
+            true => format!("{}{}", self.mirror.url, crate::mirror::PLAIN),
+            false => self.mirror.url.trim_end_matches('/').to_string(),
+        };
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
-        let side = self
-            .root
-            .join(format!("{}-{}-{id}", which.name(), shell.name));
+        let side = match reuse {
+            Some(side) => side.to_path_buf(),
+            None => self
+                .root
+                .join(format!("{}-{}-{id}", which.name(), shell.name)),
+        };
         let home = side.join("home");
         let nvm_dir = home.join(".nvm");
         let bin = side.join("bin");
         let work = side.join("work");
-        for dir in [&nvm_dir, &bin, &work] {
-            fs::create_dir_all(dir).unwrap();
+        if reuse.is_none() {
+            for dir in [&nvm_dir, &bin, &work] {
+                fs::create_dir_all(dir).unwrap();
+            }
+            install(which, &nvm_dir, &side, self.options.count_launches);
         }
-        install(which, &nvm_dir, &side, self.options.count_launches);
 
         let launch_log = side.join("launches");
         if self.options.count_launches {
             install_shims(&bin);
         }
+        let _ = fs::remove_file(&launch_log);
 
         let state_file = side.join("state");
         let setup = if setup.trim().is_empty() {
@@ -269,8 +345,12 @@ impl World {
         } else {
             (String::new(), String::new())
         };
+        let source = match source_args {
+            Some(args) => format!(". \"$NVM_DIR/nvm.sh\" {args}\n"),
+            None => String::new(),
+        };
         let script = format!(
-            ". \"$NVM_DIR/nvm.sh\" {source_args}\n{setup}{count_on}{body}\n__diff_rc=$?\n{count_off}{}",
+            "{source}{setup}{count_on}{body}\n__diff_rc=$?\n{count_off}{}",
             probe_script(&shell.name)
         );
 
@@ -284,11 +364,8 @@ impl World {
                 format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
             )
             .env("TERM", "dumb")
-            .env(
-                "NVM_NODEJS_ORG_MIRROR",
-                self.mirror.url.trim_end_matches('/'),
-            )
-            .env("NVM_IOJS_ORG_MIRROR", format!("{}iojs", self.mirror.url))
+            .env("NVM_NODEJS_ORG_MIRROR", &mirror)
+            .env("NVM_IOJS_ORG_MIRROR", format!("{mirror}/iojs"))
             .env("DIFF_STATE", &state_file)
             .current_dir(&work);
         if shell.name == "zsh" {
@@ -339,12 +416,58 @@ impl World {
     }
 }
 
-impl Drop for World {
-    fn drop(&mut self) {
-        if std::env::var_os("NVMIMIC_PARITY_KEEP").is_none() {
-            let _ = fs::remove_dir_all(&self.root);
-        }
+// A `World` leaves its directory behind on purpose. macOS scans new files
+// the first time they run, and deleting a sandbox while scans of its files
+// are still queued is part of what crashed the scanning service in
+// an earlier run. `guard::sweep_stale` removes old sandboxes at the start of a
+// later run instead.
+
+/// Sets up a reusable sandbox for nvm's own test suite, once: the
+/// implementation in `$NVM_DIR`, and a copy of the suite at `$NVM_DIR/test`.
+pub fn prepare_suite_side(which: Impl, side: &Path) {
+    let nvm_dir = side.join("home/.nvm");
+    if nvm_dir.join("test").is_dir() {
+        return;
     }
+    for dir in [nvm_dir.clone(), side.join("bin"), side.join("work")] {
+        fs::create_dir_all(dir).unwrap();
+    }
+    install(which, &nvm_dir, side, false);
+    copy_tree(&crate::suite::tree(), &nvm_dir.join("test"));
+
+    // The suite's mock programs get run, so each sandbox links to one shared
+    // copy of them, which macOS then scans only once.
+    let staged = staged(Path::new("suite-mocks"), |staged| {
+        copy_tree(&crate::suite::tree().join("mocks"), staged)
+    });
+    let mocks = nvm_dir.join("test/mocks");
+    for entry in fs::read_dir(&staged).unwrap().flatten() {
+        let target = mocks.join(entry.file_name());
+        let _ = fs::remove_file(&target);
+        fs::hard_link(entry.path(), target).unwrap();
+    }
+}
+
+/// A file or directory made once per process under the stage directory.
+/// Sandboxes link to it, so a script many sandboxes run is one file to macOS.
+fn staged(name: &Path, make: impl FnOnce(&Path)) -> PathBuf {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = LOCK.lock().unwrap();
+    let path = crate::guard::stage_dir().join(name);
+    if fs::symlink_metadata(&path).is_err() {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        make(&path);
+    }
+    path
+}
+
+/// The script that runs one test of nvm's suite, see [`crate::suite::RUNNER`].
+pub fn suite_runner() -> PathBuf {
+    staged(Path::new("run-nvm-test"), |path| {
+        fs::write(path, crate::suite::RUNNER).unwrap()
+    })
 }
 
 /// Puts one implementation into `$NVM_DIR` the way its installer would.
@@ -352,18 +475,18 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, count_launches: bool) {
     match which {
         Impl::Nvm => {
             let reference = crate::reference_dir();
-            for file in ["nvm.sh", "nvm-exec", "bash_completion"] {
+            for file in ["nvm.sh", "bash_completion"] {
                 copy(&reference.join(file), &nvm_dir.join(file));
             }
+            link_staged("nvm/nvm-exec", &reference.join("nvm-exec"), nvm_dir);
         }
         Impl::Nvmimic => {
             let shell_dir = repo_root().join("shell");
-            for file in ["nvm-exec", "bash_completion"] {
-                let source = shell_dir.join(file);
-                if source.is_file() {
-                    copy(&source, &nvm_dir.join(file));
-                }
-            }
+            copy(
+                &shell_dir.join("bash_completion"),
+                &nvm_dir.join("bash_completion"),
+            );
+            link_staged("nvmimic/nvm-exec", &shell_dir.join("nvm-exec"), nvm_dir);
             if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
                 let link = nvm_dir.join(".nvmimic/bin/nvm");
                 let script = nvmimic::install::bind_binary(&template, &link.display().to_string());
@@ -393,22 +516,38 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, count_launches: bool) {
     }
 }
 
+/// Puts `nvm-exec` into `$NVM_DIR` as a hard link to one staged copy. It is
+/// the one script of nvm's that gets run rather than sourced.
+fn link_staged(name: &str, source: &Path, nvm_dir: &Path) {
+    let staged = staged(Path::new(name), |staged| copy(source, staged));
+    fs::hard_link(staged, nvm_dir.join("nvm-exec")).unwrap();
+}
+
 fn install_shims(bin: &Path) {
-    for tool in COUNTED_TOOLS {
-        let Some(real) = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
-            .iter()
-            .map(|dir| Path::new(dir).join(tool))
-            .find(|path| path.is_file())
-        else {
-            continue;
-        };
-        write_script(
-            &bin.join(tool),
-            &format!(
-                "#!/bin/sh\n[ -z \"$NVMIMIC_LAUNCH_LOG\" ] || printf '%s\\n' {tool} >> \"$NVMIMIC_LAUNCH_LOG\"\nexec '{}' \"$@\"\n",
-                real.display()
-            ),
-        );
+    let shims = staged(Path::new("shims"), |shims| {
+        fs::create_dir_all(shims).unwrap();
+        for tool in COUNTED_TOOLS {
+            let Some(real) = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+                .iter()
+                .map(|dir| Path::new(dir).join(tool))
+                .find(|path| path.is_file())
+            else {
+                continue;
+            };
+            write_script(
+                &shims.join(tool),
+                &format!(
+                    "#!/bin/sh\n[ -z \"$NVMIMIC_LAUNCH_LOG\" ] || printf '%s\\n' {tool} >> \"$NVMIMIC_LAUNCH_LOG\"\nexec '{}' \"$@\"\n",
+                    real.display()
+                ),
+            );
+        }
+    });
+    for entry in fs::read_dir(shims).unwrap().flatten() {
+        let target = bin.join(entry.file_name());
+        if fs::symlink_metadata(&target).is_err() {
+            fs::hard_link(entry.path(), target).unwrap();
+        }
     }
 }
 
@@ -608,6 +747,21 @@ fn hex(bytes: &[u8]) -> String {
 
 fn copy(from: &Path, to: &Path) {
     fs::copy(from, to).unwrap();
+}
+
+/// Copies a directory, as a copy-on-write clone where the filesystem has one.
+fn copy_tree(from: &Path, to: &Path) {
+    let flag = if cfg!(target_os = "macos") {
+        "-cR"
+    } else {
+        "-R"
+    };
+    let status = Command::new("cp").arg(flag).arg(from).arg(to).status();
+    assert!(
+        status.is_ok_and(|status| status.success()),
+        "copying {} failed",
+        from.display()
+    );
 }
 
 fn write_script(path: &Path, body: &str) {

@@ -1,6 +1,18 @@
 //! A local stand-in for nodejs.org/dist that both real nvm and nvmimic
 //! install from. Each release is a tiny tree whose `node` and `npm` are shell
 //! scripts, packed the way the real dist directory packs them.
+//!
+//! The mirror holds every release twice. Under `/` the two scripts are
+//! packed as symlinks to one shared, read-only copy per version. macOS scans
+//! each new file the first time it is run, and a full parity run installs
+//! Node thousands of times. With real files that was thousands of scans,
+//! enough to bring the scanning service down. A symlink to a file that was
+//! already scanned costs nothing.
+//!
+//! Under `/plain` the scripts are real files, the way nodejs.org packs them.
+//! Cases that change an installed `node` or `npm` install from there, since
+//! writing through a symlink would change the shared copy for everyone.
+//! [`Mirror::verify`] checks after a run that the shared copies are untouched.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -57,6 +69,9 @@ pub const RELEASES: &[Release] = &[
 
 const NPM_VERSION: &str = "10.9.0";
 
+/// The path under the mirror whose releases hold real files.
+pub const PLAIN: &str = "plain";
+
 /// nodejs.org has no darwin-arm64 builds before Node 16.
 fn platforms(version: &str) -> &'static [&'static str] {
     let major: u32 = version.split('.').next().unwrap().parse().unwrap();
@@ -82,6 +97,8 @@ pub struct Mirror {
     pub url: String,
     pub dist: PathBuf,
     pub requests: Arc<Mutex<Vec<String>>>,
+    /// The shared scripts with the hash and mode each was built with.
+    shared: Vec<(PathBuf, String, u32)>,
 }
 
 static SHARED: OnceLock<Mirror> = OnceLock::new();
@@ -90,37 +107,28 @@ static SHARED: OnceLock<Mirror> = OnceLock::new();
 /// slow part. Its directory is left behind on exit and swept by later runs.
 pub fn shared() -> &'static Mirror {
     SHARED.get_or_init(|| {
-        let parent = std::env::temp_dir();
-        sweep_stale(&parent);
-        let root = parent.join(format!("nvmimic-mirror-{}", std::process::id()));
+        crate::guard::sweep_stale();
+        let root = std::env::temp_dir().join(format!("nvmimic-mirror-{}", std::process::id()));
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).unwrap();
         Mirror::start(&root)
     })
 }
 
-fn sweep_stale(parent: &Path) {
-    let Ok(entries) = fs::read_dir(parent) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        let old = entry
-            .metadata()
-            .and_then(|meta| meta.modified())
-            .ok()
-            .and_then(|time| time.elapsed().ok())
-            .is_some_and(|age| age.as_secs() > 3600);
-        if name.starts_with("nvmimic-mirror-") && old {
-            let _ = fs::remove_dir_all(entry.path());
-        }
-    }
-}
-
 impl Mirror {
     pub fn start(root: &Path) -> Mirror {
         let dist = root.join("dist");
-        build_dist(&dist, root);
+        build_dist(&dist, &root.join("linked"), Some(&root.join("shared")));
+        build_dist(&dist.join(PLAIN), &root.join("plain"), None);
+        let mut shared = Vec::new();
+        for release in RELEASES {
+            let top = root.join("shared").join(format!("v{}", release.version));
+            for script in SCRIPTS {
+                let path = top.join(script);
+                let mode = mode_of(&path);
+                shared.push((path.clone(), sha256(&path), mode));
+            }
+        }
         let served = dist.clone();
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -140,7 +148,23 @@ impl Mirror {
             url,
             dist,
             requests,
+            shared,
         }
+    }
+
+    /// Checks that no case changed a shared script. A case that needs to
+    /// change an installed `node` or `npm` has to install from `/plain`.
+    pub fn verify(&self) -> Result<(), String> {
+        for (path, hash, mode) in &self.shared {
+            if !path.is_file() || &sha256(path) != hash || mode_of(path) != *mode {
+                return Err(format!(
+                    "a case changed {}, which every sandbox shares. Give that case a \
+                     `# mirror: plain` header so it installs real files instead.",
+                    path.display()
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn requests(&self) -> Vec<String> {
@@ -189,7 +213,17 @@ fn serve(mut stream: TcpStream, dist: &Path, log: &Mutex<Vec<String>>) {
 const INDEX_HEADER: &str =
     "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\tlts\tsecurity\n";
 
-fn build_dist(dist: &Path, scratch: &Path) {
+/// The two files of a release that get run.
+const SCRIPTS: [&str; 2] = ["bin/node", "lib/node_modules/npm/bin/npm-cli.js"];
+
+fn mode_of(path: &Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    fs::metadata(path).map_or(0, |meta| meta.permissions().mode() & 0o7777)
+}
+
+/// Builds one dist directory. With `shared`, each release's scripts are
+/// symlinks into that directory, which gets one real tree per version.
+fn build_dist(dist: &Path, scratch: &Path, shared: Option<&Path>) {
     fs::create_dir_all(dist).unwrap();
     let mut tab = String::from(INDEX_HEADER);
 
@@ -198,11 +232,24 @@ fn build_dist(dist: &Path, scratch: &Path) {
         let dir = dist.join(&version);
         fs::create_dir_all(&dir).unwrap();
 
+        let shared = shared.map(|shared| {
+            let shared = shared.join(&version);
+            build_tree(&shared, &version, None);
+            // Read-only, so a case that writes through a symlink fails
+            // instead of changing what every other sandbox runs.
+            for script in SCRIPTS {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(shared.join(script), fs::Permissions::from_mode(0o555))
+                    .unwrap();
+            }
+            shared
+        });
+
         let mut sums = String::new();
         for platform in platforms(release.version) {
             let name = format!("node-{version}-{platform}");
             let tree = scratch.join("trees").join(&name);
-            build_tree(&tree.join(&name), &version);
+            build_tree(&tree.join(&name), &version, shared.as_deref());
 
             for (ext, flag) in [("tar.gz", "-czf"), ("tar.xz", "-cJf")] {
                 let archive = dir.join(format!("{name}.{ext}"));
@@ -235,8 +282,9 @@ fn build_dist(dist: &Path, scratch: &Path) {
 
 /// The layout nvm's post-install validation checks: an executable
 /// `bin/node` and a `bin/npm` symlink that resolves. Both scripts note each
-/// launch in `$NVMIMIC_LAUNCH_LOG` when the harness counts launches.
-fn build_tree(top: &Path, version: &str) {
+/// launch in `$NVMIMIC_LAUNCH_LOG` when the harness counts launches. With
+/// `shared`, the two scripts are symlinks to the ones in that tree.
+fn build_tree(top: &Path, version: &str, shared: Option<&Path>) {
     let bin = top.join("bin");
     let npm_bin = top.join("lib/node_modules/npm/bin");
     fs::create_dir_all(&bin).unwrap();
@@ -245,18 +293,28 @@ fn build_tree(top: &Path, version: &str) {
     fs::create_dir_all(top.join("share/man/man1")).unwrap();
 
     let log = r#"[ -z "$NVMIMIC_LAUNCH_LOG" ] || printf '%s\n' "$0" >> "$NVMIMIC_LAUNCH_LOG""#;
-    write_script(
-        &bin.join("node"),
-        &format!(
-            "#!/bin/sh\n{log}\nif [ \"$1\" = --version ] || [ \"$1\" = -v ]; then echo {version}; else echo \"node {version}: $*\"; fi\n"
-        ),
-    );
-    write_script(
-        &npm_bin.join("npm-cli.js"),
-        &format!(
-            "#!/bin/sh\n{log}\nif [ \"$1\" = --version ]; then echo {NPM_VERSION}; else echo \"npm: $*\"; fi\n"
-        ),
-    );
+    let [node, npm_cli] = SCRIPTS;
+    match shared {
+        Some(shared) => {
+            for script in [node, npm_cli] {
+                std::os::unix::fs::symlink(shared.join(script), top.join(script)).unwrap();
+            }
+        }
+        None => {
+            write_script(
+                &top.join(node),
+                &format!(
+                    "#!/bin/sh\n{log}\nif [ \"$1\" = --version ] || [ \"$1\" = -v ]; then echo {version}; else echo \"node {version}: $*\"; fi\n"
+                ),
+            );
+            write_script(
+                &top.join(npm_cli),
+                &format!(
+                    "#!/bin/sh\n{log}\nif [ \"$1\" = --version ]; then echo {NPM_VERSION}; else echo \"npm: $*\"; fi\n"
+                ),
+            );
+        }
+    }
     fs::write(
         top.join("lib/node_modules/npm/package.json"),
         format!(

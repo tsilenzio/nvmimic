@@ -7,10 +7,19 @@
 //! # source: --no-use              (optional, arguments for `. nvm.sh`)
 //! # setup: nvm install 24.15.0    (optional, repeatable, output discarded)
 //! # covers: nvm_ls nvm:use        (optional, the nvm functions it exercises)
+//! # mirror: plain                 (optional, see below)
 //! ```
 //!
 //! followed by the shell body whose output is compared.
+//!
+//! Installed versions normally share their `node` and `npm` scripts through
+//! symlinks (see [`crate::mirror`]). A case that changes those files needs
+//! real ones and gets them with `# mirror: plain`. Cases that name the files
+//! in their text get real ones without asking.
+//!
+//! The tests of nvm's own suite are cases too, see [`crate::suite`].
 
+use crate::guard::Guard;
 use crate::harness::{self, Impl, Shell, World, diff};
 use std::collections::BTreeSet;
 use std::fs;
@@ -25,6 +34,10 @@ pub struct Case {
     pub setup: String,
     pub covers: Vec<String>,
     pub body: String,
+    /// Whether installs come from the mirror's real-file releases.
+    pub plain_files: bool,
+    /// Set for a test from nvm's own suite, which runs instead of `body`.
+    pub suite: Option<crate::suite::SuiteTest>,
 }
 
 pub fn cases_dir() -> PathBuf {
@@ -47,6 +60,7 @@ pub fn load_all() -> Vec<Case> {
     files
         .iter()
         .map(|file| parse(file))
+        .chain(crate::suite::cases())
         .filter(|case| prefixes.is_empty() || prefixes.iter().any(|p| case.id.starts_with(p)))
         .collect()
 }
@@ -59,6 +73,9 @@ fn parse(file: &Path) -> Case {
     let mut setup = Vec::new();
     let mut covers = Vec::new();
     let mut body = Vec::new();
+    let mut plain_files = ["npm-cli", "bin/node", "bin/npm", "node_modules/npm"]
+        .iter()
+        .any(|name| text.contains(name));
 
     for line in text.lines() {
         let header = line
@@ -76,6 +93,7 @@ fn parse(file: &Path) -> Case {
             Some(("source", value)) => source = value.trim().to_string(),
             Some(("setup", value)) => setup.push(value.to_string()),
             Some(("covers", value)) => covers.extend(value.split_whitespace().map(str::to_string)),
+            Some(("mirror", value)) => plain_files |= value.trim() == "plain",
             _ if body.is_empty() && line.starts_with('#') => {}
             _ => body.push(line),
         }
@@ -91,6 +109,8 @@ fn parse(file: &Path) -> Case {
         setup: setup.join("\n"),
         covers,
         body: body.join("\n"),
+        plain_files,
+        suite: None,
     }
 }
 
@@ -121,8 +141,14 @@ pub struct Result {
 }
 
 /// Runs every case under each of its shells, `left` against `right`, on up to
-/// eight worker threads.
-pub fn run_all(cases: &[Case], left: Impl, right: Impl) -> Vec<Result> {
+/// four worker threads. A [`Guard`] watches macOS's Gatekeeper the whole
+/// time. It can pause the workers, and when it stops the run this returns
+/// the reason instead of results.
+pub fn run_all(
+    cases: &[Case],
+    left: Impl,
+    right: Impl,
+) -> std::result::Result<Vec<Result>, String> {
     let results = Mutex::new(Vec::new());
     let next = Mutex::new(0usize);
     let workers = std::env::var("NVMIMIC_PARITY_JOBS")
@@ -130,8 +156,8 @@ pub fn run_all(cases: &[Case], left: Impl, right: Impl) -> Vec<Result> {
         .and_then(|value| value.parse().ok())
         .unwrap_or_else(|| {
             thread::available_parallelism()
-                .map_or(4, |n| n.get())
-                .min(8)
+                .map_or(2, |n| n.get())
+                .min(4)
         });
 
     let labels = if left == right {
@@ -144,9 +170,20 @@ pub fn run_all(cases: &[Case], left: Impl, right: Impl) -> Vec<Result> {
     };
     let labels = &labels;
 
+    // Building the mirror first keeps its one-time work out of the guarded part.
+    crate::mirror::shared();
+    let guard = Guard::start(&crate::guard::stage_dir());
+    let guard = &guard;
+    let suite_root = World::new().root;
+    let suite_root = &suite_root;
+
     thread::scope(|scope| {
-        for _ in 0..workers {
-            scope.spawn(|| {
+        for worker in 0..workers {
+            let (results, next) = (&results, &next);
+            scope.spawn(move || {
+                // One reusable sandbox per side for nvm's own suite.
+                let suite_left = suite_root.join(format!("suite-{worker}-left"));
+                let suite_right = suite_root.join(format!("suite-{worker}-right"));
                 loop {
                     let index = {
                         let mut next = next.lock().unwrap();
@@ -159,10 +196,11 @@ pub fn run_all(cases: &[Case], left: Impl, right: Impl) -> Vec<Result> {
                     };
                     let world = World::new();
                     for shell in &case.shells {
-                        let run = |which| {
-                            world.run_with(which, shell, &case.source, &case.setup, &case.body)
-                        };
-                        let (a, b) = (run(left), run(right));
+                        if guard.wait_turn().is_err() {
+                            return;
+                        }
+                        let a = world.run_case(left, shell, case, &suite_left);
+                        let b = world.run_case(right, shell, case, &suite_right);
                         let differences = diff((&labels.0, &a), (&labels.1, &b));
                         results.lock().unwrap().push(Result {
                             id: case.id.clone(),
@@ -175,9 +213,14 @@ pub fn run_all(cases: &[Case], left: Impl, right: Impl) -> Vec<Result> {
         }
     });
 
+    eprintln!("{}", guard.finish());
+    if let Some(reason) = guard.stopped() {
+        return Err(reason);
+    }
+    crate::mirror::shared().verify()?;
     let mut results = results.into_inner().unwrap();
     results.sort_by(|a, b| (&a.id, &a.shell).cmp(&(&b.id, &b.shell)));
-    results
+    Ok(results)
 }
 
 /// Writes `<id> <shell>` lines for every result that differs, under a header.

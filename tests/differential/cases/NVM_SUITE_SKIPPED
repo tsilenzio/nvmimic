@@ -1,0 +1,84 @@
+# Tests from nvm's own suite (tests/reference/nvm-v0.40.8/test) that are not
+# run as parity cases, as `<reason>: <path under test/>`. A path ending in `/`
+# covers a whole directory. Reasons:
+#
+#   installer      tests nvm's install.sh, which nvmimic does not ship
+#   fixture        an executable file the tests use, not a test itself
+#   docker         only meaningful inside nvm's Ubuntu 16.04 test image
+#   mock-internal  redefines one of nvm's internal functions as a shell
+#                  function and expects nvm to call it, which a program
+#                  outside the shell cannot do
+#   mock-tool      redefines an outside program (clang, wget) as a shell
+#                  function or alias and expects nvm to run that instead
+#   network        needs the real internet or Docker
+#   not-ported     calls a helper that nvmimic still hands to the real nvm it
+#                  carries, and the test empties PATH, so no shell can start
+#                  for it. Comes off this list when the helper is ported
+#   real-node      installs real Node releases from nodejs.org (0.8 to 9.x and
+#                  io.js, some built from source), which the offline test
+#                  mirror does not hold
+installer: install_script/
+fixture: mocks/
+fixture: fixtures/
+docker: xenial/
+real-node: slow/
+real-node: sourcing/
+real-node: installation_node/
+real-node: installation_iojs/
+mock-internal: fast/Aliases/nvm_list_aliases calls nvm_get_colors
+mock-internal: fast/Aliases/nvm_list_aliases propagates NVM_HAS_COLORS through pipeline
+mock-internal: fast/Aliases/nvm_list_aliases works with LTS aliases
+mock-internal: fast/Aliases/nvm_print_alias_path calls nvm_get_colors
+mock-internal: fast/Aliases/nvm_print_formatted_alias calls nvm_get_colors
+mock-internal: fast/Listing versions/Running 'nvm ls --no-alias' does not call into nvm_alias
+mock-internal: fast/Listing versions/Running 'nvm ls' calls into nvm_alias
+mock-internal: fast/Listing versions/Running 'nvm ls' should include 'system' when appropriate
+mock-internal: fast/Listing versions/Running 'nvm ls default' should show system version when available
+mock-internal: fast/Listing versions/Running 'nvm ls system' should include 'system' when appropriate
+mock-internal: fast/Running 'nvm use' should respect alias pointing to system
+mock-internal: fast/Running 'nvm use' should respect system in .nvmrc
+mock-internal: fast/Running 'nvm use system' should work as expected
+mock-internal: fast/Set Colors/nvm_print_default_alias calls nvm_get_colors
+mock-internal: fast/Set Colors/nvm_print_versions calls nvm_get_colors
+mock-internal: fast/Subcommands with missing or invalid args show a focused usage error
+mock-internal: fast/Unit tests/Running 'nvm install --save' works as expected'
+mock-internal: fast/Unit tests/nvm_alias LTS-N
+mock-internal: fast/Unit tests/nvm_compare_checksum
+mock-internal: fast/Unit tests/nvm_die_on_prefix
+mock-internal: fast/Unit tests/nvm_download_artifact error propagation
+mock-internal: fast/Unit tests/nvm_download wget Authorization header
+mock-internal: fast/Unit tests/nvm_ensure_version_installed
+mock-internal: fast/Unit tests/nvm_get_artifact_compression
+mock-internal: fast/Unit tests/nvm_get_checksum
+mock-internal: fast/Unit tests/nvm_get_checksum awk injection
+mock-internal: fast/Unit tests/nvm_get_download_slug
+mock-internal: fast/Unit tests/nvm_get_latest missing curl or wget
+mock-internal: fast/Unit tests/nvm_get_make_jobs
+mock-internal: fast/Unit tests/nvm install NVM_NO_SOURCE_FALLBACK
+mock-internal: fast/Unit tests/nvm_install_binary_nosource
+mock-internal: fast/Unit tests/nvm_install_latest_npm
+mock-internal: fast/Unit tests/nvm install verifies the installed version
+mock-internal: fast/Unit tests/nvm_is_version_installed
+mock-internal: fast/Unit tests/nvm ls-remote
+mock-internal: fast/Unit tests/nvm ls-remote with nounset should not fail
+mock-internal: fast/Unit tests/nvm_ls_remote
+mock-internal: fast/Unit tests/nvm_ls_remote LTS aliases
+mock-internal: fast/Unit tests/nvm_ls_remote_iojs
+mock-internal: fast/Unit tests/nvm_ls_remote nightly
+mock-internal: fast/Unit tests/nvm_print_alias_path
+mock-internal: fast/Unit tests/nvm_print_color_legend
+mock-internal: fast/Unit tests/nvm_print_default_alias
+mock-internal: fast/Unit tests/nvm_print_implicit_alias success
+mock-internal: fast/Unit tests/nvm_print_npm_version
+mock-internal: fast/Unit tests/nvm_remote_version
+mock-internal: fast/Unit tests/nvm_remote_versions
+mock-internal: fast/Unit tests/nvm_remote_versions propagates iojs failure
+mock-internal: fast/Unit tests/nvm_use_if_needed
+mock-internal: fast/Unit tests/nvm_version
+mock-internal: fast/Unit tests/nvm version-remote
+mock-tool: fast/Unit tests/nvm_clang_version
+mock-tool: fast/Unit tests/nvm_command_info
+network: fast/Unit tests/nvm_download
+not-ported: fast/Unit tests/nvm_download and curl helpers bypass shadowed curl
+not-ported: fast/Unit tests/nvm_download no eval injection
+not-ported: fast/Unit tests/nvm_supports_xz

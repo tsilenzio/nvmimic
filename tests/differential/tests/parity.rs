@@ -11,6 +11,11 @@ fn recording() -> bool {
     std::env::var_os("NVMIMIC_PARITY_RECORD").is_some()
 }
 
+/// The Gatekeeper guard stopped the run before it finished.
+fn stopped(reason: String) -> Vec<Result> {
+    panic!("the run was stopped to protect the machine: {reason}");
+}
+
 fn report(results: &[Result]) -> usize {
     let passing = results.iter().filter(|r| r.differences.is_empty()).count();
     eprintln!("{passing}/{} case-shell pairs match", results.len());
@@ -79,7 +84,7 @@ fn probe_sees_leaked_variables() {
 #[test]
 #[ignore = "full run, use `cargo xtask parity determinism`"]
 fn nvm_is_deterministic() {
-    let results = cases::run_all(&cases::load_all(), Impl::Nvm, Impl::Nvm);
+    let results = cases::run_all(&cases::load_all(), Impl::Nvm, Impl::Nvm).unwrap_or_else(stopped);
     report(&results);
     if recording() {
         cases::record(
@@ -112,7 +117,7 @@ fn nvm_is_deterministic() {
 fn reference_cases_match_or_are_known() {
     let skipped = cases::listed(NONDETERMINISTIC);
     let all = cases::load_all();
-    let mut results = cases::run_all(&all, Impl::Nvm, Impl::Nvmimic);
+    let mut results = cases::run_all(&all, Impl::Nvm, Impl::Nvmimic).unwrap_or_else(stopped);
     results.retain(|r| !cases::is_listed(&skipped, &r.id, &r.shell));
     report(&results);
     write_report(&results);

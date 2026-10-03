@@ -33,8 +33,10 @@ work: nvmimic runs them with the real nvm 0.40.8 it carries inside, which takes
 about as long as nvm does.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
-nvmimic side by side on 316 test scripts under bash, zsh, sh and dash, and
-compares everything they print, return, set and write.
+nvmimic side by side under bash, zsh, sh and dash, and compares everything
+they print, return, set and write. It runs 322 test scripts written for
+nvmimic, plus the tests from nvm's own test suite that can be compared this
+way (174 of them so far).
 
 ## Installing
 
@@ -100,9 +102,33 @@ spends on nvm:
 
 - `cargo test --workspace` runs the unit tests.
 - `cargo xtask parity` compares nvmimic with real nvm on every test script.
+  It takes a while and starts a lot of small programs. Run one at a time.
 - `cargo xtask bench --check` times sourcing `nvm.sh` and fails if nvmimic gets
   slower than the budget in `bench/budget.toml`.
 - `cargo xtask gen-shell` rebuilds `shell/nvm.sh` from nvm's own `nvm.sh`.
+
+### A warning about macOS and the parity tests
+
+macOS checks every new program the first time it runs. The check is called
+Gatekeeper, and one system service does all of it, one file at a time. An
+earlier version of the parity tests created and ran thousands of new scripts
+in a few minutes. That service fell so far behind that it crashed, and the
+whole computer stopped being able to start programs until it was rebooted.
+
+The tests are built to avoid that now:
+
+- Scripts that many tests run exist once, and each test gets a link to them.
+- Nothing is deleted while the tests run. Leftovers in the temp folder
+  (`nvmimic-diff-*` and similar) are cleaned up by a later run, once they're
+  half an hour old.
+- A guard runs a brand new script every two seconds and times it. If that
+  gets slow, the tests pause until it's fast again. If it stays slow, the
+  tests stop.
+
+If you change how the tests create files, try one test first, then a small
+group, and read the `gatekeeper guard:` line each run prints. You can also
+turn the checks off for your terminal: System Settings, Privacy & Security,
+Developer Tools, then switch your terminal app on and restart it.
 
 ## License
 

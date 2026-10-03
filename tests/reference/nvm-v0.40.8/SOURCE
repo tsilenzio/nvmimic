@@ -12,3 +12,9 @@ b7eb3bf03d59b61e451957b020640aa55fe8bf47fb39d85d244e259f445d2fbe  bash_completio
 
 MIT licensed, see LICENSE.md in this directory. These files are the reference
 nvmimic is compared against in tests. They are not part of nvmimic itself.
+
+The test/ directory is nvm's own test suite, copied unchanged from the same
+commit. The parity harness runs each of its tests against real nvm and
+against nvmimic. test/fixtures/nvmrc is the nvm-sh/nvmrc submodule that
+commit pins, from https://github.com/nvm-sh/nvmrc at commit
+0d325aa903893072cb07daf43ae04b491e104d6c (MIT licensed, see its LICENSE).
