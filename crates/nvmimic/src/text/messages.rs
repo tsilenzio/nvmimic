@@ -41,6 +41,24 @@ pub fn alias_unreadable(path: &str) -> String {
     format!("Alias file is not readable: {path}")
 }
 
+// nvm: nvm_get_mirror
+pub const UNKNOWN_RELEASE_TYPE: &str = "unknown type of node.js or io.js release";
+pub const MIRROR_URL_ONLY: &str =
+    "$NVM_NODEJS_ORG_MIRROR and $NVM_IOJS_ORG_MIRROR may only contain a URL";
+
+// nvm: nvm_ls_remote_index_tab
+pub const NOT_ENOUGH_ARGUMENTS: &str = "not enough arguments";
+pub const UNKNOWN_IOJS_RELEASE: &str = "unknown type of io.js release";
+pub const UNKNOWN_NODE_RELEASE: &str = "unknown type of node.js release";
+
+// nvm: nvm_print_implicit_alias
+pub const IMPLICIT_ALIAS_KIND: &str =
+    "nvm_print_implicit_alias must be specified with local or remote as the first argument.";
+
+// nvm: nvm_remote_versions
+pub const IMPLICIT_NOT_SUPPORTED: &str =
+    "Implicit aliases are not supported in nvm_remote_versions.";
+
 // nvm: nvm_validate_implicit_alias
 pub fn only_implicit_aliases() -> String {
     let (iojs, node) = (

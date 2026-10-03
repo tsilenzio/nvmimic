@@ -5,6 +5,7 @@ pub mod deactivate;
 pub mod exec;
 pub mod fallback;
 pub mod ls;
+pub mod remote;
 pub mod unload;
 pub mod use_;
 pub mod which;
@@ -59,9 +60,10 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
         }
         "unload" => unload::run(nvm),
         "set-colors" => set_colors(nvm, rest),
-        "install" | "i" | "uninstall" | "ls-remote" | "list-remote" | "version-remote"
-        | "cache" | "debug" | "install-latest-npm" | "reinstall-packages" | "copy-packages"
-        | "clear-cache" => fallback::run_nvm(nvm, args),
+        "ls-remote" | "list-remote" => remote::ls_remote(nvm, rest),
+        "version-remote" => remote::version_remote(nvm, rest),
+        "install" | "i" | "uninstall" | "cache" | "debug" | "install-latest-npm"
+        | "reinstall-packages" | "copy-packages" | "clear-cache" => fallback::run_nvm(nvm, args),
         _ => {
             nvm.to_stderr(|nvm| print_help(nvm, &["--help".to_string()]));
             127

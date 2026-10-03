@@ -324,7 +324,7 @@ fn list_installed(nvm: &Nvm, dirs: &[String; 3], search: &str, iojs_dir: &str) -
 /// `sort -t. -u -k 1.2,1n -k 2,2n -k 3,3n`: numeric on the first field
 /// without its first character, then the second and third fields. Lines
 /// equal on all three keys are kept once.
-fn sort_versions(lines: &mut Vec<String>) {
+pub(crate) fn sort_versions(lines: &mut Vec<String>) {
     fn keys(line: &str) -> [f64; 3] {
         let fields: Vec<&str> = line.split('.').collect();
         let first = fields.first().map_or("", |f| f.get(1..).unwrap_or(""));

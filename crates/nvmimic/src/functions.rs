@@ -4,7 +4,7 @@
 
 use crate::cmd::{self, fallback};
 use crate::context::Nvm;
-use crate::nvm::{alias, colors, local, npm, nvmrc, output, paths, version};
+use crate::nvm::{alias, colors, local, npm, nvmrc, output, paths, remote, version};
 
 /// Runs helper `name`. `fd3` receives what nvm writes to file descriptor 3.
 pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str)) -> i32 {
@@ -144,6 +144,53 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
             }
             None => 1,
         },
+        "nvm_ls_remote" => {
+            let result = remote::ls_remote(nvm, arg(0));
+            print(nvm, result)
+        }
+        "nvm_ls_remote_iojs" => {
+            let result = remote::ls_remote_iojs(nvm, arg(0));
+            print(nvm, result)
+        }
+        "nvm_ls_remote_index_tab" => {
+            if args.len() < 3 {
+                nvm.io.err(crate::text::messages::NOT_ENOUGH_ARGUMENTS);
+                return 5;
+            }
+            let result = remote::ls_remote_index_tab(nvm, arg(0), arg(1), Some(arg(2)));
+            print(nvm, result)
+        }
+        "nvm_remote_versions" => {
+            let result = remote::remote_versions(nvm, arg(0));
+            print(nvm, result)
+        }
+        "nvm_remote_version" => {
+            let (text, status) = remote::remote_version(nvm, arg(0));
+            nvm.io.echo(&text);
+            status
+        }
+        "nvm_get_mirror" => match remote::get_mirror(nvm, arg(0), arg(1)) {
+            Ok(mirror) => {
+                nvm.io.echo(&mirror);
+                0
+            }
+            Err(status) => status,
+        },
+        "nvm_sanitize_auth_header" => {
+            nvm.io.echo(&remote::sanitize_auth_header(arg(0)));
+            0
+        }
+        "nvm_print_implicit_alias" => {
+            let result = match arg(0) {
+                "local" => alias::print_implicit_alias_local(nvm, arg(1)),
+                "remote" => remote::print_implicit_alias_remote(nvm, arg(1)),
+                _ => {
+                    nvm.io.err(crate::text::messages::IMPLICIT_ALIAS_KIND);
+                    return 1;
+                }
+            };
+            print(nvm, result)
+        }
         "__nvm_aliases" => {
             completion_aliases(nvm);
             0

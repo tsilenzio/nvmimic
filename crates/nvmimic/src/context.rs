@@ -60,8 +60,18 @@ impl<'a> Io<'a> {
     }
 }
 
+/// Things one call of nvmimic looks up once and reuses, where nvm would
+/// repeat the work without any visible difference.
+#[derive(Default)]
+pub struct Cache {
+    pub curl_compression: Option<bool>,
+    /// `index.tab` bodies by URL.
+    pub index_tab: std::collections::HashMap<String, String>,
+}
+
 pub struct Nvm<'a> {
     pub vars: Vars,
+    pub cache: std::rc::Rc<std::cell::RefCell<Cache>>,
     pub dialect: Dialect,
     /// `[ -t 1 ]` in the calling shell.
     pub stdout_is_tty: bool,
@@ -173,6 +183,7 @@ impl<'a> Nvm<'a> {
             let mut err = ErrForward(&mut self.io);
             let mut inner = Nvm {
                 vars: self.vars.snapshot(),
+                cache: self.cache.clone(),
                 dialect: self.dialect,
                 stdout_is_tty: false,
                 io: Io {

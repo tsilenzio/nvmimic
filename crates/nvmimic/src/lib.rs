@@ -44,6 +44,7 @@ pub fn run(
 ) -> Outcome {
     let mut nvm = Nvm {
         vars: caller.vars,
+        cache: Default::default(),
         dialect: caller.dialect,
         stdout_is_tty: caller.stdout_is_tty,
         io: Io::new(out, err),
