@@ -32,8 +32,8 @@ pub fn bind_binary(nvm_sh: &str, nvm_link: &str) -> String {
 /// What the installer talks to: lines to show, and yes-or-no questions.
 pub trait Ui {
     fn say(&mut self, line: &str);
-    /// Asks a question whose default answer is no.
-    fn ask(&mut self, question: &str) -> bool;
+    /// Asks a yes-or-no question. `default` is the answer an empty reply gives.
+    fn ask(&mut self, question: &str, default: bool) -> bool;
 }
 
 #[derive(Clone, Debug, Default)]
@@ -42,8 +42,8 @@ pub struct Options {
     pub yes: bool,
     /// Say what would happen and change nothing.
     pub dry_run: bool,
-    /// Also put a `nvmimic` link in `~/.local/bin`.
-    pub link: bool,
+    /// Leave `~/.local/bin` alone instead of putting a `nvmimic` link there.
+    pub no_link: bool,
 }
 
 /// The parts of the environment the installer looks at.
@@ -53,6 +53,7 @@ pub struct Env {
     pub nvm_dir: Option<String>,
     pub xdg_config_home: Option<String>,
     pub homebrew_prefix: Option<String>,
+    pub path: Option<String>,
 }
 
 impl Env {
@@ -63,6 +64,7 @@ impl Env {
             nvm_dir: var("NVM_DIR"),
             xdg_config_home: var("XDG_CONFIG_HOME"),
             homebrew_prefix: var("HOMEBREW_PREFIX"),
+            path: var("PATH"),
         }
     }
 
@@ -150,12 +152,52 @@ fn present(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
-fn ask(ui: &mut dyn Ui, options: &Options, question: &str) -> bool {
+/// How a question shows which answer an empty reply gives.
+fn choices(default: bool) -> &'static str {
+    if default { "[Y/n]" } else { "[y/N]" }
+}
+
+fn ask(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
     if options.yes {
-        ui.say(&format!("{question} [y/N] y (--yes)"));
+        ui.say(&format!("{question} {} y (--yes)", choices(default)));
         true
     } else {
-        ui.ask(question)
+        ui.ask(question, default)
+    }
+}
+
+/// What to do about the `nvmimic` command in `~/.local/bin`.
+enum LinkPlan {
+    /// Leave things as they are, saying why if there is something to say.
+    Skip(Option<String>),
+    /// Our link is already there.
+    Keep(PathBuf),
+    Make(PathBuf),
+}
+
+fn plan_link(env: &Env, own: &Path, options: &Options, ui: &mut dyn Ui) -> LinkPlan {
+    if options.no_link || env.home.as_os_str().is_empty() {
+        return LinkPlan::Skip(None);
+    }
+    let target = env.home.join(".local/bin/nvmimic");
+    if fs::read_link(&target).is_ok_and(|to| to.starts_with(own)) {
+        return LinkPlan::Keep(target);
+    }
+    if present(&target) {
+        return LinkPlan::Skip(Some(format!(
+            "{} is already there and isn't nvmimic's link, so it is left alone.",
+            target.display()
+        )));
+    }
+    if ask(
+        ui,
+        options,
+        "Also add a `nvmimic` command to ~/.local/bin?",
+        true,
+    ) {
+        LinkPlan::Make(target)
+    } else {
+        LinkPlan::Skip(None)
     }
 }
 
@@ -186,7 +228,7 @@ pub fn self_install(
                 file.display()
             ));
         }
-        if !ask(ui, options, "Run `brew uninstall nvm` now?") {
+        if !ask(ui, options, "Run `brew uninstall nvm` now?", false) {
             return Err("stopped. Homebrew's nvm is still installed.".to_string());
         }
         if options.dry_run {
@@ -222,7 +264,9 @@ pub fn self_install(
             own.join("backup").display()
         ));
         if nvm_dir.join(".git").exists() {
-            ui.say("This nvm was installed with git. While nvmimic is installed, `git status` in that");
+            ui.say(
+                "This nvm was installed with git. While nvmimic is installed, `git status` in that",
+            );
             ui.say("folder shows the swapped scripts as modified. That is expected and harmless.");
             ui.say("Running nvm's install script again puts nvm's scripts back over nvmimic's. If that");
             ui.say("happens, run `nvmimic self install` again.");
@@ -235,6 +279,7 @@ pub fn self_install(
                 "Copy all of {} to a backup folder first?",
                 nvm_dir.display()
             ),
+            false,
         ) {
             let target = full_backup_path(&nvm_dir);
             if options.dry_run {
@@ -252,9 +297,18 @@ pub fn self_install(
                 ));
             }
         }
-        if !ask(ui, options, "Install nvmimic now?") {
+        if !ask(ui, options, "Install nvmimic now?", false) {
             return Err("stopped. Nothing was changed.".to_string());
         }
+    }
+
+    if !existing.is_empty() && reinstall {
+        ui.say(&format!(
+            "nvm's own {} came back in {}, most likely from nvm's install script.",
+            existing.join(", "),
+            nvm_dir.display()
+        ));
+        ui.say("Taking over again. They replace the older copies in the backup folder.");
     }
 
     let mut manifest = if reinstall {
@@ -266,6 +320,10 @@ pub fn self_install(
 
     let bin = own.join("bin");
     let link = bin.join("nvm");
+    let link_plan = plan_link(env, &own, options, ui);
+    if let LinkPlan::Skip(Some(reason)) = &link_plan {
+        ui.say(reason);
+    }
     if options.dry_run {
         ui.say(&format!(
             "Would install nvmimic into {}.",
@@ -282,6 +340,9 @@ pub fn self_install(
             "Would copy this program to {}.",
             bin.join("nvmimic").display()
         ));
+        if let LinkPlan::Make(target) = &link_plan {
+            ui.say(&format!("Would link {} to it.", target.display()));
+        }
         return Ok(());
     }
 
@@ -296,6 +357,8 @@ pub fn self_install(
             if !manifest.backed_up.iter().any(|n| n == name) {
                 manifest.backed_up.push(name.to_string());
             }
+            // A script nvm has since put there is nvm's to keep on uninstall.
+            manifest.created.retain(|n| n != name);
         } else if !present(&path) && !manifest.created.iter().any(|n| n == name) {
             manifest.created.push(name.to_string());
         }
@@ -315,14 +378,25 @@ pub fn self_install(
     write_file(&nvm_dir.join("nvm-exec"), NVM_EXEC, 0o755)?;
     write_file(&nvm_dir.join("bash_completion"), BASH_COMPLETION, 0o644)?;
 
-    if options.link || (!options.yes && ui.ask("Also add a `nvmimic` command to ~/.local/bin?")) {
-        let local_bin = env.home.join(".local/bin");
-        fs::create_dir_all(&local_bin).map_err(|e| format!("{}: {e}", local_bin.display()))?;
-        let target = local_bin.join("nvmimic");
-        let _ = fs::remove_file(&target);
-        std::os::unix::fs::symlink(bin.join("nvmimic"), &target)
-            .map_err(|e| format!("{}: {e}", target.display()))?;
-        manifest.link = Some(target);
+    match link_plan {
+        LinkPlan::Skip(_) => {}
+        LinkPlan::Keep(target) => manifest.link = Some(target),
+        LinkPlan::Make(target) => {
+            if let Some(local_bin) = target.parent() {
+                fs::create_dir_all(local_bin)
+                    .map_err(|e| format!("{}: {e}", local_bin.display()))?;
+                std::os::unix::fs::symlink(bin.join("nvmimic"), &target)
+                    .map_err(|e| format!("{}: {e}", target.display()))?;
+                if !on_path(env, local_bin) {
+                    ui.say(&format!(
+                        "{} isn't on your PATH yet. Until it is, type {} to run nvmimic.",
+                        local_bin.display(),
+                        target.display()
+                    ));
+                }
+            }
+            manifest.link = Some(target);
+        }
     }
 
     // In a git-clone install, this keeps nvmimic's own folder out of
@@ -363,6 +437,7 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
         ui,
         options,
         &format!("Remove nvmimic from {}?", nvm_dir.display()),
+        false,
     ) {
         return Err("stopped. Nothing was changed.".to_string());
     }
@@ -401,6 +476,12 @@ fn install_binary(binary: &Path, bin: &Path) -> Result<(), String> {
     fs::copy(binary, &temporary).map_err(|e| format!("{}: {e}", temporary.display()))?;
     set_mode(&temporary, 0o755)?;
     fs::rename(&temporary, &target).map_err(|e| format!("{}: {e}", target.display()))
+}
+
+fn on_path(env: &Env, dir: &Path) -> bool {
+    env.path
+        .as_deref()
+        .is_some_and(|path| std::env::split_paths(path).any(|entry| entry == dir))
 }
 
 fn write_file(path: &Path, text: &str, mode: u32) -> Result<(), String> {
@@ -470,16 +551,19 @@ impl Ui for TerminalUi {
         println!("{line}");
     }
 
-    fn ask(&mut self, question: &str) -> bool {
+    fn ask(&mut self, question: &str, default: bool) -> bool {
         use std::io::{BufRead, Write};
-        print!("{question} [y/N] ");
+        print!("{question} {} ", choices(default));
         let _ = io::stdout().flush();
         let mut answer = String::new();
         if io::stdin().lock().read_line(&mut answer).unwrap_or(0) == 0 {
             println!();
             return false;
         }
-        matches!(answer.trim(), "y" | "Y" | "yes" | "Yes")
+        match answer.trim() {
+            "" => default,
+            answer => matches!(answer, "y" | "Y" | "yes" | "Yes"),
+        }
     }
 }
 

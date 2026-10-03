@@ -66,7 +66,7 @@ fn real_nvm(home: &Home) {
     fs::create_dir_all(dir.join("versions/node/v22.1.0/bin")).unwrap();
     fs::create_dir_all(dir.join("alias")).unwrap();
     fs::write(dir.join("alias/default"), "22\n").unwrap();
-    for file in ["nvm.sh", "nvm-exec", "bash_completion"] {
+    for file in SCRIPTS {
         fs::copy(reference().join(file), dir.join(file)).unwrap();
     }
 }
@@ -275,4 +275,267 @@ fn git_clone_takeover_shows_only_the_swapped_scripts_as_modified() {
     let out = home.nvmimic(&["self", "uninstall", "--yes"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(status(), before, "same as before the takeover");
+}
+
+#[test]
+fn install_adds_a_nvmimic_command_unless_told_not_to() {
+    let home = Home::new();
+    let command = home.root.join(".local/bin/nvmimic");
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        fs::read_link(&command).unwrap(),
+        home.nvm_dir().join(".nvmimic/bin/nvmimic")
+    );
+    assert!(text(&out.stdout).contains("isn't on your PATH yet"));
+    // Nothing named nvm goes on PATH: real nvm is only a shell function.
+    assert!(!home.root.join(".local/bin/nvm").exists());
+
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(fs::symlink_metadata(&command).is_err());
+
+    let out = home.nvmimic(&["self", "install", "--yes", "--no-link"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(fs::symlink_metadata(&command).is_err());
+}
+
+#[test]
+fn a_nvmimic_command_that_is_someone_elses_is_left_alone() {
+    let home = Home::new();
+    let command = home.root.join(".local/bin/nvmimic");
+    fs::create_dir_all(command.parent().unwrap()).unwrap();
+    fs::write(&command, "mine\n").unwrap();
+
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(text(&out.stdout).contains("isn't nvmimic's link"));
+    assert_eq!(fs::read_to_string(&command).unwrap(), "mine\n");
+
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(fs::read_to_string(&command).unwrap(), "mine\n");
+}
+
+const SCRIPTS: [&str; 3] = ["nvm.sh", "nvm-exec", "bash_completion"];
+
+/// Runs nvm's own install script against the home, offline. `method` is
+/// nvm's `METHOD`: `git` fetches from a local repository holding the
+/// reference files, and `script` downloads them through a stand-in `curl`.
+fn nvm_installer(home: &Home, method: &str) -> Output {
+    let origin = home.root.join("origin");
+    if !origin.exists() {
+        fs::create_dir_all(&origin).unwrap();
+        for file in SCRIPTS {
+            fs::copy(reference().join(file), origin.join(file)).unwrap();
+        }
+        fs::write(origin.join(".gitignore"), "alias\nversions\n.cache\n").unwrap();
+        git(home, &origin, &["init", "-q"]);
+        git(home, &origin, &["add", "."]);
+        git(home, &origin, &["commit", "-q", "-m", "nvm"]);
+        git(home, &origin, &["tag", "v0.40.8"]);
+
+        let shim = home.root.join("shim");
+        fs::create_dir_all(&shim).unwrap();
+        let curl = shim.join("curl");
+        fs::write(
+            &curl,
+            format!(
+                "#!/bin/sh\n\
+                 # Stands in for curl: copies the reference file the URL names.\n\
+                 while [ $# -gt 0 ]; do\n\
+                 \x20 case \"$1\" in\n\
+                 \x20   -o) out=\"$2\"; shift ;;\n\
+                 \x20   -*) ;;\n\
+                 \x20   *) url=\"$1\" ;;\n\
+                 \x20 esac\n\
+                 \x20 shift\n\
+                 done\n\
+                 cp '{}'/\"${{url##*/}}\" \"$out\"\n",
+                reference().display()
+            ),
+        )
+        .unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&curl, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut installer = Command::new("/bin/bash");
+    installer
+        .arg(reference().join("install.sh"))
+        .env_clear()
+        .env("HOME", &home.root)
+        .env("NVM_DIR", home.nvm_dir())
+        .env(
+            "PATH",
+            format!("{}:/usr/bin:/bin", home.root.join("shim").display()),
+        )
+        .env("METHOD", method)
+        .env("NVM_INSTALL_VERSION", "v0.40.8")
+        .env("PROFILE", "/dev/null");
+    if method == "git" {
+        installer.env("NVM_SOURCE", format!("file://{}", origin.display()));
+    }
+    let out = installer.output().unwrap();
+    assert!(
+        out.status.success(),
+        "nvm's installer ({method}): {}{}",
+        text(&out.stdout),
+        text(&out.stderr)
+    );
+    out
+}
+
+/// Every file under `dir` with its bytes, symlinks as their targets.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_symlink() {
+                let target = fs::read_link(&path).unwrap();
+                found.push((path, target.to_string_lossy().into_owned().into_bytes()));
+            } else if meta.is_dir() {
+                pending.push(path);
+            } else {
+                let bytes = fs::read(&path).unwrap();
+                found.push((path, bytes));
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
+/// nvm gets installed by its own installer, nvmimic takes over, nvm's
+/// installer is run again, and nvmimic takes over again.
+fn installer_rerun(method: &str) {
+    let home = Home::new();
+    let dir = home.nvm_dir();
+    let own = dir.join(".nvmimic");
+    let is_git = method == "git";
+    nvm_installer(&home, method);
+    assert_eq!(dir.join(".git").exists(), is_git);
+    fs::create_dir_all(dir.join("versions/node/v22.1.0/bin")).unwrap();
+    fs::create_dir_all(dir.join("alias")).unwrap();
+    fs::write(dir.join("alias/default"), "22\n").unwrap();
+
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let manifest = fs::read_to_string(own.join("manifest")).unwrap();
+    for file in SCRIPTS {
+        assert!(manifest.contains(&format!("backup {file}\n")), "{manifest}");
+    }
+    let ours: Vec<Vec<u8>> = SCRIPTS
+        .iter()
+        .map(|file| fs::read(dir.join(file)).unwrap())
+        .collect();
+    let own_before = snapshot(&own);
+    let rest_before: Vec<_> = snapshot(&dir)
+        .into_iter()
+        .filter(|(path, _)| {
+            !path.starts_with(dir.join(".git"))
+                && !SCRIPTS.iter().any(|file| *path == dir.join(file))
+        })
+        .collect();
+
+    // nvm's installer writes its three scripts back and touches nothing else.
+    nvm_installer(&home, method);
+    for file in SCRIPTS {
+        assert_eq!(
+            fs::read(dir.join(file)).unwrap(),
+            fs::read(reference().join(file)).unwrap(),
+            "{file} is nvm's again"
+        );
+    }
+    assert_eq!(snapshot(&own), own_before, ".nvmimic/ is untouched");
+    let rest_after: Vec<_> = snapshot(&dir)
+        .into_iter()
+        .filter(|(path, _)| {
+            !path.starts_with(dir.join(".git"))
+                && !SCRIPTS.iter().any(|file| *path == dir.join(file))
+        })
+        .collect();
+    assert_eq!(rest_after, rest_before, "nothing else changed");
+    if is_git {
+        assert_eq!(git(&home, &dir, &["status", "--porcelain"]), "");
+    }
+
+    // The command left in ~/.local/bin takes over again.
+    let out = Command::new(home.root.join(".local/bin/nvmimic"))
+        .args(["self", "install", "--yes"])
+        .env_clear()
+        .env("HOME", &home.root)
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOMEBREW_PREFIX", home.root.join("no-homebrew"))
+        .output()
+        .unwrap();
+    let stdout = text(&out.stdout);
+    assert!(out.status.success(), "{stdout}{}", text(&out.stderr));
+    assert!(stdout.contains("Taking over again"), "{stdout}");
+    assert!(
+        !stdout.contains("Copy all of"),
+        "no second full backup is offered: {stdout}"
+    );
+    assert!(!home.root.join(".nvm.backup-2").exists());
+    for (file, bytes) in SCRIPTS.iter().zip(&ours) {
+        assert_eq!(&fs::read(dir.join(file)).unwrap(), bytes, "{file} is ours");
+        assert_eq!(
+            fs::read(own.join("backup").join(file)).unwrap(),
+            fs::read(reference().join(file)).unwrap(),
+            "{file} backup is nvm's"
+        );
+    }
+    assert_eq!(snapshot(&own), own_before, "manifest, backups and binary");
+    let nvm = home.shell("nvm alias default");
+    assert_eq!(
+        text(&nvm.stdout),
+        "default -> 22 (-> v22.1.0 *)\n",
+        "{}",
+        text(&nvm.stderr)
+    );
+
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    for file in SCRIPTS {
+        assert_eq!(
+            fs::read(dir.join(file)).unwrap(),
+            fs::read(reference().join(file)).unwrap()
+        );
+    }
+    assert!(!own.exists());
+    if is_git {
+        assert_eq!(git(&home, &dir, &["status", "--porcelain"]), "");
+    }
+}
+
+#[test]
+fn nvm_installer_rerun_with_git_then_retakeover() {
+    installer_rerun("git");
+}
+
+#[test]
+fn nvm_installer_rerun_as_script_then_retakeover() {
+    installer_rerun("script");
+}
+
+#[test]
+fn nvm_installed_over_a_fresh_nvmimic_survives_uninstall() {
+    let home = Home::new();
+    let dir = home.nvm_dir();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    nvm_installer(&home, "script");
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    for file in SCRIPTS {
+        assert_eq!(
+            fs::read(dir.join(file)).unwrap(),
+            fs::read(reference().join(file)).unwrap(),
+            "{file} is nvm's and stays"
+        );
+    }
 }

@@ -102,12 +102,13 @@ const USAGE: &str = "\
 usage: nvmimic <command>
 
 commands:
-  self install [--yes] [--dry-run] [--link]   install nvmimic into $NVM_DIR, taking over nvm
-  self uninstall [--yes] [--dry-run]          remove nvmimic and put nvm's scripts back
-  --version                                   print nvmimic's own version
+  self install [--yes] [--dry-run] [--no-link]   install nvmimic into $NVM_DIR, taking over nvm
+  self uninstall [--yes] [--dry-run]             remove nvmimic and put nvm's scripts back
+  --version                                      print nvmimic's own version
 
 --yes answers yes to every question. --dry-run shows what would happen and
-changes nothing. --link also adds a nvmimic command to ~/.local/bin.";
+changes nothing. self install also adds a nvmimic command to ~/.local/bin,
+so it can be run again later. --no-link skips that.";
 
 /// `nvmimic ...`, as opposed to `nvm ...`.
 fn nvmimic_command(args: &[String]) -> ExitCode {
@@ -115,11 +116,11 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
     let options = nvmimic::install::Options {
         yes: flags.contains(&"--yes"),
         dry_run: flags.contains(&"--dry-run"),
-        link: flags.contains(&"--link"),
+        no_link: flags.contains(&"--no-link"),
     };
     let unknown = flags
         .iter()
-        .find(|flag| !matches!(**flag, "--yes" | "--dry-run" | "--link"));
+        .find(|flag| !matches!(**flag, "--yes" | "--dry-run" | "--no-link"));
     let env = nvmimic::install::Env::from_process();
     let mut ui = nvmimic::install::TerminalUi;
     let result = match (

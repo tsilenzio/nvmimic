@@ -52,6 +52,13 @@ to copy the whole folder somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
 load Homebrew's copy would keep running the real nvm.
 
+`self install` also asks to add a `nvmimic` command to `~/.local/bin`, and
+the answer is yes unless you say no. That way you can type
+`nvmimic self install` again later without hunting for the file you
+downloaded. Pass `--no-link` to skip it. nvmimic never puts a program named
+`nvm` on your `PATH`, because real nvm is a shell function and scripts check
+for that.
+
 `nvmimic self uninstall` puts nvm's scripts back and removes nvmimic. Add
 `--dry-run` to either one to see what it would do without changing anything.
 
@@ -64,7 +71,8 @@ Pick one of these:
   `nvmimic self install` again.
 - Or run nvm's install script as usual. It writes nvm's scripts back over
   nvmimic's, so your shells run real nvm again until you run
-  `nvmimic self install` once more.
+  `nvmimic self install` once more. nvm's installer leaves nvmimic's own
+  folder (`$NVM_DIR/.nvmimic`) alone, so nothing is lost in between.
 
 If you installed nvm with git, `git status` in `$NVM_DIR` shows `nvm.sh`,
 `nvm-exec` and `bash_completion` as modified while nvmimic is installed.
