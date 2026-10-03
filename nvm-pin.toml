@@ -1,0 +1,4 @@
+# The nvm release nvmimic matches. Code, tests and `nvm --version` all read this file.
+version = "0.40.8"
+tag = "v0.40.8"
+commit = "a885b885fef16fac4bc544188fb25e9e37ae83e8"

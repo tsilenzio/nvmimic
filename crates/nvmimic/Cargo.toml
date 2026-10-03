@@ -1,0 +1,9 @@
+[package]
+name = "nvmimic"
+description = "nvm's behavior as a Rust library"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
