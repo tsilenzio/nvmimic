@@ -144,7 +144,43 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
             }
             None => 1,
         },
+        "__nvm_aliases" => {
+            completion_aliases(nvm);
+            0
+        }
         _ => fallback::run_function(nvm, name, args),
+    }
+}
+
+/// The alias files under `$NVM_DIR/alias`, relative to it, in the order
+/// `find "${PWD}" -type f` walks them, one per line, for bash completion.
+///
+/// nvm: bash_completion __nvm_aliases
+fn completion_aliases(nvm: &mut Nvm) {
+    fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if kind.is_file() {
+                out.push(format!("{prefix}{name}"));
+            } else if kind.is_dir() {
+                walk(&entry.path(), &format!("{prefix}{name}/"), out);
+            }
+        }
+    }
+    let mut names = Vec::new();
+    walk(
+        std::path::Path::new(&nvm.backend.alias_dir(&nvm.vars)),
+        "",
+        &mut names,
+    );
+    if !names.is_empty() {
+        nvm.io.echo(&names.join("\n"));
     }
 }
 
