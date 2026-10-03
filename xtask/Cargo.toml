@@ -6,3 +6,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
+nvmimic = { path = "../crates/nvmimic" }
+serde_json = "1"

@@ -1,0 +1,2 @@
+# Case-shell pairs where real nvm disagrees with itself across two runs.
+# Regenerate with `cargo xtask parity determinism --record`.

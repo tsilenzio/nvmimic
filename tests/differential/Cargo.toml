@@ -1,0 +1,11 @@
+[package]
+name = "nvmimic-parity"
+description = "Runs real nvm and nvmimic side by side and compares what they do"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+nvmimic = { path = "../../crates/nvmimic" }
+sha2 = "0.11"

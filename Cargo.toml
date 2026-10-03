@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/nvmimic", "crates/nvmimic-cli", "xtask"]
+members = ["crates/nvmimic", "crates/nvmimic-cli", "tests/differential", "xtask"]
 
 [workspace.package]
 version = "0.1.0"

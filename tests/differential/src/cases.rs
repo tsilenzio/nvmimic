@@ -1,0 +1,190 @@
+//! Reference cases: each file in `cases/` runs against real nvm and nvmimic,
+//! and the two must agree. A case file starts with header comments:
+//!
+//! ```text
+//! # id: USE-01
+//! # shells: bash zsh sh dash      (optional, defaults to every shell present)
+//! # source: --no-use              (optional, arguments for `. nvm.sh`)
+//! # setup: nvm install 24.15.0    (optional, repeatable, output discarded)
+//! # covers: nvm_ls nvm:use        (optional, the nvm functions it exercises)
+//! ```
+//!
+//! followed by the shell body whose output is compared.
+
+use crate::harness::{self, Impl, Shell, World, diff};
+use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::thread;
+
+pub struct Case {
+    pub id: String,
+    pub shells: Vec<Shell>,
+    pub source: String,
+    pub setup: String,
+    pub covers: Vec<String>,
+    pub body: String,
+}
+
+pub fn cases_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("cases")
+}
+
+/// All cases, or with `NVMIMIC_CASES=VER,DSP-02` only those whose id starts
+/// with one of the listed prefixes.
+pub fn load_all() -> Vec<Case> {
+    let mut files: Vec<PathBuf> = fs::read_dir(cases_dir())
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "sh"))
+        .collect();
+    files.sort();
+
+    let filter = std::env::var("NVMIMIC_CASES").unwrap_or_default();
+    let prefixes: Vec<&str> = filter.split(',').filter(|p| !p.is_empty()).collect();
+    files
+        .iter()
+        .map(|file| parse(file))
+        .filter(|case| prefixes.is_empty() || prefixes.iter().any(|p| case.id.starts_with(p)))
+        .collect()
+}
+
+fn parse(file: &Path) -> Case {
+    let text = fs::read_to_string(file).unwrap();
+    let mut id = None;
+    let mut shells = Vec::new();
+    let mut source = String::new();
+    let mut setup = Vec::new();
+    let mut covers = Vec::new();
+    let mut body = Vec::new();
+
+    for line in text.lines() {
+        let header = line
+            .strip_prefix("# ")
+            .and_then(|rest| rest.split_once(": "))
+            .filter(|_| body.is_empty());
+        match header {
+            Some(("id", value)) => id = Some(value.trim().to_string()),
+            Some(("shells", value)) => {
+                shells = value
+                    .split_whitespace()
+                    .filter_map(harness::shell)
+                    .collect()
+            }
+            Some(("source", value)) => source = value.trim().to_string(),
+            Some(("setup", value)) => setup.push(value.to_string()),
+            Some(("covers", value)) => covers.extend(value.split_whitespace().map(str::to_string)),
+            _ if body.is_empty() && line.starts_with('#') => {}
+            _ => body.push(line),
+        }
+    }
+
+    if shells.is_empty() {
+        shells = harness::shells();
+    }
+    Case {
+        id: id.unwrap_or_else(|| panic!("{} has no `# id:` header", file.display())),
+        shells,
+        source,
+        setup: setup.join("\n"),
+        covers,
+        body: body.join("\n"),
+    }
+}
+
+/// `<id> <shell>` pairs listed in `cases/<name>`, where the shell is a name
+/// or `*`. Text after `#` is a comment.
+pub fn listed(name: &str) -> BTreeSet<(String, String)> {
+    fs::read_to_string(cases_dir().join(name))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let (id, shell) = line.split_once(' ').unwrap_or((line, "*"));
+            (id.to_string(), shell.trim().to_string())
+        })
+        .collect()
+}
+
+pub fn is_listed(list: &BTreeSet<(String, String)>, id: &str, shell: &str) -> bool {
+    list.contains(&(id.to_string(), shell.to_string()))
+        || list.contains(&(id.to_string(), "*".to_string()))
+}
+
+pub struct Result {
+    pub id: String,
+    pub shell: String,
+    pub differences: Vec<String>,
+}
+
+/// Runs every case under each of its shells, `left` against `right`, on up to
+/// eight worker threads.
+pub fn run_all(cases: &[Case], left: Impl, right: Impl) -> Vec<Result> {
+    let results = Mutex::new(Vec::new());
+    let next = Mutex::new(0usize);
+    let workers = std::env::var("NVMIMIC_PARITY_JOBS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or_else(|| {
+            thread::available_parallelism()
+                .map_or(4, |n| n.get())
+                .min(8)
+        });
+
+    let labels = if left == right {
+        (
+            format!("{} run 1", left.name()),
+            format!("{} run 2", right.name()),
+        )
+    } else {
+        (left.name().to_string(), right.name().to_string())
+    };
+    let labels = &labels;
+
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                loop {
+                    let index = {
+                        let mut next = next.lock().unwrap();
+                        let index = *next;
+                        *next += 1;
+                        index
+                    };
+                    let Some(case) = cases.get(index) else {
+                        break;
+                    };
+                    let world = World::new();
+                    for shell in &case.shells {
+                        let run = |which| {
+                            world.run_with(which, shell, &case.source, &case.setup, &case.body)
+                        };
+                        let (a, b) = (run(left), run(right));
+                        let differences = diff((&labels.0, &a), (&labels.1, &b));
+                        results.lock().unwrap().push(Result {
+                            id: case.id.clone(),
+                            shell: shell.name.clone(),
+                            differences,
+                        });
+                    }
+                }
+            });
+        }
+    });
+
+    let mut results = results.into_inner().unwrap();
+    results.sort_by(|a, b| (&a.id, &a.shell).cmp(&(&b.id, &b.shell)));
+    results
+}
+
+/// Writes `<id> <shell>` lines for every result that differs, under a header.
+pub fn record(name: &str, header: &str, results: &[Result]) {
+    let mut text = String::from(header);
+    for result in results.iter().filter(|r| !r.differences.is_empty()) {
+        text.push_str(&format!("{} {}\n", result.id, result.shell));
+    }
+    fs::write(cases_dir().join(name), text).unwrap();
+}
