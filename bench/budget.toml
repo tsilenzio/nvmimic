@@ -1,0 +1,3 @@
+# What sourcing nvmimic's nvm.sh may cost, measured by `cargo xtask bench --check`
+# as the mean source time minus the mean time of the same shell doing nothing.
+source_overhead_ms = 10

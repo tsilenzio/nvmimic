@@ -96,6 +96,10 @@ impl Fixture {
         self.root.join("zdotdir")
     }
 
+    fn shims(&self) -> PathBuf {
+        self.root.join("shims")
+    }
+
     fn default_bin(&self, which: &str) -> PathBuf {
         let versions = self.home(which).join(".nvm/versions/node");
         let mut found: Vec<PathBuf> = fs::read_dir(&versions)
@@ -235,6 +239,11 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
             fs::copy(reference.join(file), base.join(".nvm").join(file))
                 .map_err(|e| e.to_string())?;
         }
+        // An existing nvm download cache saves fetching the archives again.
+        // nvm still checks each one against the mirror's checksums.
+        if let Some(cache) = std::env::var_os("NVMIMIC_BENCH_CACHE") {
+            copy_tree(Path::new(&cache), &base.join(".nvm/.cache"))?;
+        }
         let script = format!(
             ". \"$NVM_DIR/nvm.sh\"\n{}\nnvm alias default {DEFAULT}\n",
             VERSIONS
@@ -301,7 +310,38 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
         std::os::unix::fs::symlink(node, system.join("node")).map_err(|e| e.to_string())?;
     }
     fs::create_dir_all(fixture.zdotdir()).map_err(|e| e.to_string())?;
+    write_shims(&fixture.shims())?;
     Ok(fixture)
+}
+
+/// A logging stand-in for each counted tool, which records its name and then
+/// runs the real program.
+fn write_shims(dir: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    for tool in EXTERNAL
+        .iter()
+        .filter(|tool| !matches!(**tool, "node" | "npm"))
+    {
+        let Some(real) = BASE_PATH
+            .split(':')
+            .map(|dir| Path::new(dir).join(tool))
+            .find(|path| path.is_file())
+        else {
+            continue;
+        };
+        let shim = dir.join(tool);
+        fs::write(
+            &shim,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' {tool} >> \"$NVMIMIC_LAUNCH_LOG\"\nexec '{}' \"$@\"\n",
+                real.display()
+            ),
+        )
+        .map_err(|e| e.to_string())?;
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// Copies a directory tree, as a copy-on-write clone where the filesystem
@@ -366,26 +406,44 @@ fn hyperfine(root: &Path, runs: &str, commands: &[(&str, Vec<String>)]) -> BTree
         .collect()
 }
 
-/// Runs the source once with the shell's xtrace on and counts the external
-/// programs it started. `.nvmimic/bin/nvm` counts as `nvmimic`.
+/// Counts the programs one source starts. Tools are counted by logging shims
+/// put first on `PATH`, which also catches calls whose stderr nvm discards.
+/// `node`, `npm` and nvmimic itself are counted from the shell's xtrace,
+/// since a shim named `node` would change which node nvm finds. That count
+/// misses calls nvm makes with stderr sent to /dev/null, so it is a floor.
 fn launches(
     fixture: &Fixture,
     which: &str,
     shell: &ShellRun,
     scenario: Scenario,
 ) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+
+    let log = fixture.root.join("launches.log");
+    let _ = fs::remove_file(&log);
+    let mut argv = fixture.command(which, shell, scenario, ". \"$NVM_DIR/nvm.sh\"");
+    for arg in argv.iter_mut() {
+        if let Some(path) = arg.strip_prefix("PATH=") {
+            *arg = format!("PATH={}:{path}", fixture.shims().display());
+        }
+    }
+    argv.insert(2, format!("NVMIMIC_LAUNCH_LOG={}", log.display()));
+    let _ = Command::new(&argv[0]).args(&argv[1..]).output();
+    for tool in fs::read_to_string(&log).unwrap_or_default().lines() {
+        *counts.entry(tool.to_string()).or_insert(0) += 1;
+    }
+
     let mut argv = fixture.command(which, shell, scenario, ". \"$NVM_DIR/nvm.sh\"");
     let shell_at = argv.iter().position(|arg| arg == shell.path).unwrap();
     argv.insert(shell_at + 1, "-x".to_string());
-    argv.insert(1, "PS4=+ ".to_string());
+    argv.insert(2, "PS4=+ ".to_string());
     let output = Command::new(&argv[0]).args(&argv[1..]).output().unwrap();
-
-    let mut counts = BTreeMap::new();
-    for line in String::from_utf8_lossy(&output.stderr).lines() {
-        let Some(rest) = line.strip_prefix('+') else {
-            continue;
-        };
-        let mut words = rest.trim_start_matches('+').split_whitespace();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    for line in stderr.lines().filter_map(|line| line.strip_prefix('+')) {
+        let line = line.trim_start_matches('+').trim_start();
+        let mut words = line
+            .split_whitespace()
+            .skip_while(|word| is_assignment(word));
         let mut word = words.next().unwrap_or("");
         if word == "command" {
             word = words.next().unwrap_or("");
@@ -394,15 +452,22 @@ fn launches(
         {
             "nvmimic"
         } else {
-            let base = word.rsplit('/').next().unwrap_or(word);
-            match EXTERNAL.iter().find(|tool| **tool == base) {
-                Some(tool) => tool,
-                None => continue,
+            match word.rsplit('/').next().unwrap_or(word) {
+                name @ ("node" | "npm") => name,
+                _ => continue,
             }
         };
         *counts.entry(name.to_string()).or_insert(0) += 1;
     }
     counts
+}
+
+fn is_assignment(word: &str) -> bool {
+    word.split_once('=').is_some_and(|(name, _)| {
+        !name.is_empty()
+            && !name.starts_with(|c: char| c.is_ascii_digit())
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 fn print_table(rows: &[Row]) {
