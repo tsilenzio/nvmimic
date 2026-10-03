@@ -158,3 +158,50 @@ fn no_known_failures() {
     let known = cases::listed(KNOWN_FAILING);
     assert!(known.is_empty(), "{} known failures remain", known.len());
 }
+
+/// Everyday commands start nvmimic once each and nothing else: no node, no
+/// npm, no sed or awk.
+#[test]
+#[ignore = "full run, use `cargo xtask parity launches`"]
+fn everyday_commands_launch_only_nvmimic() {
+    let mut world = World::new();
+    world.options.count_launches = true;
+    let steps: &[(&str, usize)] = &[
+        ("nvm current", 1),
+        ("nvm ls", 1),
+        ("nvm ls 24", 1),
+        ("nvm which 24.15.0", 1),
+        ("nvm version 24", 1),
+        ("nvm use 24.15.0", 1),
+        ("nvm use system", 1),
+        ("nvm deactivate", 1),
+        ("nvm alias dev 24.15.0", 1),
+        ("nvm alias", 1),
+        ("nvm unalias dev", 1),
+        ("nvm_find_nvmrc", 0),
+        (". \"$NVM_DIR/nvm.sh\"", 1),
+    ];
+    for shell in harness::shells() {
+        for (step, expected) in steps {
+            let outcome = world.run_with(
+                Impl::Nvmimic,
+                &shell,
+                "",
+                "nvm install 24.15.0\nnvm install 20.20.2",
+                step,
+            );
+            let foreign: Vec<&String> = outcome
+                .launches
+                .iter()
+                .filter(|l| *l != "nvmimic")
+                .collect();
+            let ours = outcome.launches.len() - foreign.len();
+            assert!(
+                foreign.is_empty() && ours == *expected,
+                "{} `{step}`: launched {:?}, expected nvmimic {expected} time(s)",
+                shell.name,
+                outcome.launches
+            );
+        }
+    }
+}

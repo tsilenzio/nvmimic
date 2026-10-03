@@ -2,6 +2,10 @@
 
 mod bench;
 mod gen_shell;
+mod nvm_diff;
+mod nvmsh;
+mod string_audit;
+mod trace;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -13,8 +17,12 @@ usage: cargo xtask <task>
 tasks:
   parity [--record]                 compare nvmimic with real nvm on every case
   parity determinism [--record]     run real nvm against itself on every case
+  parity launches                   check everyday commands start only nvmimic
   bench [--check] [--runs=N]        time sourcing nvm.sh for real nvm and nvmimic
   gen-shell [--check]               write shell/nvm.sh from the pinned nvm.sh
+  trace [--strict]                  map nvm.sh's functions to nvmimic's code and cases
+  nvm-diff <old> <new> [--repo P]   report what changed in nvm between two revisions
+  string-audit                      check nvmimic's messages against the pinned nvm.sh
   help                              show this list
 
 --record rewrites cases/KNOWN_FAILING or cases/NONDETERMINISTIC from the run.
@@ -31,6 +39,9 @@ fn main() -> ExitCode {
         ["parity", rest @ ..] => parity(rest),
         ["bench", rest @ ..] => bench::run(rest),
         ["gen-shell", rest @ ..] => gen_shell::run(rest),
+        ["trace", rest @ ..] => trace::run(rest),
+        ["nvm-diff", rest @ ..] => nvm_diff::run(rest),
+        ["string-audit", rest @ ..] => string_audit::run(rest),
         [other, ..] => {
             eprintln!("xtask: unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
@@ -42,6 +53,8 @@ fn parity(args: &[&str]) -> ExitCode {
     let record = args.contains(&"--record");
     let test = if args.contains(&"determinism") {
         "nvm_is_deterministic"
+    } else if args.contains(&"launches") {
+        "everyday_commands_launch_only_nvmimic"
     } else {
         "reference_cases_match_or_are_known"
     };

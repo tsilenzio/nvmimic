@@ -66,6 +66,11 @@ const AUTO: &str = r#"nvm_auto() {
 }
 "#;
 
+/// Whether `shell/nvm.sh` carries this nvm function's own code.
+pub fn is_verbatim(name: &str) -> bool {
+    VERBATIM.contains(&name)
+}
+
 pub fn run(args: &[&str]) -> ExitCode {
     let generated = match generate() {
         Ok(text) => text,

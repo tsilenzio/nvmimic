@@ -43,7 +43,11 @@ pub fn alias_unreadable(path: &str) -> String {
 
 // nvm: nvm_validate_implicit_alias
 pub fn only_implicit_aliases() -> String {
-    "Only implicit aliases 'stable', 'unstable', 'iojs', and 'node' are supported.".to_string()
+    let (iojs, node) = (
+        crate::nvm::version::IOJS_PREFIX,
+        crate::nvm::version::NODE_PREFIX,
+    );
+    format!("Only implicit aliases 'stable', 'unstable', '{iojs}', and '{node}' are supported.")
 }
 
 // nvm: nvm_make_alias
@@ -76,7 +80,7 @@ pub fn run_install(provided: &str) -> String {
 pub const RUN_INSTALL_NVMRC: &str =
     "You need to run `nvm install` to install and use the node version specified in `.nvmrc`.";
 
-// nvm: nvm (deactivate)
+// nvm: nvm:deactivate
 pub fn could_not_find_bin(nvm_dir: &str) -> String {
     format!("Could not find {nvm_dir}/*/bin in ${{PATH}}")
 }
@@ -97,7 +101,7 @@ pub fn removed_node_modules(nvm_dir: &str) -> String {
     format!("{nvm_dir}/*/lib/node_modules removed from ${{NODE_PATH}}")
 }
 
-// nvm: nvm (use)
+// nvm: nvm:use
 pub const SAVE_ONCE: &str = "--save and -w may only be provided once";
 pub const SEE_HELP_NVMRC: &str =
     "Please see `nvm --help` or https://github.com/nvm-sh/nvm#nvmrc for more information.";
@@ -183,22 +187,22 @@ pub fn run_to_unset(command: &str) -> String {
     format!("Run `{command}` to unset it.")
 }
 
-// nvm: nvm (exec, run, ls, ls-remote, alias, version-remote)
+// nvm: nvm:exec nvm:run nvm:ls nvm:ls-remote nvm:alias nvm:version-remote
 pub fn unsupported_option(option: &str) -> String {
     format!("Unsupported option \"{option}\".")
 }
 
-// nvm: nvm (ls)
+// nvm: nvm:ls
 pub const NO_ALIAS_WITH_PATTERN: &str = "`--no-alias` is not supported when a pattern is provided.";
 
-// nvm: nvm (which)
+// nvm: nvm:which
 pub const WHICH_USAGE: [&str; 3] = [
     "Usage: nvm which [current | <version>]",
     "  Provide a <version>, or run from a directory containing an .nvmrc file.",
     "  Run `nvm --help` for full help.",
 ];
 
-// nvm: nvm (alias)
+// nvm: nvm:alias
 pub const ALIAS_COMMENT: &str = "Aliases with a comment delimiter (#) are not supported.";
 pub const ALIAS_SUBDIRECTORY: &str = "Aliases in subdirectories are not supported.";
 
@@ -206,7 +210,7 @@ pub fn version_does_not_exist(target: &str) -> String {
     format!("! WARNING: Version '{target}' does not exist.")
 }
 
-// nvm: nvm (unalias)
+// nvm: nvm:unalias
 pub const UNALIAS_USAGE: [&str; 2] = [
     "Usage: nvm unalias <name>",
     "  Run `nvm --help` for full help.",
@@ -224,7 +228,7 @@ pub fn deleted_alias(name: &str, original: &str) -> String {
     format!("Deleted alias {name} - restore it with `nvm alias \"{name}\" \"{original}\"`")
 }
 
-// nvm: nvm (exec)
+// nvm: nvm:exec
 pub const EXEC_NO_VERSION: [&str; 3] = [
     "WARNING: `nvm exec` was invoked without a version argument and without an .nvmrc file.",
     "  Falling back to the active node version; this will become an error in a future release.",
@@ -247,7 +251,7 @@ pub fn running_node(version: &str, npm: &str) -> String {
     format!("Running node {version}{npm}")
 }
 
-// nvm: nvm (run)
+// nvm: nvm:run
 pub const RUN_USAGE: [&str; 3] = [
     "Usage: nvm run [<version>] [<args>]",
     "  Provide a <version>, or run from a directory containing an .nvmrc file.",
@@ -270,7 +274,7 @@ pub const INVALID_COLOR_CODES: &str = "\\033[1;37mPlease pass in five \\033[1;31
 // nvm's own source: trailing slashes on NVM_DIR.
 pub const NVM_DIR_TRAILING_SLASH: &str = "Warning: $NVM_DIR should not have trailing slashes";
 
-// The `ls` program, as nvm_normalize_lts runs it on a missing directory.
+// string-audit: skip, printed by the `ls` program nvm_normalize_lts runs.
 pub fn ls_missing(dir: &str) -> String {
     if cfg!(target_os = "macos") {
         format!("ls: {dir}: No such file or directory")
@@ -279,7 +283,7 @@ pub fn ls_missing(dir: &str) -> String {
     }
 }
 
-// The `tee` program, as nvm_make_alias runs it.
+// string-audit: skip, printed by the `tee` program nvm_make_alias runs.
 pub fn tee_failed(path: &str, error: &std::io::Error) -> String {
     format!("tee: {path}: {}", strerror(error))
 }

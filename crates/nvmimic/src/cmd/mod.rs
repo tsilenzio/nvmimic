@@ -88,7 +88,11 @@ fn print_help(nvm: &mut Nvm, args: &[String]) {
     nvm.vars.assign("NVM_VERSION", crate::pin::VERSION);
 
     for line in help::BEFORE_LEGEND {
-        nvm.io.echo(&line.replace("{VERSION}", crate::pin::VERSION));
+        let line = line
+            .replace("{VERSION}", crate::pin::VERSION)
+            .replace("{NODE}", crate::nvm::version::NODE_PREFIX)
+            .replace("{IOJS}", crate::nvm::version::IOJS_PREFIX);
+        nvm.io.echo(&line);
     }
     print_color_legend(nvm);
     for line in help::AFTER_LEGEND {

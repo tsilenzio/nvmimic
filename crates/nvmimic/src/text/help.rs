@@ -3,7 +3,8 @@
 // Text in this file is from nvm (https://github.com/nvm-sh/nvm), MIT licensed:
 // Copyright (c) 2010 Tim Caswell, Copyright (c) 2014 Jordan Harband.
 
-/// Lines before the color legend. `{VERSION}` stands for nvm's version.
+/// Lines before the color legend. `{VERSION}` stands for nvm's version,
+/// `{NODE}` and `{IOJS}` for its two flavor prefixes.
 ///
 /// nvm: nvm:help
 pub const BEFORE_LEGEND: &[&str] = &[
@@ -12,7 +13,7 @@ pub const BEFORE_LEGEND: &[&str] = &[
     "",
     "Note: <version> refers to any version-like string nvm understands. This includes:",
     "  - full or partial version numbers, starting with an optional \"v\" (0.10, v0.1.2, v1)",
-    "  - default (built-in) aliases: node, stable, unstable, iojs, system",
+    "  - default (built-in) aliases: {NODE}, stable, unstable, {IOJS}, system",
     "  - custom aliases you define with `nvm alias foo`",
     "",
     " Any options that produce colorized output should respect the `--no-colors` option.",
