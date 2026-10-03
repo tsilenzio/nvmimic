@@ -2,51 +2,65 @@
 
 use super::local;
 use super::paths::{self, tree_contains_path};
+use super::semver;
 use crate::context::Nvm;
 use crate::text::messages;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// The version `npm --version` would print for the `npm` on `PATH`, read
-/// from npm's own `package.json` instead of starting npm.
-pub fn npm_version(path_list: &str) -> Option<String> {
-    let npm = paths::which(path_list, "npm")?;
-    let resolved = std::fs::canonicalize(&npm).unwrap_or_else(|_| PathBuf::from(&npm));
-    let mut dir = resolved.parent();
-    while let Some(current) = dir {
-        let manifest = current.join("package.json");
-        if let Some(version) = package_version(&manifest) {
-            return Some(version);
-        }
-        if current.join("lib/node_modules/npm/package.json").is_file() {
-            return package_version(&current.join("lib/node_modules/npm/package.json"));
-        }
-        dir = current.parent();
+/// The version of the npm package a path leads to, when it can be trusted
+/// to be what `npm --version` prints: the link resolves into a package named
+/// `npm`, and that npm supports the active node. `None` for anything else,
+/// such as Corepack's shim or a wrapper script.
+fn bundled_npm_version(npm: &str, node_version: &str) -> Option<String> {
+    let resolved = std::fs::canonicalize(npm).ok()?;
+    let manifest = resolved
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("package.json"))
+        .find(|path| path.is_file())?;
+    let package: serde_json::Value = serde_json::from_slice(&std::fs::read(manifest).ok()?).ok()?;
+    if package.get("name")?.as_str()? != "npm" {
+        return None;
     }
-    None
+    let engines = package.get("engines")?.get("node")?.as_str()?;
+    if !semver::satisfies(node_version, engines) {
+        return None;
+    }
+    Some(package.get("version")?.as_str()?.to_string())
 }
 
-/// The `version` of a `package.json` whose `name` is `npm`.
-fn package_version(manifest: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(manifest).ok()?;
-    let field = |key: &str| -> Option<String> {
-        let at = text.find(&format!("\"{key}\""))?;
-        let rest = text[at + key.len() + 2..]
-            .trim_start()
-            .strip_prefix(':')?
-            .trim_start();
-        let rest = rest.strip_prefix('"')?;
-        Some(rest[..rest.find('"')?].to_string())
-    };
-    (field("name")? == "npm")
-        .then(|| field("version"))
-        .flatten()
+/// What `npm --version` prints for the `npm` the shell would run, found by
+/// scanning the caller's `PATH`. The version comes from npm's `package.json`
+/// when [`bundled_npm_version`] can vouch for it. Otherwise npm is run, as
+/// nvm runs it, and printing nothing means there is no version.
+pub fn npm_version(nvm: &Nvm) -> Option<String> {
+    let npm = paths::which(nvm.vars.get("PATH"), "npm")?;
+    let node = local::which_node(nvm, "node")
+        .and_then(|node| local::binary_version(&node))
+        .unwrap_or_default();
+    if let Some(version) = bundled_npm_version(&npm, &node) {
+        return Some(version);
+    }
+    let mut command = std::process::Command::new(&npm);
+    command
+        .arg("--version")
+        .env_clear()
+        .envs(nvm.vars.exported())
+        .stdin(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    if !nvm.vars.get("PWD").is_empty() {
+        command.current_dir(nvm.vars.get("PWD"));
+    }
+    let output = command.output().ok()?;
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(text.trim_end_matches('\n').to_string())
 }
 
 /// ` (npm vX.Y.Z)` for the `npm` on `PATH`, or nothing.
 ///
 /// nvm: nvm_print_npm_version
 pub fn print_npm_version(nvm: &Nvm) -> String {
-    npm_version(nvm.vars.get("PATH"))
+    npm_version(nvm)
         .filter(|version| !version.is_empty())
         .map(|version| messages::npm_suffix(&version))
         .unwrap_or_default()

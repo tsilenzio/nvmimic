@@ -11,5 +11,6 @@ pub mod output;
 pub mod paths;
 pub mod posix_re;
 pub mod remote;
+pub mod semver;
 pub mod terminfo;
 pub mod version;

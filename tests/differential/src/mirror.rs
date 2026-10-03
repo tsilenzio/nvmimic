@@ -259,7 +259,9 @@ fn build_tree(top: &Path, version: &str) {
     );
     fs::write(
         top.join("lib/node_modules/npm/package.json"),
-        format!("{{\"name\": \"npm\", \"version\": \"{NPM_VERSION}\"}}\n"),
+        format!(
+            "{{\"name\": \"npm\", \"version\": \"{NPM_VERSION}\", \"engines\": {{\"node\": \">=0.10.0\"}}}}\n"
+        ),
     )
     .unwrap();
     let (major, minor, patch) = split_version(version);
