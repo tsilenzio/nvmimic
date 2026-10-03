@@ -50,16 +50,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = args.map(lossy).collect();
 
     if !as_nvm {
-        return match args.first().map(String::as_str) {
-            Some("--version") => {
-                println!("{}", env!("CARGO_PKG_VERSION"));
-                ExitCode::SUCCESS
-            }
-            _ => {
-                eprintln!("usage: nvmimic --version");
-                ExitCode::from(2)
-            }
-        };
+        return nvmimic_command(&args);
     }
 
     let (function, rest) = match args.split_first() {
@@ -94,6 +85,68 @@ fn main() -> ExitCode {
         write_fd(fd, &shell::render(&outcome.effects));
     }
     ExitCode::from(outcome.status.rem_euclid(256) as u8)
+}
+
+const USAGE: &str = "\
+usage: nvmimic <command>
+
+commands:
+  self install [--yes] [--dry-run] [--link]   install nvmimic into $NVM_DIR, taking over nvm
+  self uninstall [--yes] [--dry-run]          remove nvmimic and put nvm's scripts back
+  --version                                   print nvmimic's own version
+
+--yes answers yes to every question. --dry-run shows what would happen and
+changes nothing. --link also adds a nvmimic command to ~/.local/bin.";
+
+/// `nvmimic ...`, as opposed to `nvm ...`.
+fn nvmimic_command(args: &[String]) -> ExitCode {
+    let flags: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
+    let options = nvmimic::install::Options {
+        yes: flags.contains(&"--yes"),
+        dry_run: flags.contains(&"--dry-run"),
+        link: flags.contains(&"--link"),
+    };
+    let unknown = flags
+        .iter()
+        .find(|flag| !matches!(**flag, "--yes" | "--dry-run" | "--link"));
+    let env = nvmimic::install::Env::from_process();
+    let mut ui = nvmimic::install::TerminalUi;
+    let result = match (
+        args.first().map(String::as_str),
+        args.get(1).map(String::as_str),
+    ) {
+        (Some("--version"), None) => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        (Some("self"), Some(action @ ("install" | "uninstall"))) if unknown.is_none() => {
+            if !options.yes && !options.dry_run && !is_tty(0) {
+                eprintln!(
+                    "nvmimic: this asks questions, and there is no terminal to answer them. Run it again with --yes."
+                );
+                return ExitCode::from(2);
+            }
+            if action == "install" {
+                match env::current_exe() {
+                    Ok(binary) => nvmimic::install::self_install(&env, &binary, &options, &mut ui),
+                    Err(error) => Err(format!("cannot find this program's own file: {error}")),
+                }
+            } else {
+                nvmimic::install::self_uninstall(&env, &options, &mut ui)
+            }
+        }
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(message) => {
+            eprintln!("nvmimic: {message}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
 fn lossy(value: OsString) -> String {

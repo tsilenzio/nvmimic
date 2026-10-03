@@ -36,7 +36,24 @@ How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side on 316 test scripts under bash, zsh, sh and dash, and
 compares everything they print, return, set and write.
 
-There's no installer yet.
+## Installing
+
+There are no release downloads yet, so build it with Rust first:
+
+```sh
+cargo build --release
+./target/release/nvmimic self install
+```
+
+`self install` puts nvmimic into `$NVM_DIR` (usually `~/.nvm`). If nvm is
+already there, nvmimic takes it over: it keeps your Node versions, aliases and
+settings, moves nvm's own scripts into `$NVM_DIR/.nvmimic/backup`, and offers
+to copy the whole folder somewhere safe first. If you installed nvm with
+Homebrew, it asks before running `brew uninstall nvm`, because shells that
+load Homebrew's copy would keep running the real nvm.
+
+`nvmimic self uninstall` puts nvm's scripts back and removes nvmimic. Add
+`--dry-run` to either one to see what it would do without changing anything.
 
 ## How it stays fast
 
