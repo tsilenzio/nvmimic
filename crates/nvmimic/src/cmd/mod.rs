@@ -1,0 +1,172 @@
+//! The `nvm` command: its help scan, then one module per subcommand.
+
+pub mod alias;
+pub mod deactivate;
+pub mod exec;
+pub mod fallback;
+pub mod ls;
+pub mod unload;
+pub mod use_;
+pub mod which;
+
+use crate::context::Nvm;
+use crate::nvm::{colors, local};
+use crate::text::{help, messages};
+
+/// Runs `nvm <args>` and returns its exit status. Changes to the calling
+/// shell collect in `nvm.vars`.
+///
+/// nvm: nvm
+pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
+    if args.is_empty() {
+        return self::nvm(nvm, &["--help".to_string()]);
+    }
+
+    for arg in args {
+        match arg.as_str() {
+            "--" => break,
+            "-h" | "help" | "--help" => {
+                print_help(nvm, args);
+                return 0;
+            }
+            _ => {}
+        }
+    }
+
+    let command = args[0].as_str();
+    let rest = &args[1..];
+    match command {
+        "deactivate" => deactivate::run(nvm, rest),
+        "use" => use_::run(nvm, rest),
+        "exec" => exec::exec(nvm, rest),
+        "run" => exec::run(nvm, rest),
+        "ls" | "list" => ls::run(nvm, rest),
+        "current" => {
+            nvm.io.echo(&local::ls_current(nvm));
+            0
+        }
+        "which" => which::run(nvm, rest),
+        "alias" => alias::run(nvm, rest),
+        "unalias" => alias::unalias(nvm, rest),
+        "version" => {
+            let (version, status) = local::version(nvm, rest.first().map_or("", String::as_str));
+            nvm.io.echo(&version);
+            status
+        }
+        "--version" | "-v" => {
+            nvm.io.echo(crate::pin::VERSION);
+            0
+        }
+        "unload" => unload::run(nvm),
+        "set-colors" => set_colors(nvm, rest),
+        "install" | "i" | "uninstall" | "ls-remote" | "list-remote" | "version-remote"
+        | "cache" | "debug" | "install-latest-npm" | "reinstall-packages" | "copy-packages"
+        | "clear-cache" => fallback::run_nvm(nvm, args),
+        _ => {
+            nvm.to_stderr(|nvm| print_help(nvm, &["--help".to_string()]));
+            127
+        }
+    }
+}
+
+/// `nvm --help`. It leaves `NVM_NO_COLORS`, `NVM_VERSION` and the loop
+/// variable `j` set in the calling shell.
+fn print_help(nvm: &mut Nvm, args: &[String]) {
+    let mut no_colors = String::new();
+    let mut last = String::new();
+    for arg in args {
+        last = arg.clone();
+        if arg == "--no-colors" {
+            no_colors = arg.clone();
+            break;
+        }
+    }
+    nvm.vars.assign("NVM_NO_COLORS", no_colors);
+    if !args.is_empty() {
+        nvm.vars.assign("j", last);
+    }
+    nvm.vars.assign("NVM_VERSION", crate::pin::VERSION);
+
+    for line in help::BEFORE_LEGEND {
+        nvm.io.echo(&line.replace("{VERSION}", crate::pin::VERSION));
+    }
+    print_color_legend(nvm);
+    for line in help::AFTER_LEGEND {
+        nvm.io.echo(line);
+    }
+}
+
+/// The color section of `nvm --help`.
+///
+/// nvm: nvm_print_color_legend
+fn print_color_legend(nvm: &mut Nvm) {
+    let has_colors = colors::has_colors(nvm);
+    let saved = nvm.local("NVM_HAS_COLORS");
+    nvm.vars
+        .set_quiet("NVM_HAS_COLORS", if has_colors { "1" } else { "0" });
+    let wrap = |nvm: &mut Nvm, letter: &str, text: &str| -> String {
+        // Each piece is built in `$( ... )`, which cannot see the terminal.
+        let tty = std::mem::replace(&mut nvm.stdout_is_tty, false);
+        let out = colors::wrap_with_color_code(nvm, letter, text);
+        nvm.stdout_is_tty = tty;
+        out
+    };
+    let indent = " ".repeat(48);
+    nvm.io
+        .echo(&format!("{}Initial colors are:", " ".repeat(47)));
+    let initial: String = ["b", "y", "g", "r", "e"]
+        .iter()
+        .map(|letter| wrap(nvm, letter, letter))
+        .collect();
+    nvm.io.echo(&format!("{}  {initial}", " ".repeat(48)));
+    nvm.io.echo(&format!("{}Color codes:", " ".repeat(47)));
+    for (low, high, low_name, high_name) in [
+        ("r", "R", "red", "bold red"),
+        ("g", "G", "green", "bold green"),
+        ("b", "B", "blue", "bold blue"),
+        ("c", "C", "cyan", "bold cyan"),
+        ("m", "M", "magenta", "bold magenta"),
+        ("y", "Y", "yellow", "bold yellow"),
+        ("k", "K", "black", "bold black"),
+        ("e", "W", "light grey", "white"),
+    ] {
+        let line = format!(
+            "{indent}{}/{} = {} / {}",
+            wrap(nvm, low, low),
+            wrap(nvm, high, high),
+            wrap(nvm, low, low_name),
+            wrap(nvm, high, high_name)
+        );
+        nvm.io.echo(&colors::printf_b(&line));
+    }
+    nvm.restore("NVM_HAS_COLORS", saved);
+}
+
+/// nvm: nvm:set-colors
+fn set_colors(nvm: &mut Nvm, args: &[String]) -> i32 {
+    let code = args.first().map_or("", String::as_str);
+    let valid = code.chars().count() == 5 && code.chars().all(|c| "rRgGbBcCyYmMkKeW".contains(c));
+    if !valid {
+        nvm.to_stderr(|nvm| print_help(nvm, &["--help".to_string()]));
+        nvm.io.echo("");
+        nvm.io.err(&colors::printf_b(messages::INVALID_COLOR_CODES));
+        return 0;
+    }
+    let letters: Vec<String> = code.chars().map(String::from).collect();
+    if !colors::has_colors(nvm) {
+        nvm.io.echo(&messages::setting_colors(&letters.join(" ")));
+        nvm.io.echo(messages::COLORS_NOT_SUPPORTED);
+    } else {
+        let saved = nvm.local("NVM_HAS_COLORS");
+        nvm.vars.set_quiet("NVM_HAS_COLORS", "1");
+        let painted: String = letters
+            .iter()
+            .map(|letter| colors::wrap_with_color_code(nvm, letter, letter))
+            .collect();
+        nvm.restore("NVM_HAS_COLORS", saved);
+        nvm.io
+            .echo(&colors::printf_b(&messages::setting_colors(&painted)));
+    }
+    nvm.vars.export("NVM_COLORS", code);
+    0
+}

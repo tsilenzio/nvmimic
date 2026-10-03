@@ -358,11 +358,16 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, count_launches: bool) {
         }
         Impl::Nvmimic => {
             let shell_dir = repo_root().join("shell");
-            for file in ["nvm.sh", "nvm-exec", "bash_completion"] {
+            for file in ["nvm-exec", "bash_completion"] {
                 let source = shell_dir.join(file);
                 if source.is_file() {
                     copy(&source, &nvm_dir.join(file));
                 }
+            }
+            if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
+                let link = nvm_dir.join(".nvmimic/bin/nvm");
+                let script = nvmimic::install::bind_binary(&template, &link.display().to_string());
+                fs::write(nvm_dir.join("nvm.sh"), script).unwrap();
             }
             let bin = nvm_dir.join(".nvmimic/bin");
             fs::create_dir_all(&bin).unwrap();

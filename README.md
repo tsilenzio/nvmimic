@@ -26,8 +26,41 @@ commands to one fast program, so a new shell barely notices it.
 
 ## Status
 
-Early work. nvmimic doesn't do anything useful yet. The first version it
-copies is nvm 0.40.8.
+Early work, copying nvm 0.40.8. Opening a shell, `nvm use`, `nvm ls`,
+`nvm current`, `nvm which`, `nvm alias` and the other everyday commands run in
+nvmimic itself. Commands that aren't ported yet, such as `nvm install`, still
+work: nvmimic runs them with the real nvm 0.40.8 it carries inside, which takes
+about as long as nvm does.
+
+How close it is gets measured, not guessed. A test harness runs real nvm and
+nvmimic side by side on 316 test scripts under bash, zsh, sh and dash, and
+compares everything they print, return, set and write.
+
+There's no installer yet.
+
+## How it stays fast
+
+Sourcing nvmimic's `nvm.sh` defines the same functions nvm defines and then
+starts one program, nvmimic itself, which works out what `nvm use default`
+would do and hands the result back to the shell. Real nvm starts around 40
+small programs for the same job, plus `node` in some cases.
+
+On the test machine, `cargo xtask bench` measured the extra time a new shell
+spends on nvm:
+
+| Shell | Real nvm 0.40.8 | nvmimic |
+|---|---|---|
+| bash 3.2 | 158ms | 5ms |
+| zsh | 359ms | 5ms |
+| dash | 110ms | 3ms |
+
+## Working on it
+
+- `cargo test --workspace` runs the unit tests.
+- `cargo xtask parity` compares nvmimic with real nvm on every test script.
+- `cargo xtask bench --check` times sourcing `nvm.sh` and fails if nvmimic gets
+  slower than the budget in `bench/budget.toml`.
+- `cargo xtask gen-shell` rebuilds `shell/nvm.sh` from nvm's own `nvm.sh`.
 
 ## License
 

@@ -17,6 +17,21 @@ fn report(results: &[Result]) -> usize {
     passing
 }
 
+/// Every difference from the last run, in `target/parity-report.txt`.
+fn write_report(results: &[Result]) {
+    let mut text = String::new();
+    for result in results.iter().filter(|r| !r.differences.is_empty()) {
+        text.push_str(&format!(
+            "==== {} ({})\n{}\n\n",
+            result.id,
+            result.shell,
+            result.differences.join("\n")
+        ));
+    }
+    let path = harness::repo_root().join("target/parity-report.txt");
+    let _ = std::fs::write(path, text);
+}
+
 /// The harness itself works: real nvm sources and answers in every shell.
 #[test]
 fn harness_runs_real_nvm() {
@@ -100,6 +115,7 @@ fn reference_cases_match_or_are_known() {
     let mut results = cases::run_all(&all, Impl::Nvm, Impl::Nvmimic);
     results.retain(|r| !cases::is_listed(&skipped, &r.id, &r.shell));
     report(&results);
+    write_report(&results);
 
     if recording() {
         cases::record(

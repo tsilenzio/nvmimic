@@ -11,4 +11,5 @@ name = "nvmimic"
 path = "src/main.rs"
 
 [dependencies]
+libc = "0.2"
 nvmimic = { path = "../nvmimic" }

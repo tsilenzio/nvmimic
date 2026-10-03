@@ -7,3 +7,5 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+libc = "0.2"
+regex = "1"

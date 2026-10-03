@@ -1,6 +1,7 @@
 //! Project tasks: `cargo xtask <task>`.
 
 mod bench;
+mod gen_shell;
 
 use std::env;
 use std::path::{Path, PathBuf};
@@ -13,6 +14,7 @@ tasks:
   parity [--record]                 compare nvmimic with real nvm on every case
   parity determinism [--record]     run real nvm against itself on every case
   bench [--check] [--runs=N]        time sourcing nvm.sh for real nvm and nvmimic
+  gen-shell [--check]               write shell/nvm.sh from the pinned nvm.sh
   help                              show this list
 
 --record rewrites cases/KNOWN_FAILING or cases/NONDETERMINISTIC from the run.
@@ -28,6 +30,7 @@ fn main() -> ExitCode {
         }
         ["parity", rest @ ..] => parity(rest),
         ["bench", rest @ ..] => bench::run(rest),
+        ["gen-shell", rest @ ..] => gen_shell::run(rest),
         [other, ..] => {
             eprintln!("xtask: unknown task `{other}`\n\n{USAGE}");
             ExitCode::FAILURE
