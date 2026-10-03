@@ -39,6 +39,17 @@ const FORWARDED: &[&str] = &[
     "NVM_SYMLINK_CURRENT",
     "NVM_NO_PROGRESS",
     "NVM_NO_SOURCE_FALLBACK",
+    "NVM_OFFLINE",
+    "NVM_MAKE_JOBS",
+    "NVM_DEBUG",
+    "NVM_INSTALL_LOCK",
+    "NVM_INSTALL_LOCK_TIMEOUT",
+    "NVM_INSTALL_LOCK_STALE",
+    "NVM_INSTALL_THIRD_PARTY_HOOK",
+    "NODE_VERSION",
+    "PROGRESS_BAR",
+    "ALIAS",
+    "provided_version",
 ];
 
 fn main() -> ExitCode {
