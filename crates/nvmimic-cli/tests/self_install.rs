@@ -212,51 +212,67 @@ fn homebrew_nvm_is_uninstalled_first() {
     assert_eq!(fs::read_to_string(&log).unwrap(), "uninstall nvm\n");
 }
 
-#[test]
-fn git_clone_takeover_leaves_git_status_clean() {
-    let home = Home::new();
-    real_nvm(&home);
+/// Runs git in a directory with a throwaway identity and returns its stdout.
+fn git(home: &Home, dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+        .args(args)
+        .env_clear()
+        .env("HOME", &home.root)
+        .env("PATH", "/usr/bin:/bin")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {}", text(&out.stderr));
+    text(&out.stdout)
+}
+
+/// Turns the `$NVM_DIR` from `real_nvm` into a git checkout, the way nvm's
+/// installer leaves one.
+fn make_git_checkout(home: &Home) {
     let dir = home.nvm_dir();
     // nvm's own .gitignore covers what nvm writes into its checkout.
     fs::write(dir.join(".gitignore"), "alias\nversions\n.cache\n").unwrap();
-    let git = |args: &[&str]| -> String {
-        let out = Command::new("git")
-            .arg("-C")
-            .arg(&dir)
-            .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
-            .args(args)
-            .env_clear()
-            .env("HOME", &home.root)
-            .env("PATH", "/usr/bin:/bin")
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "git {args:?}: {}", text(&out.stderr));
-        text(&out.stdout)
-    };
-    git(&["init", "-q"]);
-    git(&["add", "nvm.sh", "nvm-exec", "bash_completion", ".gitignore"]);
-    git(&["commit", "-q", "-m", "nvm"]);
-    assert_eq!(git(&["status", "--porcelain"]), "");
+    git(home, &dir, &["init", "-q"]);
+    git(
+        home,
+        &dir,
+        &["add", "nvm.sh", "nvm-exec", "bash_completion", ".gitignore"],
+    );
+    git(home, &dir, &["commit", "-q", "-m", "nvm"]);
+}
+
+#[test]
+fn git_clone_takeover_shows_only_the_swapped_scripts_as_modified() {
+    let home = Home::new();
+    real_nvm(&home);
+    make_git_checkout(&home);
+    let dir = home.nvm_dir();
+    let status = || git(&home, &dir, &["status", "--porcelain"]);
+    let before = status();
+    assert_eq!(before, "");
 
     let out = home.nvmimic(&["self", "install", "--yes"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(dir.join(".nvmimic/.gitignore").is_file());
+    let installed = status();
+    assert!(!installed.contains(".nvmimic"), "{installed}");
+    for line in installed.lines() {
+        assert!(
+            matches!(line, " M nvm.sh" | " M nvm-exec" | " M bash_completion"),
+            "unexpected line in git status: {line}"
+        );
+    }
+    assert!(installed.contains(" M nvm.sh"), "{installed}");
+    // The checkout itself is left alone: nothing is hidden from git.
     assert!(
-        fs::read_to_string(dir.join("nvm.sh"))
-            .unwrap()
-            .contains("nvmimic")
-    );
-    assert_eq!(
-        git(&["status", "--porcelain"]),
-        "",
-        "clean while nvmimic is installed"
+        git(&home, &dir, &["ls-files", "-v"])
+            .lines()
+            .all(|line| line.starts_with('H'))
     );
 
     let out = home.nvmimic(&["self", "uninstall", "--yes"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
-    assert_eq!(git(&["status", "--porcelain"]), "", "clean after uninstall");
-    assert!(
-        !git(&["ls-files", "-v"])
-            .lines()
-            .any(|line| line.starts_with('S'))
-    );
+    assert_eq!(status(), before, "same as before the takeover");
 }

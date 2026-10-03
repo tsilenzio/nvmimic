@@ -55,6 +55,23 @@ load Homebrew's copy would keep running the real nvm.
 `nvmimic self uninstall` puts nvm's scripts back and removes nvmimic. Add
 `--dry-run` to either one to see what it would do without changing anything.
 
+### Upgrading nvm itself
+
+nvmimic swaps out nvm's scripts, so nvm's own upgrade steps collide with it.
+Pick one of these:
+
+- Run `nvmimic self uninstall`, upgrade nvm the usual way, then run
+  `nvmimic self install` again.
+- Or run nvm's install script as usual. It writes nvm's scripts back over
+  nvmimic's, so your shells run real nvm again until you run
+  `nvmimic self install` once more.
+
+If you installed nvm with git, `git status` in `$NVM_DIR` shows `nvm.sh`,
+`nvm-exec` and `bash_completion` as modified while nvmimic is installed.
+That's expected. It also means nvm's manual upgrade (`git checkout` of a newer
+version) stops with git's "local changes would be overwritten" error instead
+of quietly replacing nvmimic. Use the first option above in that case.
+
 ## How it stays fast
 
 Sourcing nvmimic's `nvm.sh` defines the same functions nvm defines and then
