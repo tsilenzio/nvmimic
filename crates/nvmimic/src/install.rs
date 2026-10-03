@@ -102,6 +102,8 @@ pub struct Manifest {
     pub created: Vec<String>,
     /// A `nvmimic` link outside `$NVM_DIR`, if one was made.
     pub link: Option<PathBuf>,
+    /// Tracked scripts marked `skip-worktree` in a git-clone `$NVM_DIR`.
+    pub git_hidden: Vec<String>,
 }
 
 impl Manifest {
@@ -119,6 +121,9 @@ impl Manifest {
         if let Some(link) = &self.link {
             text.push_str(&format!("link {}\n", link.display()));
         }
+        for name in &self.git_hidden {
+            text.push_str(&format!("git-hidden {name}\n"));
+        }
         text
     }
 
@@ -130,6 +135,7 @@ impl Manifest {
                 Some(("backup", value)) => manifest.backed_up.push(value.to_string()),
                 Some(("created", value)) => manifest.created.push(value.to_string()),
                 Some(("link", value)) => manifest.link = Some(PathBuf::from(value)),
+                Some(("git-hidden", value)) => manifest.git_hidden.push(value.to_string()),
                 _ => {}
             }
         }
@@ -323,6 +329,20 @@ pub fn self_install(
         manifest.link = Some(target);
     }
 
+    // In a git-clone install, keep `git status` there as clean as it was:
+    // git ignores nvmimic's own folder and stops watching the swapped scripts.
+    write_file(&own.join(".gitignore"), "*\n", 0o644)?;
+    if nvm_dir.join(".git").exists() {
+        for name in SCRIPTS {
+            if git(&nvm_dir, &["ls-files", "--error-unmatch", name])
+                && git(&nvm_dir, &["update-index", "--skip-worktree", name])
+                && !manifest.git_hidden.iter().any(|n| n == name)
+            {
+                manifest.git_hidden.push(name.to_string());
+            }
+        }
+    }
+
     write_file(&manifest_path, &manifest.render(), 0o644)?;
     ui.say("Done.");
     if startup_files_mentioning(env, "/nvm.sh").is_empty() {
@@ -372,6 +392,9 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     for name in &manifest.created {
         let _ = fs::remove_file(nvm_dir.join(name));
     }
+    for name in &manifest.git_hidden {
+        git(&nvm_dir, &["update-index", "--no-skip-worktree", name]);
+    }
     if let Some(link) = &manifest.link
         && fs::read_link(link).is_ok_and(|target| target.starts_with(&own))
     {
@@ -395,6 +418,18 @@ fn install_binary(binary: &Path, bin: &Path) -> Result<(), String> {
     fs::copy(binary, &temporary).map_err(|e| format!("{}: {e}", temporary.display()))?;
     set_mode(&temporary, 0o755)?;
     fs::rename(&temporary, &target).map_err(|e| format!("{}: {e}", target.display()))
+}
+
+/// Runs git quietly in a directory and says whether it succeeded.
+fn git(dir: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn write_file(path: &Path, text: &str, mode: u32) -> Result<(), String> {
@@ -497,6 +532,7 @@ mod tests {
             backed_up: vec!["nvm.sh".into()],
             created: vec!["bash_completion".into()],
             link: Some("/h/.local/bin/nvmimic".into()),
+            git_hidden: vec!["nvm.sh".into()],
         };
         assert_eq!(Manifest::parse(&manifest.render()), manifest);
     }

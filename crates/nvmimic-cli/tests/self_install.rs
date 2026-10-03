@@ -211,3 +211,52 @@ fn homebrew_nvm_is_uninstalled_first() {
     assert!(stdout.contains(".zshrc loads Homebrew's nvm"));
     assert_eq!(fs::read_to_string(&log).unwrap(), "uninstall nvm\n");
 }
+
+#[test]
+fn git_clone_takeover_leaves_git_status_clean() {
+    let home = Home::new();
+    real_nvm(&home);
+    let dir = home.nvm_dir();
+    // nvm's own .gitignore covers what nvm writes into its checkout.
+    fs::write(dir.join(".gitignore"), "alias\nversions\n.cache\n").unwrap();
+    let git = |args: &[&str]| -> String {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&dir)
+            .args(["-c", "user.name=test", "-c", "user.email=test@example.com"])
+            .args(args)
+            .env_clear()
+            .env("HOME", &home.root)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}: {}", text(&out.stderr));
+        text(&out.stdout)
+    };
+    git(&["init", "-q"]);
+    git(&["add", "nvm.sh", "nvm-exec", "bash_completion", ".gitignore"]);
+    git(&["commit", "-q", "-m", "nvm"]);
+    assert_eq!(git(&["status", "--porcelain"]), "");
+
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        fs::read_to_string(dir.join("nvm.sh"))
+            .unwrap()
+            .contains("nvmimic")
+    );
+    assert_eq!(
+        git(&["status", "--porcelain"]),
+        "",
+        "clean while nvmimic is installed"
+    );
+
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(git(&["status", "--porcelain"]), "", "clean after uninstall");
+    assert!(
+        !git(&["ls-files", "-v"])
+            .lines()
+            .any(|line| line.starts_with('S'))
+    );
+}
