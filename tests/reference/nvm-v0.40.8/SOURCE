@@ -1,0 +1,14 @@
+nvm v0.40.8 from https://github.com/nvm-sh/nvm
+tag:    v0.40.8
+commit: a885b885fef16fac4bc544188fb25e9e37ae83e8
+
+Files copied unchanged from that commit:
+a64806abf6aab85c456f9ffa2a3be737e35c3a1e6ac99a44ea20c69bdc923467  nvm.sh
+20786579783f26dffd0d38c0f794fb887e763df06a51ec842b2370a4fef0daca  nvm-exec
+b7eb3bf03d59b61e451957b020640aa55fe8bf47fb39d85d244e259f445d2fbe  bash_completion
+48a0eee9a60e07422dce0eb5774754c83889570ca1ee2566c516acbe8af03a9e  install.sh
+44ab01a43f741c4d567128bda13c3d6e9a2ad0b15f1a85e1c19215631f86dc18  README.md
+681a12d1a1367b5890be9bc71a70466633d28fd32397be9b72d69d9bfb243492  LICENSE.md
+
+MIT licensed, see LICENSE.md in this directory. These files are the reference
+nvmimic is compared against in tests. They are not part of nvmimic itself.
