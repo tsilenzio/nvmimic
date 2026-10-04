@@ -2,6 +2,7 @@
 //! and the aliases that point at it.
 
 use super::cache::cache_dir;
+use crate::backend;
 use crate::context::Nvm;
 use crate::nvm::{artifact, local, paths, posix_re, tools, version};
 use crate::text::install as text;
@@ -89,11 +90,13 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
     }
 
     let cache = cache_dir(nvm);
-    tools::rm_rf_quiet(&[
+    let cache_removed = tools::rm_rf_quiet(&[
         &format!("{cache}/bin/{slug_binary}/files"),
         &format!("{cache}/src/{slug_source}/files"),
-        &version_path,
     ]);
+    if cache_removed && !version_path.is_empty() {
+        let _ = nvm.backend.remove(&nvm.vars, &version);
+    }
     nvm.io.echo(&success);
 
     // Aliases that name the version go with it. nvm finds them with
@@ -101,7 +104,7 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
     let mentions = posix_re::bre(&version);
     let alias_dir = nvm.backend.alias_dir(&nvm.vars);
     let mut status = 0;
-    for entry in nvm.backend.entries(&alias_dir) {
+    for entry in backend::dir_entries(&alias_dir) {
         let file = format!("{alias_dir}/{}", entry.name);
         if !Path::new(&file).is_file() {
             continue;

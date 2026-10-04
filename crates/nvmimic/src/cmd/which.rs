@@ -41,8 +41,9 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
     if version == "system" {
         if local::has_system_iojs(nvm) || local::has_system_node(nvm) {
             // `nvm use system` in a subshell, then `command which node` there.
-            let deactivated =
-                paths::strip_path(nvm.vars.get("PATH"), nvm.vars.get("NVM_DIR"), "/bin");
+            let deactivated = nvm
+                .backend
+                .strip_path(&nvm.vars, nvm.vars.get("PATH"), "/bin");
             return match paths::which(&deactivated, "node") {
                 Some(node) => {
                     nvm.io.echo(&node);

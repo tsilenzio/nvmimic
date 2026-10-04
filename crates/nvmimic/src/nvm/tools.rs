@@ -2,6 +2,7 @@
 //! `PATH` and given its exported variables, as `command <name>` does there.
 
 use super::paths;
+use crate::backend::remove_tree as remove;
 use crate::context::Nvm;
 use std::os::fd::AsFd;
 use std::os::unix::process::CommandExt;
@@ -100,23 +101,6 @@ pub fn mkdir_p(nvm: &mut Nvm, dir: &str) -> bool {
         return true;
     }
     run(nvm, "mkdir", &["-p", dir]).is_some_and(|ran| ran.ok())
-}
-
-/// Removes one path the way `rm -rf` does: a directory with everything in
-/// it, a symlink without what it points to, nothing when there is nothing.
-fn remove(path: &str) -> std::io::Result<()> {
-    if path.is_empty() {
-        return Ok(());
-    }
-    let result = match std::fs::symlink_metadata(path) {
-        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(path),
-        Ok(_) => std::fs::remove_file(path),
-        Err(error) => Err(error),
-    };
-    match result {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        other => other,
-    }
 }
 
 /// `command rm -rf <paths>`. When something cannot be removed, the real

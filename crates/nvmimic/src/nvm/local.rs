@@ -3,11 +3,11 @@
 
 use super::alias;
 use super::nvmrc;
-use super::paths::{self, tree_contains_path};
+use super::paths;
 use super::posix_re;
 use super::remembered::{self, Remembered};
 use super::version::{self, IOJS_PREFIX, NODE_PREFIX};
-use crate::backend::DirKind;
+use crate::backend::{Flavor, Flavors};
 use crate::context::Nvm;
 use std::cmp::Ordering;
 
@@ -46,25 +46,24 @@ pub fn ls_current(nvm: &Nvm) -> String {
     let Some(node_path) = which_node(nvm, "node") else {
         return "none".to_string();
     };
-    let iojs_dir = nvm.backend.version_dir(&nvm.vars, DirKind::Iojs);
-    if tree_contains_path(&iojs_dir, &node_path) == Some(true) {
-        let iojs = which_node(nvm, "iojs").and_then(|path| binary_version(nvm, &path));
-        return version::add_iojs_prefix(&iojs.unwrap_or_default());
-    }
-    let root = nvm.backend.root(&nvm.vars);
-    if tree_contains_path(&root, &node_path) == Some(true) {
-        return match binary_version(nvm, &node_path) {
+    match nvm.backend.owner_of(&nvm.vars, &node_path) {
+        Some(Flavor::Iojs) => {
+            let iojs = which_node(nvm, "iojs").and_then(|path| binary_version(nvm, &path));
+            version::add_iojs_prefix(&iojs.unwrap_or_default())
+        }
+        Some(Flavor::Node) => match binary_version(nvm, &node_path) {
             Some(v) if v == "v0.6.21-pre" => "v0.6.21".to_string(),
             Some(v) if !v.is_empty() => v,
             _ => "none".to_string(),
-        };
+        },
+        None => "system".to_string(),
     }
-    "system".to_string()
 }
 
 /// `PATH` as `nvm deactivate` would leave it.
 fn deactivated_path(nvm: &Nvm) -> String {
-    paths::strip_path(nvm.vars.get("PATH"), nvm.vars.get("NVM_DIR"), "/bin")
+    nvm.backend
+        .strip_path(&nvm.vars, nvm.vars.get("PATH"), "/bin")
 }
 
 /// nvm: nvm_has_system_node
@@ -110,10 +109,6 @@ pub fn ls(nvm: &mut Nvm, pattern: &str) -> (String, i32) {
     if pattern == "current" {
         return (ls_current(nvm), 0);
     }
-
-    let iojs_dir = nvm.backend.version_dir(&nvm.vars, DirKind::Iojs);
-    let new_dir = nvm.backend.version_dir(&nvm.vars, DirKind::New);
-    let old_dir = nvm.backend.version_dir(&nvm.vars, DirKind::Old);
 
     let mut printed = String::new();
     if pattern == IOJS_PREFIX || pattern == NODE_PREFIX {
@@ -164,32 +159,18 @@ pub fn ls(nvm: &mut Nvm, pattern: &str) -> (String, i32) {
             }
         }
 
-        let mut dirs = [String::new(), String::new(), String::new()];
+        let flavors;
         if version::is_iojs(&pattern) {
-            dirs[0] = iojs_dir.clone();
+            flavors = Flavors::Iojs;
             pattern = version::strip_iojs_prefix(&pattern).to_string();
             add_system = has_system_iojs(nvm);
         } else if pattern == "node-" {
-            dirs[0] = old_dir.clone();
-            dirs[1] = new_dir.clone();
+            flavors = Flavors::Node;
             pattern.clear();
             add_system = has_system_node(nvm);
         } else {
-            dirs[0] = old_dir.clone();
-            dirs[1] = new_dir.clone();
-            dirs[2] = iojs_dir.clone();
+            flavors = Flavors::Both;
             add_system = has_system_iojs(nvm) || has_system_node(nvm);
-        }
-
-        let usable = |dir: &str| !dir.is_empty() && nvm.backend.has_entries(dir);
-        if !usable(&dirs[0]) {
-            dirs[0].clear();
-        }
-        if !usable(&dirs[1]) {
-            dirs[1] = dirs[0].clone();
-        }
-        if !usable(&dirs[2]) {
-            dirs[2] = dirs[1].clone();
         }
 
         let search = if pattern.is_empty() {
@@ -198,9 +179,7 @@ pub fn ls(nvm: &mut Nvm, pattern: &str) -> (String, i32) {
         } else {
             pattern.replace('.', "\\.").replace('#', "\\#")
         };
-        if dirs.iter().any(|dir| !dir.is_empty()) {
-            versions = list_installed(nvm, &dirs, &search, &iojs_dir).join("\n");
-        }
+        versions = list_installed(nvm, flavors, &search).join("\n");
     }
 
     if add_system {
@@ -224,51 +203,20 @@ pub fn ls(nvm: &mut Nvm, pattern: &str) -> (String, i32) {
 }
 
 /// nvm's `find | sed | sort -t. -u -k 1.2,1n -k 2,2n -k 3,3n | sed` over the
-/// install directories, with the same names going in and coming out.
-fn list_installed(nvm: &Nvm, dirs: &[String; 3], search: &str, iojs_dir: &str) -> Vec<String> {
-    let root = nvm.backend.root(&nvm.vars);
+/// installed versions, with the same names going in and coming out.
+fn list_installed(nvm: &Nvm, flavors: Flavors, search: &str) -> Vec<String> {
     let search_re = posix_re::bre(search);
 
-    // `find dir/* -type d -prune` prints each directory entry of each dir.
-    let mut found: Vec<String> = Vec::new();
-    for dir in dirs.iter().filter(|dir| !dir.is_empty()) {
-        for entry in nvm
-            .backend
-            .entries(dir)
-            .into_iter()
-            .filter(|entry| entry.is_dir)
-        {
-            found.push(format!("{dir}/{}", entry.name));
-        }
-    }
-
     let mut lines: Vec<String> = Vec::new();
-    for path in found {
-        let mut line = path;
-        if let Some(rest) = line.strip_prefix(&format!("{iojs_dir}/")) {
-            line = format!("versions/{IOJS_PREFIX}/{rest}");
-        }
-        if let Some(rest) = line.strip_prefix(&format!("{root}/")) {
-            line = rest.to_string();
-        }
-        if !line.starts_with('v') || line == "versions" {
-            continue;
-        }
-        if let Some(rest) = line.strip_prefix("versions/") {
-            line = rest.to_string();
-        }
-        if line.starts_with('v') {
-            line = format!("{NODE_PREFIX}/{line}");
-        }
+    for installed in nvm.backend.installed(&nvm.vars, flavors) {
+        // nvm matches the pattern against `<flavor>/<version>` and then
+        // sorts `<version>.<flavor>`.
+        let flavor = installed.flavor.name();
+        let line = format!("{flavor}/{}", installed.name);
         if !search_re.as_ref().is_some_and(|re| re.is_match(&line)) {
             continue;
         }
-        if let Some((flavor, rest)) = line.split_once('/')
-            && !flavor.is_empty()
-        {
-            line = format!("{rest}.{flavor}");
-        }
-        lines.push(line);
+        lines.push(format!("{}.{flavor}", installed.name));
     }
 
     sort_versions(&mut lines);

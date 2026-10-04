@@ -2,7 +2,7 @@
 
 use super::complaint;
 use super::local;
-use super::paths::{self, tree_contains_path};
+use super::paths;
 use super::remembered::{self, Remembered, fingerprint};
 use crate::context::Nvm;
 use crate::text::install as text;
@@ -127,7 +127,7 @@ pub fn die_on_prefix(nvm: &mut Nvm, delete_prefix: bool, command: &str, version_
         .find(|name| name.eq_ignore_ascii_case("NPM_CONFIG_PREFIX"));
     if let Some(name) = env_name {
         let value = nvm.vars.get(&name).to_string();
-        if !value.is_empty() && tree_contains_path(&nvm_dir, &value) != Some(true) {
+        if !value.is_empty() && nvm.backend.owner_of(&nvm.vars, &value).is_none() {
             crate::cmd::deactivate::deactivate_quietly(nvm);
             nvm.io.err(&messages::config_prefix_env(&name, &value));
             nvm.io.err(&messages::unset_env(&name));

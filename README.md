@@ -291,6 +291,14 @@ If you want to use nvmimic from your own program, use the Rust library in
 `crates/nvmimic`. That's the supported way. The `nvmimic` command line tool
 is a thin layer over it.
 
+The library doesn't decide where Node versions are kept. It asks a
+`Backend` for that. A `Backend` is a Rust trait, which is a list of
+questions a type has to answer: which versions are installed, where one of
+them lives, how to remove one. nvmimic's own backend answers with nvm's
+folders. If your program keeps Node somewhere else, write your own backend
+and every nvm command works on top of it. There's a small example in
+`crates/nvmimic/tests/other_store.rs`.
+
 `nvm.sh` talks to the nvmimic program through the `__nvmimic_handoff`
 function and an internal command of the program that isn't in its help.
 Both are private. They're unsupported and may change in any release, so

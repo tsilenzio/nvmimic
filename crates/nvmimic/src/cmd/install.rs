@@ -1,6 +1,7 @@
 //! `nvm install`: works out which version is meant, downloads it or builds
 //! it, switches to it, and sets up aliases and packages around it.
 
+use crate::backend::{Flavor, InstallRequest};
 use crate::context::Nvm;
 use crate::nvm::{
     alias, artifact, local, lock, npm, nvmrc, paths, platform, remote, tools, version,
@@ -356,6 +357,8 @@ fn install(nvm: &mut Nvm, args: &[String], prefixed: &mut Option<Prefixed>) -> i
             return 33;
         }
         exit_code = 0;
+    } else if let Some(status) = backend_install(nvm, &version, nobinary) {
+        exit_code = status;
     } else {
         // One install of a version at a time, so two runs cannot both work
         // on its directory.
@@ -467,6 +470,21 @@ fn install(nvm: &mut Nvm, args: &[String], prefixed: &mut Option<Prefixed>) -> i
         }
     }
     exit_code
+}
+
+/// Lets the backend install the version in its own way, if it has one.
+fn backend_install(nvm: &mut Nvm, version: &str, from_source: bool) -> Option<i32> {
+    let backend = nvm.backend;
+    let flavor = match version::is_iojs(version) {
+        true => Flavor::Iojs,
+        false => Flavor::Node,
+    };
+    let request = InstallRequest {
+        version,
+        flavor,
+        from_source,
+    };
+    backend.install(nvm, &request)
 }
 
 /// The optional steps once the version is active: the newest npm, the

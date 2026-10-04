@@ -159,12 +159,17 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
 /// Puts a version's directories on `PATH` and `MANPATH` and sets `NVM_BIN`
 /// and `NVM_INC`.
 fn activate(nvm: &mut Nvm, version_dir: &str) {
-    let nvm_dir = nvm.vars.get("NVM_DIR").to_string();
-    let path = paths::change_path(nvm.vars.get("PATH"), "/bin", version_dir, &nvm_dir);
+    let path = nvm
+        .backend
+        .change_path(&nvm.vars, nvm.vars.get("PATH"), "/bin", version_dir);
     nvm.vars.assign("PATH", path);
     if paths::on_path(nvm.vars.get("PATH"), "manpath") {
-        let mut manpath =
-            paths::change_path(nvm.vars.get("MANPATH"), "/share/man", version_dir, &nvm_dir);
+        let mut manpath = nvm.backend.change_path(
+            &nvm.vars,
+            nvm.vars.get("MANPATH"),
+            "/share/man",
+            version_dir,
+        );
         // `man` consults its default path only where the list has an empty entry.
         if !(manpath.starts_with(':') || manpath.contains("::") || manpath.ends_with(':')) {
             manpath.push(':');

@@ -2,7 +2,7 @@
 //! editing `PATH`-style lists the way nvm does.
 
 use super::posix_re::{self, sed_first};
-use crate::backend::{self, DirKind};
+use crate::backend;
 use crate::context::Nvm;
 use std::path::Path;
 
@@ -80,24 +80,7 @@ pub fn version_path(nvm: &Nvm, version: &str) -> Result<String, String> {
     if version.is_empty() {
         return Err("version is required".to_string());
     }
-    let backend = nvm.backend;
-    if super::version::is_iojs(version) {
-        Ok(format!(
-            "{}/{}",
-            backend.version_dir(&nvm.vars, DirKind::Iojs),
-            super::version::strip_iojs_prefix(version)
-        ))
-    } else if super::version::greater("0.12.0", version) {
-        Ok(format!(
-            "{}/{version}",
-            backend.version_dir(&nvm.vars, DirKind::Old)
-        ))
-    } else {
-        Ok(format!(
-            "{}/{version}",
-            backend.version_dir(&nvm.vars, DirKind::New)
-        ))
-    }
+    Ok(nvm.backend.version_path(&nvm.vars, version))
 }
 
 /// Rewrites `$NVM_DIR` and `$HOME` in a path to the literal text `${NVM_DIR}`
