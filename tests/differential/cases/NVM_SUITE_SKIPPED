@@ -11,9 +11,6 @@
 #   mock-tool      redefines an outside program (clang, wget) as a shell
 #                  function or alias and expects nvm to run that instead
 #   network        needs the real internet or Docker
-#   not-ported     calls a helper that nvmimic still hands to the real nvm it
-#                  carries, and the test empties PATH, so no shell can start
-#                  for it. Comes off this list when the helper is ported
 #   shell-error    empties PATH and compares stderr, where real nvm's shell
 #                  reports the missing program with nvm.sh's file name and
 #                  line number ("nvm.sh: line 2336: uname: command not
@@ -46,15 +43,12 @@ mock-internal: fast/Set Colors/nvm_print_default_alias calls nvm_get_colors
 mock-internal: fast/Set Colors/nvm_print_versions calls nvm_get_colors
 mock-internal: fast/Subcommands with missing or invalid args show a focused usage error
 mock-internal: fast/Unit tests/Running 'nvm install --save' works as expected'
-mock-internal: fast/Unit tests/nvm_alias LTS-N
 mock-internal: fast/Unit tests/nvm_compare_checksum
-mock-internal: fast/Unit tests/nvm_die_on_prefix
 mock-internal: fast/Unit tests/nvm_download_artifact error propagation
 mock-internal: fast/Unit tests/nvm_download wget Authorization header
 mock-internal: fast/Unit tests/nvm_ensure_version_installed
 mock-internal: fast/Unit tests/nvm_get_artifact_compression
 mock-internal: fast/Unit tests/nvm_get_checksum
-mock-internal: fast/Unit tests/nvm_get_checksum awk injection
 mock-internal: fast/Unit tests/nvm_get_download_slug
 mock-internal: fast/Unit tests/nvm_get_latest missing curl or wget
 mock-internal: fast/Unit tests/nvm_get_make_jobs
@@ -83,6 +77,4 @@ mock-internal: fast/Unit tests/nvm version-remote
 mock-tool: fast/Unit tests/nvm_clang_version
 mock-tool: fast/Unit tests/nvm_command_info
 network: fast/Unit tests/nvm_download
-not-ported: fast/Unit tests/nvm_download and curl helpers bypass shadowed curl
-not-ported: fast/Unit tests/nvm_download no eval injection
 shell-error: fast/Unit tests/nvm_supports_xz

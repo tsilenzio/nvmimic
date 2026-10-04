@@ -7,8 +7,20 @@ use crate::context::Nvm;
 use crate::text::install as text;
 use std::path::Path;
 
+/// The operating system, asked once per call of nvmimic. nvm asks `uname`
+/// again every time it needs to know.
+///
 /// nvm: nvm_get_os
 pub fn get_os(nvm: &mut Nvm) -> String {
+    if let Some(os) = nvm.cache.borrow().os.clone() {
+        return os;
+    }
+    let os = find_os(nvm);
+    nvm.cache.borrow_mut().os = Some(os.clone());
+    os
+}
+
+fn find_os(nvm: &mut Nvm) -> String {
     let uname = tools::run(nvm, "uname", &["-a"])
         .map(|ran| ran.text())
         .unwrap_or_default();
@@ -35,8 +47,19 @@ pub fn get_os(nvm: &mut Nvm) -> String {
     os.to_string()
 }
 
+/// The processor, asked once per call of nvmimic like [`get_os`].
+///
 /// nvm: nvm_get_arch
 pub fn get_arch(nvm: &mut Nvm) -> String {
+    if let Some(arch) = nvm.cache.borrow().arch.clone() {
+        return arch;
+    }
+    let arch = find_arch(nvm);
+    nvm.cache.borrow_mut().arch = Some(arch.clone());
+    arch
+}
+
+fn find_arch(nvm: &mut Nvm) -> String {
     let os = get_os(nvm);
     let mut long_bit = String::new();
     let mut host = if os == "sunos" {

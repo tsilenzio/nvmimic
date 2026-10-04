@@ -45,35 +45,55 @@ pub fn sanitize_auth_header(header: &str) -> String {
         .collect()
 }
 
-/// Whether nvm would ask curl for compressed transfers: curl has libz and is
-/// at least 7.21.0.
+/// Whether the curl on `PATH` was built with libz, by its `Features:` line.
 ///
-/// nvm: nvm_curl_use_compression nvm_curl_libz_support nvm_curl_version
+/// nvm: nvm_curl_libz_support
+pub fn curl_libz_support(nvm: &mut Nvm) -> bool {
+    let output = super::tools::run_quiet(nvm, "curl", &["-V"])
+        .map(|ran| ran.stdout)
+        .unwrap_or_default();
+    String::from_utf8_lossy(&output)
+        .lines()
+        .any(|line| line.starts_with("Features:") && line.contains("libz"))
+}
+
+/// The version of the curl on `PATH`, one line for every line of
+/// `curl -V` that starts with the word `curl`.
+///
+/// nvm: nvm_curl_version
+pub fn curl_version(nvm: &mut Nvm) -> String {
+    let output = super::tools::run(nvm, "curl", &["-V"])
+        .map(|ran| ran.stdout)
+        .unwrap_or_default();
+    String::from_utf8_lossy(&output)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            (fields.next() == Some("curl")).then(|| fields.next().unwrap_or(""))
+        })
+        .map(|version| version.split('-').next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// nvm's status for whether to ask curl for compressed transfers: 0 when
+/// curl has libz and is at least 7.21.0.
+///
+/// nvm: nvm_curl_use_compression
+pub fn curl_use_compression_status(nvm: &mut Nvm) -> i32 {
+    if !curl_libz_support(nvm) {
+        return 1;
+    }
+    version::gte_status(&curl_version(nvm), "7.21.0")
+}
+
+/// [`curl_use_compression_status`] as a yes or no, asked once per call of
+/// nvmimic. nvm asks curl again for every download.
 fn curl_use_compression(nvm: &mut Nvm) -> bool {
     if let Some(cached) = nvm.cache.borrow().curl_compression {
         return cached;
     }
-    let output = Command::new("curl")
-        .arg("-V")
-        .env_clear()
-        .envs(nvm.vars.exported())
-        .stderr(Stdio::null())
-        .output();
-    let text = output
-        .map(|out| String::from_utf8_lossy(&out.stdout).into_owned())
-        .unwrap_or_default();
-    let libz = text
-        .lines()
-        .any(|line| line.starts_with("Features:") && line.contains("libz"));
-    let curl_version = text
-        .lines()
-        .find_map(|line| {
-            let mut fields = line.split_whitespace();
-            (fields.next() == Some("curl")).then(|| fields.next().unwrap_or("").to_string())
-        })
-        .map(|v| v.split('-').next().unwrap_or("").to_string())
-        .unwrap_or_default();
-    let use_it = libz && version::gte(&curl_version, "7.21.0");
+    let use_it = curl_use_compression_status(nvm) == 0;
     nvm.cache.borrow_mut().curl_compression = Some(use_it);
     use_it
 }
@@ -147,6 +167,74 @@ pub fn download_capture(nvm: &mut Nvm, args: &[&str]) -> Vec<u8> {
         }
         Err(_) => Vec::new(),
     }
+}
+
+/// Runs a download the way nvm runs it in the foreground: what curl or
+/// wget prints, the progress bar included, goes where nvm's own output is
+/// going. Returns the program's exit status, and 0 when neither program is
+/// installed, as nvm does.
+///
+/// nvm: nvm_download
+pub fn download(nvm: &mut Nvm, args: &[&str]) -> i32 {
+    let Some((program, argv)) = download_command(nvm, args) else {
+        return 0;
+    };
+    match super::tools::command(nvm, &program) {
+        Some(mut command) => {
+            command.args(&argv);
+            super::tools::run_through(nvm, command)
+        }
+        None => 127,
+    }
+}
+
+/// The newest nvm release, read from where `https://latest.nvm.sh` sends a
+/// browser. Status 1 without curl or wget, 2 when there was no redirect.
+///
+/// nvm: nvm_get_latest
+pub fn get_latest(nvm: &mut Nvm) -> (String, i32) {
+    const URL: &str = "https://latest.nvm.sh";
+    let path = nvm.vars.get("PATH").to_string();
+    let latest = if paths::on_path(&path, "curl") {
+        let mut args = vec![
+            "-q",
+            "-w",
+            "%{url_effective}\\n",
+            "-L",
+            "-s",
+            "-S",
+            URL,
+            "-o",
+            "/dev/null",
+        ];
+        if curl_use_compression(nvm) {
+            args.insert(0, "--compressed");
+        }
+        super::tools::run(nvm, "curl", &args)
+            .map(|ran| ran.text())
+            .unwrap_or_default()
+    } else if paths::on_path(&path, "wget") {
+        let args = ["-q", URL, "--server-response", "-O", "/dev/null"];
+        let headers = super::tools::run_merged(nvm, "wget", &args)
+            .map(|ran| ran.stdout)
+            .unwrap_or_default();
+        String::from_utf8_lossy(&headers)
+            .lines()
+            .filter(|line| line.starts_with("  Location: "))
+            .filter_map(|line| line.split_whitespace().nth(1))
+            .next_back()
+            .unwrap_or("")
+            .to_string()
+    } else {
+        nvm.io.err(crate::text::install::NEEDS_CURL_OR_WGET);
+        return (String::new(), 1);
+    };
+    if latest.is_empty() {
+        nvm.io.err(crate::text::install::LATEST_NO_REDIRECT);
+        return (String::new(), 2);
+    }
+    let name = latest.rsplit('/').next().unwrap_or("").to_string();
+    (name, 0)
 }
 
 /// `index.tab` for a mirror, without its header line and with each line
@@ -285,14 +373,30 @@ pub fn ls_remote_index_tab(
 
     // `grep -w "${PATTERN:-.*}"`: the pattern must match as a whole word.
     let word = pattern.as_deref().unwrap_or(".*");
-    let matcher = posix_re::bre(word).and_then(|re| {
-        regex::Regex::new(&format!(
-            "(^|[^[:alnum:]_])(?:{})([^[:alnum:]_]|$)",
-            re.as_str()
-        ))
-        .ok()
-    });
-    rows.retain(|row| matcher.as_ref().is_some_and(|re| re.is_match(row)));
+    if word.starts_with('-') {
+        // grep reads a pattern that starts with a dash as an option. What
+        // it does then, and what it says, is its own, so it gets to do it.
+        let listing: String = rows.iter().map(|row| format!("{row}\n")).collect();
+        let kept = super::tools::command(nvm, "grep").and_then(|mut command| {
+            command.args(["-w", word]).env("GREP_OPTIONS", "");
+            super::tools::filter(nvm, command, listing.as_bytes())
+        });
+        rows = kept
+            .map(|ran| String::from_utf8_lossy(&ran.stdout).into_owned())
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect();
+    } else {
+        let matcher = posix_re::bre(word).and_then(|re| {
+            regex::Regex::new(&format!(
+                "(^|[^[:alnum:]_])(?:{})([^[:alnum:]_]|$)",
+                re.as_str()
+            ))
+            .ok()
+        });
+        rows.retain(|row| matcher.as_ref().is_some_and(|re| re.is_match(row)));
+    }
 
     if flavor == "node" {
         super::local::sort_versions(&mut rows);

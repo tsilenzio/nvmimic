@@ -71,6 +71,26 @@ nvm_is_alias() {
   \alias "${1-}" >/dev/null 2>&1
 }
 
+nvm_command_info() {
+  local COMMAND
+  local INFO
+  COMMAND="${1}"
+  if type "${COMMAND}" | nvm_grep -q hashed; then
+    INFO="$(type "${COMMAND}" | command sed -E 's/\(|\)//g' | command awk '{print $4}')"
+  elif type "${COMMAND}" | nvm_grep -q aliased; then
+    # shellcheck disable=SC2230
+    INFO="$(which "${COMMAND}") ($(type "${COMMAND}" | command awk '{ $1=$2=$3=$4="" ;print }' | command sed -e 's/^\ *//g' -Ee "s/\`|'//g"))"
+  elif type "${COMMAND}" | nvm_grep -q "^${COMMAND} is an alias for"; then
+    # shellcheck disable=SC2230
+    INFO="$(which "${COMMAND}") ($(type "${COMMAND}" | command awk '{ $1=$2=$3=$4=$5="" ;print }' | command sed 's/^\ *//g'))"
+  elif type "${COMMAND}" | nvm_grep -q "^${COMMAND} is /"; then
+    INFO="$(type "${COMMAND}" | command awk '{print $3}')"
+  else
+    INFO="$(type "${COMMAND}")"
+  fi
+  nvm_echo "${INFO}"
+}
+
 nvm_tree_contains_path() {
   local tree
   tree="${1-}"
@@ -258,11 +278,41 @@ nvm() {
         *) __nvmimic_shell=bash ;;
       esac
     fi
+    # Two things only the shell can tell. nvm skips a checksum program whose
+    # name is a shell alias, and `nvm debug` reports how the shell finds each
+    # program it depends on. Both are looked up only for the commands that
+    # use them.
+    local __nvmimic_aliases
+    __nvmimic_aliases=''
+    local __nvmimic_info
+    __nvmimic_info=''
+    local __nvmimic_name
+    case "${1-}:${2-}" in
+      nvm:install | nvm:i | nvm:debug | nvm_auto:install | nvm_*checksum*:* | nvm_download_artifact:* | nvm_install_*:*)
+        for __nvmimic_name in sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
+          if nvm_is_alias "${__nvmimic_name}"; then
+            __nvmimic_aliases="${__nvmimic_aliases} ${__nvmimic_name}"
+          fi
+        done
+      ;;
+    esac
+    case "${1-}:${2-}" in
+      nvm:debug)
+        for __nvmimic_name in awk curl wget git grep sed cut basename rm mkdir xargs; do
+          if nvm_has "${__nvmimic_name}"; then
+            __nvmimic_info="${__nvmimic_info}${__nvmimic_name}
+$(nvm_command_info "${__nvmimic_name}")
+__nvmimic_end
+"
+          fi
+        done
+      ;;
+    esac
     local __nvmimic_effects
     local __nvmimic_rc
     __nvmimic_rc=0
     { __nvmimic_effects="$(
-      __NVMIMIC_SET="${PATH+ PATH}${MANPATH+ MANPATH}${NODE_PATH+ NODE_PATH}${HOME+ HOME}${PWD+ PWD}${TERM+ TERM}${PREFIX+ PREFIX}${DEFAULT+ DEFAULT}${NVM_DIR+ NVM_DIR}${NVM_BIN+ NVM_BIN}${NVM_INC+ NVM_INC}${NVM_CD_FLAGS+ NVM_CD_FLAGS}${NVM_COLORS+ NVM_COLORS}${NVM_NO_COLORS+ NVM_NO_COLORS}${NVM_HAS_COLORS+ NVM_HAS_COLORS}${NVM_SILENT+ NVM_SILENT}${NVM_LTS+ NVM_LTS}${NVM_CURRENT+ NVM_CURRENT}${NVM_VERSION_ONLY+ NVM_VERSION_ONLY}${NVM_RC_VERSION+ NVM_RC_VERSION}${NVM_NODEJS_ORG_MIRROR+ NVM_NODEJS_ORG_MIRROR}${NVM_IOJS_ORG_MIRROR+ NVM_IOJS_ORG_MIRROR}${NVM_AUTH_HEADER+ NVM_AUTH_HEADER}${NVM_SYMLINK_CURRENT+ NVM_SYMLINK_CURRENT}${NVM_NO_PROGRESS+ NVM_NO_PROGRESS}${NVM_NO_SOURCE_FALLBACK+ NVM_NO_SOURCE_FALLBACK}${NVM_OFFLINE+ NVM_OFFLINE}${NVM_MAKE_JOBS+ NVM_MAKE_JOBS}${NVM_DEBUG+ NVM_DEBUG}${NVM_INSTALL_LOCK+ NVM_INSTALL_LOCK}${NVM_INSTALL_LOCK_TIMEOUT+ NVM_INSTALL_LOCK_TIMEOUT}${NVM_INSTALL_LOCK_STALE+ NVM_INSTALL_LOCK_STALE}${NVM_INSTALL_THIRD_PARTY_HOOK+ NVM_INSTALL_THIRD_PARTY_HOOK}${NODE_VERSION+ NODE_VERSION}${PROGRESS_BAR+ PROGRESS_BAR}${ALIAS+ ALIAS}${provided_version+ provided_version}" \
+      __NVMIMIC_SET="${PATH+ PATH}${MANPATH+ MANPATH}${NODE_PATH+ NODE_PATH}${HOME+ HOME}${PWD+ PWD}${TERM+ TERM}${PREFIX+ PREFIX}${DEFAULT+ DEFAULT}${NVM_DIR+ NVM_DIR}${NVM_BIN+ NVM_BIN}${NVM_INC+ NVM_INC}${NVM_CD_FLAGS+ NVM_CD_FLAGS}${NVM_COLORS+ NVM_COLORS}${NVM_NO_COLORS+ NVM_NO_COLORS}${NVM_HAS_COLORS+ NVM_HAS_COLORS}${NVM_SILENT+ NVM_SILENT}${NVM_LTS+ NVM_LTS}${NVM_CURRENT+ NVM_CURRENT}${NVM_VERSION_ONLY+ NVM_VERSION_ONLY}${NVM_RC_VERSION+ NVM_RC_VERSION}${NVM_NODEJS_ORG_MIRROR+ NVM_NODEJS_ORG_MIRROR}${NVM_IOJS_ORG_MIRROR+ NVM_IOJS_ORG_MIRROR}${NVM_AUTH_HEADER+ NVM_AUTH_HEADER}${NVM_SYMLINK_CURRENT+ NVM_SYMLINK_CURRENT}${NVM_NO_PROGRESS+ NVM_NO_PROGRESS}${NVM_NO_SOURCE_FALLBACK+ NVM_NO_SOURCE_FALLBACK}${NVM_OFFLINE+ NVM_OFFLINE}${NVM_MAKE_JOBS+ NVM_MAKE_JOBS}${NVM_DEBUG+ NVM_DEBUG}${NVM_INSTALL_LOCK+ NVM_INSTALL_LOCK}${NVM_INSTALL_LOCK_TIMEOUT+ NVM_INSTALL_LOCK_TIMEOUT}${NVM_INSTALL_LOCK_STALE+ NVM_INSTALL_LOCK_STALE}${NVM_INSTALL_THIRD_PARTY_HOOK+ NVM_INSTALL_THIRD_PARTY_HOOK}${NODE_VERSION+ NODE_VERSION}${PROGRESS_BAR+ PROGRESS_BAR}${ALIAS+ ALIAS}${provided_version+ provided_version}${SHELL+ SHELL}${CC+ CC}${CXX+ CXX}${TMPDIR+ TMPDIR}${LTS+ LTS}${SKIP_DEFAULT_PACKAGES+ SKIP_DEFAULT_PACKAGES}${PROVIDED_REINSTALL_PACKAGES_FROM+ PROVIDED_REINSTALL_PACKAGES_FROM}${REINSTALL_PACKAGES_FROM+ REINSTALL_PACKAGES_FROM}${MAKE_CXX+ MAKE_CXX}${MAKE_SHELL_OVERRIDE+ MAKE_SHELL_OVERRIDE}${OS_VERSION+ OS_VERSION}${VERSION+ VERSION}" \
         __NVMIMIC_V_PATH="${PATH-}" \
         __NVMIMIC_V_MANPATH="${MANPATH-}" \
         __NVMIMIC_V_NODE_PATH="${NODE_PATH-}" \
@@ -300,6 +350,20 @@ nvm() {
         __NVMIMIC_V_PROGRESS_BAR="${PROGRESS_BAR-}" \
         __NVMIMIC_V_ALIAS="${ALIAS-}" \
         __NVMIMIC_V_provided_version="${provided_version-}" \
+        __NVMIMIC_V_SHELL="${SHELL-}" \
+        __NVMIMIC_V_CC="${CC-}" \
+        __NVMIMIC_V_CXX="${CXX-}" \
+        __NVMIMIC_V_TMPDIR="${TMPDIR-}" \
+        __NVMIMIC_V_LTS="${LTS-}" \
+        __NVMIMIC_V_SKIP_DEFAULT_PACKAGES="${SKIP_DEFAULT_PACKAGES-}" \
+        __NVMIMIC_V_PROVIDED_REINSTALL_PACKAGES_FROM="${PROVIDED_REINSTALL_PACKAGES_FROM-}" \
+        __NVMIMIC_V_REINSTALL_PACKAGES_FROM="${REINSTALL_PACKAGES_FROM-}" \
+        __NVMIMIC_V_MAKE_CXX="${MAKE_CXX-}" \
+        __NVMIMIC_V_MAKE_SHELL_OVERRIDE="${MAKE_SHELL_OVERRIDE-}" \
+        __NVMIMIC_V_OS_VERSION="${OS_VERSION-}" \
+        __NVMIMIC_V_VERSION="${VERSION-}" \
+        __NVMIMIC_ALIASES="${__nvmimic_aliases}" \
+        __NVMIMIC_COMMAND_INFO="${__nvmimic_info}" \
         __NVMIMIC_SHELL="${__nvmimic_shell}" \
         __NVMIMIC_FD=8 \
         command "${NVM_DIR}/.nvmimic/bin/nvm" __fn "$@" 8>&1 1>&9 9>&-
@@ -353,7 +417,6 @@ nvm_auto() {
   nvm __nvmimic nvm_auto "$@"
 }
 
-nvm_command_info() { nvm __nvmimic nvm_command_info "$@"; }
 nvm_has_colors() { nvm __nvmimic nvm_has_colors "$@"; }
 nvm_curl_libz_support() { nvm __nvmimic nvm_curl_libz_support "$@"; }
 nvm_curl_use_compression() { nvm __nvmimic nvm_curl_use_compression "$@"; }

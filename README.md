@@ -26,11 +26,11 @@ commands to one fast program, so a new shell barely notices it.
 
 ## Status
 
-Early work, copying nvm 0.40.8. Opening a shell, `nvm use`, `nvm ls`,
-`nvm current`, `nvm which`, `nvm alias` and the other everyday commands run in
-nvmimic itself. Commands that aren't ported yet, such as `nvm install`, still
-work: nvmimic runs them with the real nvm 0.40.8 it carries inside, which takes
-about as long as nvm does.
+Early work, copying nvm 0.40.8. Every nvm command now runs in nvmimic itself.
+For downloading, checking and unpacking Node, and for npm, it starts the same
+programs nvm starts (curl or wget, a checksum program, tar, npm). Opening a
+shell and the everyday commands such as `nvm use`, `nvm ls` and `nvm current`
+start no other program at all.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything

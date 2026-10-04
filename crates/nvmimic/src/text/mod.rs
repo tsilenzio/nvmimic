@@ -4,3 +4,4 @@
 pub mod help;
 pub mod install;
 pub mod messages;
+pub mod npm_ladder;

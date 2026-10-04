@@ -26,6 +26,9 @@ pub struct Caller {
     pub stdout_is_tty: bool,
     /// Names that are aliases in the shell, see [`context::Nvm::aliases`].
     pub aliases: Vec<String>,
+    /// What the shell found out about the programs `nvm debug` reports on,
+    /// see [`context::Nvm::command_info`].
+    pub command_info: String,
     /// Whether `out` and `err` passed to [`run`] are the process's own
     /// stdout and stderr. Programs nvm starts (curl with its progress bar,
     /// npm, make) then write to the terminal directly.
@@ -60,6 +63,7 @@ pub fn run(
         },
         backend,
         aliases: std::rc::Rc::new(caller.aliases),
+        command_info: std::rc::Rc::new(caller.command_info),
     };
     let status = functions::call(&mut nvm, function, args, fd3);
     nvm.io.flush();

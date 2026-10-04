@@ -3,10 +3,13 @@
 pub mod alias;
 pub mod cache;
 pub mod deactivate;
+pub mod debug;
 pub mod exec;
-pub mod fallback;
+pub mod install;
 pub mod ls;
+pub mod packages;
 pub mod remote;
+pub mod uninstall;
 pub mod unload;
 pub mod use_;
 pub mod which;
@@ -43,6 +46,7 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
         "exec" => exec::exec(nvm, rest),
         "run" => exec::run(nvm, rest),
         "ls" | "list" => ls::run(nvm, rest),
+        // nvm: nvm:current
         "current" => {
             nvm.io.echo(&local::ls_current(nvm));
             0
@@ -50,11 +54,13 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
         "which" => which::run(nvm, rest),
         "alias" => alias::run(nvm, rest),
         "unalias" => alias::unalias(nvm, rest),
+        // nvm: nvm:version
         "version" => {
             let (version, status) = local::version(nvm, rest.first().map_or("", String::as_str));
             nvm.io.echo(&version);
             status
         }
+        // nvm: nvm:--version
         "--version" | "-v" => {
             nvm.io.echo(crate::pin::VERSION);
             0
@@ -65,8 +71,15 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
         "version-remote" => remote::version_remote(nvm, rest),
         "cache" => cache::run(nvm, rest),
         "clear-cache" => cache::clear_cache(nvm),
-        "install" | "i" | "uninstall" | "debug" | "install-latest-npm" | "reinstall-packages"
-        | "copy-packages" => fallback::run_nvm(nvm, args),
+        "install" | "i" => install::run(nvm, rest),
+        "uninstall" => uninstall::run(nvm, rest),
+        "debug" => {
+            let command_info = nvm.command_info.clone();
+            debug::run(nvm, &command_info)
+        }
+        "install-latest-npm" => packages::install_latest_npm(nvm, rest),
+        "reinstall-packages" | "copy-packages" => packages::reinstall_packages(nvm, command, rest),
+        // nvm: nvm:*
         _ => {
             nvm.to_stderr(|nvm| print_help(nvm, &["--help".to_string()]));
             127
@@ -76,6 +89,8 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
 
 /// `nvm --help`. It leaves `NVM_NO_COLORS`, `NVM_VERSION` and the loop
 /// variable `j` set in the calling shell.
+///
+/// nvm: nvm:help
 fn print_help(nvm: &mut Nvm, args: &[String]) {
     let mut no_colors = String::new();
     let mut last = String::new();
@@ -108,7 +123,7 @@ fn print_help(nvm: &mut Nvm, args: &[String]) {
 /// The color section of `nvm --help`.
 ///
 /// nvm: nvm_print_color_legend
-fn print_color_legend(nvm: &mut Nvm) {
+pub fn print_color_legend(nvm: &mut Nvm) {
     let has_colors = colors::has_colors(nvm);
     let saved = nvm.local("NVM_HAS_COLORS");
     nvm.vars
@@ -154,12 +169,22 @@ fn print_color_legend(nvm: &mut Nvm) {
 /// nvm: nvm:set-colors
 fn set_colors(nvm: &mut Nvm, args: &[String]) -> i32 {
     let code = args.first().map_or("", String::as_str);
-    let valid = code.chars().count() == 5 && code.chars().all(|c| "rRgGbBcCyYmMkKeW".contains(c));
-    if !valid {
+    if set_colors_to(nvm, code) == 17 {
         nvm.to_stderr(|nvm| print_help(nvm, &["--help".to_string()]));
         nvm.io.echo("");
         nvm.io.err(&colors::printf_b(messages::INVALID_COLOR_CODES));
-        return 0;
+    }
+    0
+}
+
+/// Sets the five colors `nvm ls` uses, from five letters. Returns 17 when
+/// the letters are not five valid color codes.
+///
+/// nvm: nvm_set_colors
+pub fn set_colors_to(nvm: &mut Nvm, code: &str) -> i32 {
+    let valid = code.chars().count() == 5 && code.chars().all(|c| "rRgGbBcCyYmMkKeW".contains(c));
+    if !valid {
+        return 17;
     }
     let letters: Vec<String> = code.chars().map(String::from).collect();
     if !colors::has_colors(nvm) {

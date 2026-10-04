@@ -73,7 +73,7 @@ fn duplicate_key(key: &str, keys: &[String]) -> bool {
 }
 
 /// nvm: nvm_nvmrc_invalid_msg
-fn invalid(nvm: &mut Nvm, parsed: &str) {
+pub fn invalid(nvm: &mut Nvm, parsed: &str) {
     let error = colors::wrap_with_color_code(nvm, "r", messages::NVMRC_INVALID);
     let warn =
         colors::wrap_with_color_code(nvm, "y", &format!("{}\n{parsed}", messages::NVMRC_PARSED));

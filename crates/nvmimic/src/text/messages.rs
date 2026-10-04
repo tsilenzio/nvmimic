@@ -69,6 +69,9 @@ pub fn only_implicit_aliases() -> String {
 }
 
 // nvm: nvm_make_alias
+pub const ALIAS_DIR_REQUIRED: &str = "An alias dir is required.";
+pub const ALIAS_PATH_REQUIRED: &str = "An alias path is required.";
+pub const DEFAULT_ALIAS_REQUIRED: &str = "A default alias is required.";
 pub const ALIAS_NAME_REQUIRED: &str = "an alias name is required";
 pub const ALIAS_TARGET_REQUIRED: &str = "an alias target version is required";
 
@@ -171,6 +174,7 @@ pub fn prefix_env(prefix: &str) -> String {
     )
 }
 pub const UNSET_PREFIX: &str = "Run `unset PREFIX` to unset it.";
+pub const DELETE_PREFIX_ARGUMENT: &str = "First argument \"delete the prefix\" must be zero or one";
 
 pub fn config_prefix_env(name: &str, value: &str) -> String {
     format!(
@@ -285,6 +289,10 @@ pub const RUN_NO_VERSION: [&str; 3] = [
 pub fn setting_colors(colors: &str) -> String {
     format!("Setting colors to: {colors}")
 }
+pub fn invalid_color_index(index: &str) -> String {
+    format!("Invalid color index, {index}")
+}
+
 pub const COLORS_NOT_SUPPORTED: &str =
     "WARNING: Colors may not display because they are not supported in this shell.";
 pub const INVALID_COLOR_CODES: &str = "\\033[1;37mPlease pass in five \\033[1;31mvalid color codes\\033[1;37m. Choose from: rRgGbBcCyYmMkKeW\\033[0m";

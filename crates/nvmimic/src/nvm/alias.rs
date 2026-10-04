@@ -69,7 +69,7 @@ fn ls_names(nvm: &mut Nvm, dir: &str) -> Vec<String> {
 /// and blank lines skipped.
 ///
 /// nvm: nvm_print_alias_file
-fn alias_file_lines(contents: &str) -> Vec<String> {
+pub fn alias_file_lines(contents: &str) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut rest = contents;
     while !rest.is_empty() {
@@ -371,8 +371,17 @@ fn printf(format: &str, args: &[&str]) -> String {
     out
 }
 
+/// Prints the line for one alias file, when the alias has a target.
+/// Returns whether it did.
+///
 /// nvm: nvm_print_alias_path
-fn print_alias_path(nvm: &mut Nvm, alias_dir: &str, path: &str, style: AliasStyle, current: &str) {
+pub fn print_alias_path(
+    nvm: &mut Nvm,
+    alias_dir: &str,
+    path: &str,
+    style: AliasStyle,
+    current: &str,
+) -> bool {
     let name = path
         .strip_prefix(&format!("{alias_dir}/"))
         .unwrap_or(path)
@@ -381,10 +390,14 @@ fn print_alias_path(nvm: &mut Nvm, alias_dir: &str, path: &str, style: AliasStyl
     if !dest.is_empty() {
         print_formatted_alias(nvm, &name, &dest, None, style, current);
     }
+    !dest.is_empty()
 }
 
+/// Prints the line for one of the built-in aliases, when it resolves.
+/// Returns whether it did.
+///
 /// nvm: nvm_print_default_alias
-fn print_default_alias(nvm: &mut Nvm, name: &str, current: &str) {
+pub fn print_default_alias(nvm: &mut Nvm, name: &str, current: &str) -> bool {
     let dest = print_implicit_alias_local(nvm, name).0;
     if !dest.is_empty() {
         let style = AliasStyle {
@@ -393,6 +406,7 @@ fn print_default_alias(nvm: &mut Nvm, name: &str, current: &str) {
         };
         print_formatted_alias(nvm, name, &dest, None, style, current);
     }
+    !dest.is_empty()
 }
 
 /// Every alias starting with `prefix`: user aliases, then the built-in ones,
@@ -439,7 +453,9 @@ pub fn list_aliases(nvm: &mut Nvm, prefix: &str) -> i32 {
             lts: true,
         };
         for path in &lts {
-            let line = nvm.capture(|nvm| print_alias_path(nvm, &alias_dir, path, style, &current));
+            let line = nvm.capture(|nvm| {
+                print_alias_path(nvm, &alias_dir, path, style, &current);
+            });
             if !line.is_empty() {
                 nvm.io.echo(&line);
             }

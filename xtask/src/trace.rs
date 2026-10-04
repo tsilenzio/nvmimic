@@ -46,7 +46,7 @@ pub fn run(args: &[&str]) -> ExitCode {
             }
             (None, false) => {
                 missing.push(unit);
-                "real nvm (fallback)".to_string()
+                "not ported".to_string()
             }
         };
         // Some units are covered by hundreds of cases, so only a few are named.
@@ -64,7 +64,7 @@ pub fn run(args: &[&str]) -> ExitCode {
     }
     println!();
     println!(
-        "{} units: {ported} ported, {shell} copied into shell/nvm.sh, {} still in real nvm",
+        "{} units: {ported} ported, {shell} copied into shell/nvm.sh, {} not ported",
         map.units.len(),
         missing.len()
     );

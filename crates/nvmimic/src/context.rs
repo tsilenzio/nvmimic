@@ -13,9 +13,11 @@ pub struct Io<'a> {
     out_muted: u32,
     err_muted: u32,
     out_to_err: u32,
-    /// Whether `out` and `err` are this process's own stdout and stderr, so
-    /// a program nvm starts can write to them directly.
-    direct: bool,
+    /// Whether `out` is this process's own stdout, so a program nvm starts
+    /// can write to it directly.
+    direct_out: bool,
+    /// The same for `err` and this process's stderr.
+    direct_err: bool,
 }
 
 /// Where a program nvm starts should send one of its output streams.
@@ -38,13 +40,15 @@ impl<'a> Io<'a> {
             out_muted: 0,
             err_muted: 0,
             out_to_err: 0,
-            direct: false,
+            direct_out: false,
+            direct_err: false,
         }
     }
 
     /// Says that `out` and `err` are the process's real stdout and stderr.
     pub fn direct(mut self) -> Io<'a> {
-        self.direct = true;
+        self.direct_out = true;
+        self.direct_err = true;
         self
     }
 
@@ -57,7 +61,7 @@ impl<'a> Io<'a> {
             }
         } else if self.out_muted > 0 {
             ChildStream::Discard
-        } else if self.direct {
+        } else if self.direct_out {
             ChildStream::Inherit
         } else {
             ChildStream::Forward
@@ -68,7 +72,7 @@ impl<'a> Io<'a> {
     pub fn child_stderr(&self) -> ChildStream {
         if self.err_muted > 0 {
             ChildStream::Discard
-        } else if self.direct {
+        } else if self.direct_err {
             ChildStream::Inherit
         } else {
             ChildStream::Forward
@@ -114,6 +118,9 @@ impl<'a> Io<'a> {
 #[derive(Default)]
 pub struct Cache {
     pub curl_compression: Option<bool>,
+    /// What `nvm_get_os` and `nvm_get_arch` found.
+    pub os: Option<String>,
+    pub arch: Option<String>,
     /// `index.tab` bodies by URL.
     pub index_tab: std::collections::HashMap<String, String>,
 }
@@ -129,6 +136,9 @@ pub struct Nvm<'a> {
     /// Names that are aliases in the calling shell, among the ones the shell
     /// side reports. nvm skips a checksum program that is aliased.
     pub aliases: std::rc::Rc<Vec<String>>,
+    /// nvm's `nvm_command_info` for the programs `nvm debug` reports on, as
+    /// the calling shell answered it. See `cmd::debug`.
+    pub command_info: std::rc::Rc<String>,
 }
 
 /// A variable's value before a `local` declaration hid it.
@@ -232,7 +242,9 @@ impl<'a> Nvm<'a> {
         let mut buffer: Vec<u8> = Vec::new();
         {
             let err_muted = self.io.err_muted;
+            let direct_err = self.io.direct_err;
             let aliases = self.aliases.clone();
+            let command_info = self.command_info.clone();
             let mut err = ErrForward(&mut self.io);
             let mut inner = Nvm {
                 vars: self.vars.snapshot(),
@@ -245,12 +257,15 @@ impl<'a> Nvm<'a> {
                     out_muted: 0,
                     err_muted,
                     out_to_err: 0,
-                    // Both streams pass through buffers here, so a started
-                    // program's output has to be collected to stay in order.
-                    direct: false,
+                    // stdout is collected here. stderr is not: a program
+                    // started in here may still write to the real one, which
+                    // is how curl's progress bar shows while it downloads.
+                    direct_out: false,
+                    direct_err,
                 },
                 backend: self.backend,
                 aliases,
+                command_info,
             };
             body(&mut inner);
         }

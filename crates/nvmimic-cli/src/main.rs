@@ -50,6 +50,18 @@ const FORWARDED: &[&str] = &[
     "PROGRESS_BAR",
     "ALIAS",
     "provided_version",
+    "SHELL",
+    "CC",
+    "CXX",
+    "TMPDIR",
+    "LTS",
+    "SKIP_DEFAULT_PACKAGES",
+    "PROVIDED_REINSTALL_PACKAGES_FROM",
+    "REINSTALL_PACKAGES_FROM",
+    "MAKE_CXX",
+    "MAKE_SHELL_OVERRIDE",
+    "OS_VERSION",
+    "VERSION",
 ];
 
 fn main() -> ExitCode {
@@ -80,6 +92,7 @@ fn main() -> ExitCode {
             .split_whitespace()
             .map(str::to_string)
             .collect(),
+        command_info: env::var("__NVMIMIC_COMMAND_INFO").unwrap_or_default(),
         direct_output: true,
     };
     let mut stdout = std::io::stdout();

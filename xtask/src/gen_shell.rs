@@ -7,7 +7,9 @@
 use std::fs;
 use std::process::ExitCode;
 
-/// nvm functions copied unchanged: no external programs, no state.
+/// nvm functions copied unchanged: no external programs, no state. The one
+/// that does start programs is `nvm_command_info`, which has to ask the
+/// shell itself how it finds a name. Only `nvm debug` uses it.
 const VERBATIM: &[&str] = &[
     "nvm_is_zsh",
     "nvm_stdout_is_terminal",
@@ -21,6 +23,7 @@ const VERBATIM: &[&str] = &[
     "nvm_has_executable",
     "nvm_has_non_aliased",
     "nvm_is_alias",
+    "nvm_command_info",
     "nvm_tree_contains_path",
     "nvm_find_project_dir",
     "nvm_find_up",
@@ -199,12 +202,44 @@ fn generate() -> Result<String, String> {
         *) __nvmimic_shell=bash ;;
       esac
     fi
+    # Two things only the shell can tell. nvm skips a checksum program whose
+    # name is a shell alias, and `nvm debug` reports how the shell finds each
+    # program it depends on. Both are looked up only for the commands that
+    # use them.
+    local __nvmimic_aliases
+    __nvmimic_aliases=''
+    local __nvmimic_info
+    __nvmimic_info=''
+    local __nvmimic_name
+    case "${{1-}}:${{2-}}" in
+      nvm:install | nvm:i | nvm:debug | nvm_auto:install | nvm_*checksum*:* | nvm_download_artifact:* | nvm_install_*:*)
+        for __nvmimic_name in {checksum_programs}; do
+          if nvm_is_alias "${{__nvmimic_name}}"; then
+            __nvmimic_aliases="${{__nvmimic_aliases}} ${{__nvmimic_name}}"
+          fi
+        done
+      ;;
+    esac
+    case "${{1-}}:${{2-}}" in
+      nvm:debug)
+        for __nvmimic_name in {debug_tools}; do
+          if nvm_has "${{__nvmimic_name}}"; then
+            __nvmimic_info="${{__nvmimic_info}}${{__nvmimic_name}}
+$(nvm_command_info "${{__nvmimic_name}}")
+__nvmimic_end
+"
+          fi
+        done
+      ;;
+    esac
     local __nvmimic_effects
     local __nvmimic_rc
     __nvmimic_rc=0
     {{ __nvmimic_effects="$(
       __NVMIMIC_SET="{set}" \
         {values} \
+        __NVMIMIC_ALIASES="${{__nvmimic_aliases}}" \
+        __NVMIMIC_COMMAND_INFO="${{__nvmimic_info}}" \
         __NVMIMIC_SHELL="${{__nvmimic_shell}}" \
         __NVMIMIC_FD=8 \
         command "${{NVM_DIR}}/.nvmimic/bin/nvm" __fn "$@" 8>&1 1>&9 9>&-
@@ -213,7 +248,9 @@ fn generate() -> Result<String, String> {
     return "${{__nvmimic_rc}}"
   fi
 "#,
-        values = values.join(" \\\n        ")
+        values = values.join(" \\\n        "),
+        checksum_programs = nvmimic::nvm::checksum::PROGRAMS.join(" "),
+        debug_tools = nvmimic::cmd::debug::TOOLS.join(" "),
     );
 
     // nvm() with the handoff first, then nvm's own handling of `set -e`,

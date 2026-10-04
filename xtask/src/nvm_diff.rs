@@ -144,7 +144,7 @@ fn report(repo: &str, old: &str, new: &str) -> Result<String, String> {
                 if crate::gen_shell::is_verbatim(name) {
                     "shell/nvm.sh (copied, regenerate)".to_string()
                 } else {
-                    "real nvm (fallback)".to_string()
+                    "not ported".to_string()
                 }
             },
             |places| places.join(", "),
