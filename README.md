@@ -36,7 +36,7 @@ and remembers the answers.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
-they print, return, set and write. It runs 346 test scripts written for
+they print, return, set and write. It runs 347 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
 way (227 of them so far). Right now every one of them matches. Another 63
 of nvm's tests install real Node releases from nodejs.org. Those run in a

@@ -992,6 +992,16 @@ fn snapshot(home: &Path, work: &Path) -> BTreeMap<String, String> {
                     files.insert(key, format!("dir {mode:o}"));
                     stack.push(path);
                 } else {
+                    // Real npm writes the temp folder it unpacked a package
+                    // in, named after its process id, into the package's
+                    // own package.json.
+                    if crate::mirror::network_pass()
+                        && path.file_name().is_some_and(|name| name == "package.json")
+                        && relative.contains("/node_modules/")
+                    {
+                        files.insert(key, format!("file {mode:o}"));
+                        continue;
+                    }
                     let bytes = fs::read(&path).unwrap_or_default();
                     let summary = match std::str::from_utf8(&bytes) {
                         Ok(text) if bytes.len() <= 4096 => format!("file {mode:o}\n{text}"),

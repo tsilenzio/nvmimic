@@ -331,6 +331,8 @@ nvm() {
     local __nvmimic_keep
     __nvmimic_keep=''
     local __nvmimic_name
+    local __nvmimic_trace
+    __nvmimic_trace=''
     # While nvm.sh is being sourced the functions were defined a moment ago,
     # so only the tool names are looked at then.
     if [ -n "${ZSH_VERSION-}" ]; then
@@ -355,10 +357,19 @@ nvm() {
     elif [ -n "${BASH_VERSION-}" ]; then
       # `declare -F` fails when a name is not a function, which is the
       # usual answer for the tools. The `|| :` keeps `set -e` out of it.
+      # Under `set -x` the trace would carry the text of every function,
+      # so tracing is off for these lines.
+      case "$-" in
+        *x*)
+          set +x
+          __nvmimic_trace=1
+        ;;
+      esac
       __nvmimic_now="$(declare -f nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters || :; declare -F node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1 || :)"
       if [ "${__nvmimic_now}" != "${__nvmimic_functions-}" ]; then
         __nvmimic_own=1
       fi
+      [ -z "${__nvmimic_trace}" ] || set -x
     else
       # This shell cannot show what a function contains, so a replaced nvm
       # function goes unnoticed here. Functions named like tools do not.
@@ -392,6 +403,7 @@ nvm() {
           done
         }'
       elif [ -n "${BASH_VERSION-}" ]; then
+        [ -z "${__nvmimic_trace}" ] || set +x
         case "${__nvmimic_now}" in
           "${__nvmimic_functions-}"*) ;;
           *)
@@ -409,6 +421,7 @@ nvm() {
             done
           ;;
         esac
+        [ -z "${__nvmimic_trace}" ] || set -x
       fi
       # nvm's functions are read with aliases switched off, as nvmimic's
       # own were.

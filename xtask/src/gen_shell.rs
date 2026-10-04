@@ -133,6 +133,8 @@ const CHECK: &str = r#"    # Three things only this shell can see, which decide 
     local __nvmimic_keep
     __nvmimic_keep=''
     local __nvmimic_name
+    local __nvmimic_trace
+    __nvmimic_trace=''
     # While nvm.sh is being sourced the functions were defined a moment ago,
     # so only the tool names are looked at then.
     if [ -n "${ZSH_VERSION-}" ]; then
@@ -157,10 +159,19 @@ const CHECK: &str = r#"    # Three things only this shell can see, which decide 
     elif [ -n "${BASH_VERSION-}" ]; then
       # `declare -F` fails when a name is not a function, which is the
       # usual answer for the tools. The `|| :` keeps `set -e` out of it.
+      # Under `set -x` the trace would carry the text of every function,
+      # so tracing is off for these lines.
+      case "$-" in
+        *x*)
+          set +x
+          __nvmimic_trace=1
+        ;;
+      esac
       __nvmimic_now="$(declare -f @NAMES@ || :; declare -F @TOOLS@ || :)"
       if [ "${__nvmimic_now}" != "${__nvmimic_functions-}" ]; then
         __nvmimic_own=1
       fi
+      [ -z "${__nvmimic_trace}" ] || set -x
     else
       # This shell cannot show what a function contains, so a replaced nvm
       # function goes unnoticed here. Functions named like tools do not.
@@ -194,6 +205,7 @@ const CHECK: &str = r#"    # Three things only this shell can see, which decide 
           done
         }'
       elif [ -n "${BASH_VERSION-}" ]; then
+        [ -z "${__nvmimic_trace}" ] || set +x
         case "${__nvmimic_now}" in
           "${__nvmimic_functions-}"*) ;;
           *)
@@ -211,6 +223,7 @@ const CHECK: &str = r#"    # Three things only this shell can see, which decide 
             done
           ;;
         esac
+        [ -z "${__nvmimic_trace}" ] || set -x
       fi
       # nvm's functions are read with aliases switched off, as nvmimic's
       # own were.

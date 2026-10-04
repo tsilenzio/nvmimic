@@ -91,10 +91,12 @@ pub fn tree() -> PathBuf {
 pub struct SuiteTest {
     /// Path under `test/`, such as `fast/Unit tests/nvm_alias_path`.
     pub path: String,
-    /// Whether the script turns on shell tracing. Traces show the inside of
-    /// `nvm.sh`, which differs by design, and tests send them to stdout as
-    /// well as stderr, so only the exit status and files are compared then.
-    pub traces: bool,
+    /// Whether what the test prints is left out, so that only the exit
+    /// status and files are compared. That holds for a script that turns on
+    /// shell tracing, since traces show the inside of `nvm.sh`, which
+    /// differs by design, and tests send them to stdout as well as stderr.
+    /// It also holds for a test where real npm does most of the printing.
+    pub quiet: bool,
 }
 
 impl SuiteTest {
@@ -109,7 +111,7 @@ impl SuiteTest {
             line.push(' ');
             line.push_str(&quote(part));
         }
-        if self.traces {
+        if self.quiet {
             line.push_str(" >/dev/null 2>&1");
         }
         line
@@ -162,7 +164,12 @@ fn skip_reason<'a>(skipped: &'a [(String, String)], path: &str) -> Option<&'a st
 
 /// Reasons that keep a test out of every run but a network pass, where it
 /// installs real Node releases.
-const NETWORK: &[&str] = &["real-node", "real-node-mock", "real-node-hook"];
+const NETWORK: &[&str] = &[
+    "real-node",
+    "real-node-mock",
+    "real-node-hook",
+    "real-node-npm",
+];
 
 /// Reasons that keep a test from running under dash only. dash cannot show
 /// what a function contains, so nvmimic cannot tell there that a test
@@ -233,7 +240,9 @@ pub fn cases() -> Vec<Case> {
             let own_interpreter = text.starts_with("#!")
                 && !text.starts_with("#!/bin/sh")
                 && !text.starts_with("#!/usr/bin/env sh");
-            let not_dash = skip_reason(&skipped, &path).is_some_and(|r| NOT_DASH.contains(&r));
+            let reason = skip_reason(&skipped, &path);
+            let not_dash = reason.is_some_and(|r| NOT_DASH.contains(&r));
+            let quiet = traces || reason == Some("real-node-npm");
             let shells: Vec<_> = harness::shells()
                 .into_iter()
                 .filter(|shell| !(not_dash && shell.name == "dash"))
@@ -264,7 +273,7 @@ pub fn cases() -> Vec<Case> {
                 covers,
                 body: String::new(),
                 plain_files: false,
-                suite: Some(SuiteTest { path, traces }),
+                suite: Some(SuiteTest { path, quiet }),
             }
         })
         .collect()

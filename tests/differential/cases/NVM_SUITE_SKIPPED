@@ -30,6 +30,10 @@
 #   real-node-hook installs real Node and names a shell function as
 #                  NVM_INSTALL_THIRD_PARTY_HOOK: in the network pass only,
 #                  and not under dash
+#   real-node-npm  installs real Node and then many packages from the live npm
+#                  registry at once. npm prints them in whatever order they
+#                  arrive, so in the network pass only the exit status and
+#                  the files are compared
 #
 # A line that names one test wins over a line that names its directory.
 installer: install_script/
@@ -40,6 +44,7 @@ real-node: slow/
 real-node: sourcing/
 real-node: installation_node/
 real-node: installation_iojs/
+real-node-npm: slow/nvm reinstall-packages/should work as expected
 real-node-mock: installation_node/install from binary with binary flag set
 real-node-mock: installation_node/install from source without V8 snapshot for ARM
 real-node-mock: slow/nvm use/Running 'nvm use' calls 'nvm_die_on_prefix'
