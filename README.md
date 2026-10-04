@@ -30,13 +30,18 @@ Early work, copying nvm 0.40.8. Every nvm command now runs in nvmimic itself.
 For downloading, checking and unpacking Node, and for npm, it starts the same
 programs nvm starts (curl or wget, a checksum program, tar, npm). Opening a
 shell and the everyday commands such as `nvm use`, `nvm ls` and `nvm current`
-start no other program at all.
+start no other program at all, with one small exception: the first
+`nvm use` after Node or npm changes asks each of them for its version once
+and remembers the answers.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
-they print, return, set and write. It runs 327 test scripts written for
+they print, return, set and write. It runs 339 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
-way (178 of them so far).
+way (179 of them so far). Right now every one of them matches. Another 56
+of nvm's tests install real Node releases from nodejs.org. Those run in a
+separate pass that needs the internet. What still differs is listed under
+[Known differences](#known-differences).
 
 ## Installing
 
@@ -98,6 +103,116 @@ spends on nvm:
 | zsh | 359ms | 5ms |
 | dash | 110ms | 3ms |
 
+## Known differences
+
+nvmimic aims to be impossible to tell apart from nvm. These are the places
+where you still can, each with the reason. Nothing is left off this list on
+purpose. If you find a difference that isn't here, it's a bug.
+
+### Things only your own shell can see
+
+Real nvm is shell code that runs inside your shell. nvmimic's `nvm` hands
+the work to a separate program, and a separate program can't look inside
+your shell. So these differ today:
+
+- **You replace one of nvm's own functions.** If you define your own
+  `nvm_ls`, real nvm calls yours from then on. nvmimic keeps using its own.
+  nvm's test suite does this in 54 tests, which is why those aren't run.
+- **Your install hook is a shell function.** `NVM_INSTALL_THIRD_PARTY_HOOK`
+  can name a program or a function. nvmimic can only run a program.
+- **A function or alias hides a tool.** If you define a function or alias
+  called `node`, `npm`, `curl` or `grep`, for example, real nvm ends up
+  running yours. nvmimic runs the real program on your `PATH`. Two cases
+  already match: nvm skips a checksum program that is an alias, and
+  `nvm debug` shows what each tool is aliased to.
+
+There is a plan to close most of this: nvmimic would notice the change and
+run that one command through nvm's own code inside your shell. It isn't
+built yet. One part of it can't be done at all. The dash shell has no way to
+show what a function contains, so under dash nvmimic can't tell that you
+replaced one.
+
+### The text of the functions
+
+`declare -f nvm_ls` and `type nvm_ls` print the code of a function. Real nvm
+shows its shell code there. nvmimic shows a one-line function that calls the
+nvmimic program. They can't be the same text unless nvmimic is nvm.
+
+For the same reason, `set -x` (which prints each command as it runs) shows
+different lines inside an `nvm` call.
+
+### Files nvmimic adds
+
+- `$NVM_DIR/.nvmimic/` holds the nvmimic program, a list of what it
+  replaced, the backups of nvm's scripts, and a small folder of remembered
+  answers. Real nvm has no such folder.
+- `nvm.sh`, `nvm-exec` and `bash_completion` in `$NVM_DIR` are nvmimic's
+  versions, so their contents differ from nvm's.
+
+### One extra command
+
+`nvm __nvmimic ...` is how the shell function talks to the program. Real nvm
+has no such command and prints its help for it.
+
+### Node's and npm's versions are remembered
+
+nvm finds out which Node is active by running `node --version`, and prints
+npm's version after `nvm use` by running `npm --version`. It does both every
+time. nvmimic asks once and reuses the answer until the file it asked
+changes. For npm that also means npm's `package.json` and the `node`
+program. Both are asked again when the `NODE_OPTIONS` setting changes. A
+program that fails to answer is asked again every time, just like nvm does.
+
+If something else ever changes what one of them prints, nvmimic would keep
+showing the old answer. We tried broken npm settings files and didn't find
+such a thing.
+
+### Missing helper programs
+
+nvm hands many small jobs to programs such as `sed`, `awk`, `sort` and
+`uname`. nvmimic does most of those jobs itself. So if one of those programs
+is missing from your `PATH`, or you put a different one in front, real nvm
+fails or changes and nvmimic carries on as if nothing happened.
+
+When a program is missing, the shell itself prints a complaint that names a
+line in nvm's `nvm.sh`, such as
+`nvm.sh: line 3740: npm: command not found`. nvmimic prints the same
+complaint, with the same line number, in these places: `nvm debug`,
+`nvm reinstall-packages`, the `uname` call that finds your operating system,
+the `configure` and `make` steps of building from source, and
+`nvm_rc_version` when it's called on its own. Everywhere else it stays quiet
+where nvm's shell would complain.
+
+Those complaints were measured with macOS's bash 3.2, zsh 5.9 and dash.
+Another version of a shell, or a shell set to another language, may word
+them differently.
+
+### Output into a pipe nobody reads, under zsh
+
+In `nvm install 20 | head -1`, `head` stops reading after one line. bash
+and dash end nvm at its next line of output, and nvmimic ends the same way.
+zsh lets nvm carry on, and each line nvm fails to print changes what it does
+next. For example, it skips making the `default` alias. nvmimic under zsh
+carries on too, but as if every line had printed, so it does make the alias.
+
+### An nvm bug that deletes files
+
+Under dash, a failed `nvm install` in nvm 0.40.8 deletes the folder your
+`TMPDIR` setting points at. nvmimic doesn't copy bugs that destroy data
+outside `$NVM_DIR`. Everything else about that failure matches.
+
+### Not measured yet
+
+These aren't known differences. They're places nobody has looked.
+
+- **Linux.** Every test so far ran on macOS.
+- **Building real Node from source.** The tests build from a stand-in source
+  package with a tiny `configure` script and `Makefile`. Every step nvm
+  takes around the build is compared. A real Node build, which takes most of
+  an hour, isn't.
+- **ksh.** nvm 0.40.8 itself doesn't run under macOS's ksh, so there's
+  nothing to compare with.
+
 ## Working on it
 
 - `cargo test --workspace` runs the unit tests.
@@ -135,6 +250,11 @@ Some more things you can ask for:
   out of date. Run it before a release and when moving to a new nvm version.
 - `cargo xtask parity covers` works out the `# covers:` lines again by
   running real nvm with a note-taking line in each of its functions.
+- `cargo xtask parity --network` runs the tests from nvm's own suite that
+  install real Node releases, which the everyday run leaves out. It
+  downloads from nodejs.org, so it needs the internet. Each file is fetched
+  once and kept in `target/parity-network/`. Try one test first:
+  `NVMIMIC_CASES=NVT-installation_node/install_from_binary cargo xtask parity --network`.
 
 ### A warning about macOS and the parity tests
 
