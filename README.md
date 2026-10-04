@@ -36,9 +36,9 @@ and remembers the answers.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
-they print, return, set and write. It runs 339 test scripts written for
+they print, return, set and write. It runs 346 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
-way (179 of them so far). Right now every one of them matches. Another 56
+way (227 of them so far). Right now every one of them matches. Another 63
 of nvm's tests install real Node releases from nodejs.org. Those run in a
 separate pass that needs the internet. What still differs is listed under
 [Known differences](#known-differences).
@@ -113,24 +113,46 @@ purpose. If you find a difference that isn't here, it's a bug.
 
 Real nvm is shell code that runs inside your shell. nvmimic's `nvm` hands
 the work to a separate program, and a separate program can't look inside
-your shell. So these differ today:
+your shell. So before every call, nvmimic's `nvm` checks three things that
+only the shell knows:
 
-- **You replace one of nvm's own functions.** If you define your own
-  `nvm_ls`, real nvm calls yours from then on. nvmimic keeps using its own.
-  nvm's test suite does this in 54 tests, which is why those aren't run.
-- **Your install hook is a shell function.** `NVM_INSTALL_THIRD_PARTY_HOOK`
-  can name a program or a function. nvmimic can only run a program.
-- **A function or alias hides a tool.** If you define a function or alias
-  called `node`, `npm`, `curl` or `grep`, for example, real nvm ends up
-  running yours. nvmimic runs the real program on your `PATH`. Two cases
-  already match: nvm skips a checksum program that is an alias, and
-  `nvm debug` shows what each tool is aliased to.
+- **Did you replace one of nvm's own functions?** If you define your own
+  `nvm_ls`, real nvm calls yours from then on.
+- **Is your install hook a shell function?** `NVM_INSTALL_THIRD_PARTY_HOOK`
+  can name a program or a function.
+- **Does a shell function have the name of a tool nvm runs?** If you define
+  a function called `node`, `npm` or `curl`, for example, real nvm ends up
+  running yours.
 
-There is a plan to close most of this: nvmimic would notice the change and
-run that one command through nvm's own code inside your shell. It isn't
-built yet. One part of it can't be done at all. The dash shell has no way to
-show what a function contains, so under dash nvmimic can't tell that you
-replaced one.
+When the answer to any of them is yes, that one call runs nvm's own code
+inside your shell, exactly as real nvm would, at real nvm's speed. nvmimic
+ships a copy of nvm's functions for this. Every other call stays fast.
+
+You can also ask for nvm's own code yourself. Set `NVMIMIC_NVM_CODE=1`, and
+from the next `nvm` call on, that shell runs nvm's own functions and nothing
+else. Set it before you load `nvm.sh` and it applies from the start.
+
+What still differs here:
+
+- **dash can't tell that you replaced a function.** dash has no way to show
+  what a function contains, so nvmimic has nothing to compare. If you
+  replace nvm's functions under dash, set `NVMIMIC_NVM_CODE=1` before
+  loading `nvm.sh`. The other two checks do work under dash.
+- **Aliases for tools.** If an alias called `grep` or `node` existed when
+  `nvm.sh` was loaded, real nvm's functions use it for the life of that
+  shell. nvmimic ignores such aliases, with two exceptions that already
+  match: nvm skips a checksum program that is an alias, and `nvm debug`
+  shows what each tool is aliased to.
+- **Replacing `nvm` itself.** If you define your own function named `nvm`
+  and then call one of nvm's helpers such as `nvm_version`, nvmimic's helper
+  calls your `nvm`, because that's how it reaches its program.
+- **One extra variable.** In bash and zsh, nvmimic keeps a copy of the
+  function text to compare against, in a variable called
+  `__nvmimic_functions`. It shows up if you list every variable with `set`.
+- **Error messages from bash name another file.** When nvm's own code runs
+  and bash itself reports an error in it, bash names the file the code came
+  from. With real nvm that is `nvm.sh`. With nvmimic it is
+  `.nvmimic/nvm-functions.sh`. The line number is the same.
 
 ### The text of the functions
 
@@ -141,11 +163,16 @@ nvmimic program. They can't be the same text unless nvmimic is nvm.
 For the same reason, `set -x` (which prints each command as it runs) shows
 different lines inside an `nvm` call.
 
+A few small functions are copied from nvm unchanged. Their text matches, but
+they sit on other lines in nvmimic's `nvm.sh`, so an error message that
+names a line number inside one of them names a different number.
+
 ### Files nvmimic adds
 
 - `$NVM_DIR/.nvmimic/` holds the nvmimic program, a list of what it
-  replaced, the backups of nvm's scripts, and a small folder of remembered
-  answers. Real nvm has no such folder.
+  replaced, the backups of nvm's scripts, a copy of nvm's functions for the
+  calls described above, and a small folder of remembered answers. Real nvm
+  has no such folder.
 - `nvm.sh`, `nvm-exec` and `bash_completion` in `$NVM_DIR` are nvmimic's
   versions, so their contents differ from nvm's.
 
