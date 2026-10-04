@@ -2,45 +2,125 @@
 
 use super::local;
 use super::paths::{self, tree_contains_path};
-use super::semver;
 use crate::context::Nvm;
 use crate::text::install as text;
 use crate::text::messages;
 use crate::text::npm_ladder as ladder;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-/// The version of the npm package a path leads to, when it can be trusted
-/// to be what `npm --version` prints: the link resolves into a package named
-/// `npm`, and that npm supports the active node. `None` for anything else,
-/// such as Corepack's shim or a wrapper script.
-fn bundled_npm_version(npm: &str, node_version: &str) -> Option<String> {
-    let resolved = std::fs::canonicalize(npm).ok()?;
-    let manifest = resolved
-        .ancestors()
-        .skip(1)
-        .map(|dir| dir.join("package.json"))
-        .find(|path| path.is_file())?;
-    let package: serde_json::Value = serde_json::from_slice(&std::fs::read(manifest).ok()?).ok()?;
-    if package.get("name")?.as_str()? != "npm" {
-        return None;
+/// Size, both timestamps and the inode of a file, as text. Replacing a
+/// file changes at least one of them, even when the new copy keeps the old
+/// modified time, as files unpacked from an archive do.
+fn fingerprint(path: &Path) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(path).ok()?;
+    Some(format!(
+        "{} {}.{} {}.{} {}",
+        meta.size(),
+        meta.mtime(),
+        meta.mtime_nsec(),
+        meta.ctime(),
+        meta.ctime_nsec(),
+        meta.ino()
+    ))
+}
+
+/// FNV-1a, to name a remembered answer after the files it belongs to.
+fn fnv1a(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
+        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
+    })
+}
+
+/// Where one remembered `npm --version` answer lives, and the line that has
+/// to match for it to still be true.
+struct Remembered {
+    file: PathBuf,
+    key: String,
+}
+
+impl Remembered {
+    /// `None` when the answer cannot be tied to files on disk: the `npm` on
+    /// `PATH` does not lead into a package named `npm` (Corepack's shim and
+    /// version-manager shims answer differently from one directory to the
+    /// next), or nvmimic is not installed in this `$NVM_DIR`.
+    fn locate(nvm: &Nvm, npm: &str) -> Option<Remembered> {
+        let own = Path::new(nvm.vars.get("NVM_DIR")).join(".nvmimic");
+        if !own.is_dir() {
+            return None;
+        }
+        let entry = std::fs::canonicalize(npm).ok()?;
+        let manifest = entry
+            .ancestors()
+            .skip(1)
+            .map(|dir| dir.join("package.json"))
+            .find(|path| path.is_file())?;
+        // npm starts with `#!/usr/bin/env node`, so the node on `PATH` is
+        // part of the answer. An npm too new for it prints no version.
+        let node = local::which_node(nvm, "node")
+            .and_then(|node| std::fs::canonicalize(node).ok())
+            .unwrap_or_default();
+        let key = [
+            entry.display().to_string(),
+            fingerprint(&entry)?,
+            fingerprint(&manifest)?,
+            node.display().to_string(),
+            fingerprint(&node).unwrap_or_default(),
+            nvm.vars.get("NODE_OPTIONS").replace(['\t', '\n'], " "),
+        ]
+        .join("\t");
+        let name = format!(
+            "{:016x}",
+            fnv1a(&format!("{}\t{}", entry.display(), node.display()))
+        );
+        let file = own.join("cache/npm-version").join(name);
+        let remembered = Remembered { file, key };
+        if remembered.read().is_none() {
+            let package: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(manifest).ok()?).ok()?;
+            if package.get("name")?.as_str()? != "npm" {
+                return None;
+            }
+        }
+        Some(remembered)
     }
-    let engines = package.get("engines")?.get("node")?.as_str()?;
-    if !semver::satisfies(node_version, engines) {
-        return None;
+
+    fn read(&self) -> Option<String> {
+        let text = std::fs::read_to_string(&self.file).ok()?;
+        let (key, version) = text.split_once('\n')?;
+        (key == self.key).then(|| version.trim_end_matches('\n').to_string())
     }
-    Some(package.get("version")?.as_str()?.to_string())
+
+    /// Written beside its final name and renamed into place, so another
+    /// shell never reads half a file.
+    fn write(&self, version: &str) {
+        let Some(dir) = self.file.parent() else {
+            return;
+        };
+        if std::fs::create_dir_all(dir).is_err() {
+            return;
+        }
+        let temporary = self.file.with_extension(std::process::id().to_string());
+        if std::fs::write(&temporary, format!("{}\n{version}\n", self.key)).is_ok()
+            && std::fs::rename(&temporary, &self.file).is_err()
+        {
+            let _ = std::fs::remove_file(&temporary);
+        }
+    }
 }
 
 /// What `npm --version` prints for the `npm` the shell would run, found by
-/// scanning the caller's `PATH`. The version comes from npm's `package.json`
-/// when [`bundled_npm_version`] can vouch for it. Otherwise npm is run, as
-/// nvm runs it, and printing nothing means there is no version.
+/// scanning the caller's `PATH`. Printing nothing means there is no version.
+///
+/// nvm runs npm every time. nvmimic runs it once and remembers the answer
+/// under `$NVM_DIR/.nvmimic/cache/npm-version/` until npm's entry file, its
+/// `package.json`, the node on `PATH` or `NODE_OPTIONS` changes.
+/// An answer that came with a failing
+/// status or was empty is not remembered.
 pub fn npm_version(nvm: &Nvm) -> Option<String> {
     let npm = paths::which(nvm.vars.get("PATH"), "npm")?;
-    let node = local::which_node(nvm, "node")
-        .and_then(|node| local::binary_version(&node))
-        .unwrap_or_default();
-    if let Some(version) = bundled_npm_version(&npm, &node) {
+    let remembered = Remembered::locate(nvm, &npm);
+    if let Some(version) = remembered.as_ref().and_then(Remembered::read) {
         return Some(version);
     }
     let mut command = std::process::Command::new(&npm);
@@ -55,7 +135,15 @@ pub fn npm_version(nvm: &Nvm) -> Option<String> {
     }
     let output = command.output().ok()?;
     let text = String::from_utf8_lossy(&output.stdout);
-    Some(text.trim_end_matches('\n').to_string())
+    let version = text.trim_end_matches('\n').to_string();
+    if let Some(remembered) = remembered
+        && output.status.success()
+        && !version.is_empty()
+        && !version.contains('\n')
+    {
+        remembered.write(&version);
+    }
+    Some(version)
 }
 
 /// ` (npm vX.Y.Z)` for the `npm` on `PATH`, or nothing.

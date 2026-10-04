@@ -1,6 +1,2 @@
 # Case-shell pairs where nvmimic does not match real nvm yet.
 # Regenerate with `cargo xtask parity --record`. The list only shrinks.
-INS-30 bash
-INS-30 dash
-INS-30 sh
-INS-30 zsh

@@ -15,7 +15,6 @@ pub mod paths;
 pub mod platform;
 pub mod posix_re;
 pub mod remote;
-pub mod semver;
 pub mod terminfo;
 pub mod tools;
 pub mod version;

@@ -235,7 +235,7 @@ fn no_known_failures() {
 }
 
 /// Everyday commands start nvmimic once each and nothing else: no node, no
-/// npm, no sed or awk.
+/// sed or awk, and npm only when its version is not remembered yet.
 #[test]
 #[ignore = "full run, use `cargo xtask parity launches`"]
 fn everyday_commands_launch_only_nvmimic() {
@@ -278,5 +278,23 @@ fn everyday_commands_launch_only_nvmimic() {
                 outcome.launches
             );
         }
+
+        // With nothing remembered, the first `nvm use` asks npm for its
+        // version and the second one reuses the answer.
+        let outcome = world.run_with(
+            Impl::Nvmimic,
+            &shell,
+            "",
+            "nvm install 24.15.0\nrm -rf \"$NVM_DIR/.nvmimic/cache\"",
+            "nvm use 24.15.0\nnvm use 24.15.0",
+        );
+        let npm = outcome.launches.iter().filter(|l| l.ends_with("/bin/npm"));
+        let ours = outcome.launches.iter().filter(|l| *l == "nvmimic");
+        assert!(
+            npm.count() == 1 && ours.count() == 2 && outcome.launches.len() == 3,
+            "{}: npm should run once for two `nvm use` calls, launched {:?}",
+            shell.name,
+            outcome.launches
+        );
     }
 }
