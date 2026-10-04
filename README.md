@@ -36,9 +36,9 @@ and remembers the answers.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
-they print, return, set and write. It runs 347 test scripts written for
+they print, return, set and write. It runs 348 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
-way (227 of them so far). Right now every one of them matches. Another 63
+way (228 of them so far). Right now every one of them matches. Another 63
 of nvm's tests install real Node releases from nodejs.org. Those run in a
 separate pass that needs the internet. What still differs is listed under
 [Known differences](#known-differences).
@@ -115,9 +115,9 @@ spends on nvm:
 
 | Shell | Real nvm 0.40.8 | nvmimic |
 |---|---|---|
-| bash 3.2 | 158ms | 5ms |
-| zsh | 359ms | 5ms |
-| dash | 110ms | 3ms |
+| bash 3.2 | 144ms | 5ms |
+| zsh | 346ms | 6ms |
+| dash | 110ms | 4ms |
 
 ## Known differences
 
@@ -170,9 +170,6 @@ What still differs here:
   shell. nvmimic ignores such aliases, and that isn't going to change. Two
   cases match anyway: nvm skips a checksum program that is an alias, and
   `nvm debug` shows what each tool is aliased to.
-- **Replacing `nvm` itself.** If you define your own function named `nvm`
-  and then call one of nvm's helpers such as `nvm_version`, nvmimic's helper
-  calls your `nvm`, because that's how it reaches its program.
 - **One extra variable.** In bash and zsh, nvmimic keeps a copy of the
   function text to compare against, in a variable called
   `__nvmimic_functions`. It shows up if you list every variable with `set`.
@@ -203,10 +200,15 @@ names a line number inside one of them names a different number.
   [Where nvmimic keeps its files](#where-nvmimic-keeps-its-files). Real nvm
   has none of them.
 
-### One extra command
+### One extra function
 
-`nvm __nvmimic ...` is how the shell function talks to the program. Real nvm
-has no such command and prints its help for it.
+Loading nvmimic's `nvm.sh` defines every function nvm defines, plus one of
+its own: `__nvmimic_handoff`. It's how `nvm` and the other functions pass
+their work to the nvmimic program. You can see it in a list of all functions
+(`declare -F` in bash). `nvm unload` removes it along with nvm's.
+
+Nothing extra hides behind the name `nvm` itself. `nvm` accepts exactly the
+commands real nvm accepts and prints nvm's help for anything else.
 
 ### Node's and npm's versions are remembered
 
@@ -267,6 +269,17 @@ These aren't known differences. They're places nobody has looked.
   an hour, isn't.
 - **ksh.** nvm 0.40.8 itself doesn't run under macOS's ksh, so there's
   nothing to compare with.
+
+## Building on nvmimic
+
+If you want to use nvmimic from your own program, use the Rust library in
+`crates/nvmimic`. That's the supported way. The `nvmimic` command line tool
+is a thin layer over it.
+
+`nvm.sh` talks to the nvmimic program through the `__nvmimic_handoff`
+function and an internal command of the program that isn't in its help.
+Both are private. They're unsupported and may change in any release, so
+don't call them from your own scripts.
 
 ## Working on it
 

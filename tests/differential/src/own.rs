@@ -7,7 +7,7 @@
 //! commands wrote. `nvm.sh` names every one of these files by its full path
 //! either way.
 
-use crate::harness::{copy, link_staged, nvmimic_bin, repo_root, write_script};
+use crate::harness::{Outcome, copy, link_staged, nvmimic_bin, repo_root, write_script};
 use nvmimic::install::{Bound, bind};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -33,39 +33,43 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
         fs::create_dir_all(dir).unwrap();
     }
     let bound = Bound {
-        binary: &bin.join("nvm"),
+        binary: &bin.join("nvmimic"),
         nvm_functions: &own.join("nvm-functions.sh"),
         nvmimic_functions: &own.join("nvmimic-functions.sh"),
         cache: Some(&cache),
     };
-    for (name, to) in [
-        ("nvm.sh", nvm_dir.join("nvm.sh")),
-        ("nvmimic-functions.sh", own.join("nvmimic-functions.sh")),
-    ] {
-        let template = fs::read_to_string(shell_dir.join(name)).unwrap();
-        fs::write(to, bind(&template, &bound)).unwrap();
+    let template = fs::read_to_string(shell_dir.join("nvm.sh")).unwrap();
+    fs::write(nvm_dir.join("nvm.sh"), bind(&template, &bound)).unwrap();
+    for name in ["nvm-functions.sh", "nvmimic-functions.sh"] {
+        copy(&shell_dir.join(name), &own.join(name));
     }
-    copy(
-        &shell_dir.join("nvm-functions.sh"),
-        &own.join("nvm-functions.sh"),
-    );
 
     let binary = nvmimic_bin();
-    std::os::unix::fs::symlink(&binary, bin.join("nvmimic")).unwrap();
     if count_launches {
-        // The binary picks its persona from argv0, so the logging wrapper
-        // execs a symlink that is also named `nvm`.
-        let real = side.join("real");
-        fs::create_dir_all(&real).unwrap();
-        std::os::unix::fs::symlink(&binary, real.join("nvm")).unwrap();
+        // A wrapper in the program's place notes each start and runs it.
         write_script(
-            &bin.join("nvm"),
+            &bin.join("nvmimic"),
             &format!(
                 "#!/bin/sh\n[ -z \"$NVMIMIC_LAUNCH_LOG\" ] || printf 'nvmimic\\n' >> \"$NVMIMIC_LAUNCH_LOG\"\nexec '{}' \"$@\"\n",
-                real.join("nvm").display()
+                binary.display()
             ),
         );
     } else {
-        std::os::unix::fs::symlink("nvmimic", bin.join("nvm")).unwrap();
+        std::os::unix::fs::symlink(&binary, bin.join("nvmimic")).unwrap();
+    }
+}
+
+/// nvmimic's one shell function that nvm does not have, see `shell/nvm.sh`.
+const HANDOFF: &str = "__nvmimic_handoff";
+
+/// Takes nvmimic's own function out of the list of functions a run left
+/// behind. Every other name in that list is compared with real nvm's.
+pub fn hide_own_function(outcome: &mut Outcome) {
+    if let Some(functions) = outcome.state.get_mut("functions") {
+        *functions = functions
+            .split(' ')
+            .filter(|name| *name != HANDOFF)
+            .collect::<Vec<_>>()
+            .join(" ");
     }
 }

@@ -155,7 +155,12 @@ pub const VARIABLES: &[&str] = &[
 /// nvm: nvm:unload
 pub fn run(nvm: &mut Nvm) -> i32 {
     nvm.quiet(|nvm| deactivate::deactivate(nvm, false));
-    let names = FUNCTIONS.iter().map(|name| name.to_string()).collect();
+    // nvmimic's own function goes with nvm's, see `shell/nvm.sh`.
+    let names = FUNCTIONS
+        .iter()
+        .chain(&["__nvmimic_handoff"])
+        .map(|name| name.to_string())
+        .collect();
     nvm.vars.push(Effect::UnsetFunctions(names));
     for name in VARIABLES {
         nvm.vars.unset(name);

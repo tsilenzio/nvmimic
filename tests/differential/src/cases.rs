@@ -365,7 +365,10 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
                                 fresh
                             }
                         };
-                        let b = world.run_case(right, shell, case, &mut suite_right);
+                        let mut b = world.run_case(right, shell, case, &mut suite_right);
+                        if right == Impl::Nvmimic {
+                            crate::own::hide_own_function(&mut b);
+                        }
                         let mut differences = diff((&labels.0, &a), (&labels.1, &b));
                         if let Some(changes) = stale {
                             differences.push(format!(

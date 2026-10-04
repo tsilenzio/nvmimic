@@ -1,5 +1,5 @@
-//! The `nvmimic` binary. Run through the `nvm` symlink by `$NVM_DIR/nvm.sh`,
-//! it is nvm. Run as `nvmimic`, it manages its own installation.
+//! The `nvmimic` binary. People run it to manage their nvmimic installation.
+//! `$NVM_DIR/nvm.sh` runs it through one internal command to do nvm's work.
 
 use nvmimic::Caller;
 use nvmimic::backend::NvmDirBackend;
@@ -7,7 +7,6 @@ use nvmimic::shell::{self, Dialect, Vars};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
-use std::path::Path;
 use std::process::ExitCode;
 
 /// Variables `nvm.sh` hands over because nvm reads them whether or not they
@@ -64,25 +63,24 @@ const FORWARDED: &[&str] = &[
     "VERSION",
 ];
 
+/// How `shell/nvm.sh` asks for one of nvm's functions. Internal: it is not
+/// in the help, and its name and what it expects can change in any release.
+/// Keep in step with `xtask/src/gen_shell.rs`.
+const HANDOFF: &str = "__internal-shell-handoff";
+
 fn main() -> ExitCode {
-    let mut args = env::args_os();
-    let argv0 = args.next().unwrap_or_default();
-    let as_nvm = Path::new(&argv0)
-        .file_name()
-        .is_some_and(|name| name == "nvm");
-    let args: Vec<String> = args.map(lossy).collect();
-
-    if !as_nvm {
-        return nvmimic_command(&args);
+    let args: Vec<String> = env::args_os().skip(1).map(lossy).collect();
+    match args.split_first() {
+        Some((first, rest)) if first == HANDOFF => match rest.split_first() {
+            Some((function, rest)) => handoff(function, rest),
+            None => ExitCode::from(2),
+        },
+        _ => nvmimic_command(&args),
     }
+}
 
-    let (function, rest) = match args.split_first() {
-        Some((first, rest)) if first == "__fn" && !rest.is_empty() => {
-            (rest[0].clone(), rest[1..].to_vec())
-        }
-        _ => ("nvm".to_string(), args.clone()),
-    };
-
+/// Runs one of nvm's functions for the shell that called `nvm.sh`.
+fn handoff(function: &str, rest: &[String]) -> ExitCode {
     // nvm's code runs inside the shell, and bash and dash end a shell that
     // writes to a pipe nobody reads, as in `nvm install 20 | head -1`. Rust
     // programs ignore that signal unless told otherwise. zsh carries on, so
@@ -118,8 +116,8 @@ fn main() -> ExitCode {
     let outcome = nvmimic::run(
         caller,
         &NvmDirBackend,
-        &function,
-        &rest,
+        function,
+        rest,
         &mut stdout,
         &mut stderr,
         &mut fd3,
@@ -146,7 +144,7 @@ commands:
 changes nothing. self install copies the nvmimic program to
 ~/.local/bin/nvmimic, or to the path in NVMIMIC_INSTALL_PATH.";
 
-/// `nvmimic ...`, as opposed to `nvm ...`.
+/// The commands people type.
 fn nvmimic_command(args: &[String]) -> ExitCode {
     let flags: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
     let options = nvmimic::install::Options {

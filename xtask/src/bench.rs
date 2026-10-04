@@ -296,7 +296,7 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
             fs::create_dir_all(own.join("cache")).map_err(|e| e.to_string())?;
             if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
                 let bound = nvmimic::install::Bound {
-                    binary: &bin.join("nvm"),
+                    binary: &bin.join("nvmimic"),
                     nvm_functions: &own.join("nvm-functions.sh"),
                     nvmimic_functions: &own.join("nvmimic-functions.sh"),
                     cache: Some(&own.join("cache")),
@@ -309,7 +309,6 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
             }
             let binary = crate::repo_root().join("target/release/nvmimic");
             fs::copy(&binary, bin.join("nvmimic")).map_err(|e| e.to_string())?;
-            std::os::unix::fs::symlink("nvmimic", bin.join("nvm")).map_err(|e| e.to_string())?;
         }
     }
 
@@ -445,14 +444,13 @@ fn launches(
         }
     }
     argv.insert(2, format!("NVMIMIC_LAUNCH_LOG={}", log.display()));
-    // nvmimic's own binary is counted by a logging wrapper in place of its
-    // `nvm` link for this one run.
-    let link = fixture.root.join(which).join("own/bin/nvm");
-    let wrapped = which == "nvmimic" && wrap_binary(&link).is_ok();
+    // nvmimic's own binary is counted by a logging wrapper that takes its
+    // place for this one run.
+    let binary = fixture.root.join(which).join("own/bin/nvmimic");
+    let wrapped = which == "nvmimic" && wrap_binary(&binary).is_ok();
     let _ = Command::new(&argv[0]).args(&argv[1..]).output();
     if wrapped {
-        let _ = fs::remove_file(&link);
-        let _ = std::os::unix::fs::symlink("nvmimic", &link);
+        let _ = fs::rename(binary.with_file_name("nvmimic.real"), &binary);
     }
     for tool in fs::read_to_string(&log).unwrap_or_default().lines() {
         *counts.entry(tool.to_string()).or_insert(0) += 1;
@@ -490,25 +488,21 @@ fn launches(
     counts
 }
 
-/// Swaps the `nvm` link for a script that logs `nvmimic` and then runs the
-/// binary under a link that is also named `nvm`, which the binary needs.
-fn wrap_binary(link: &Path) -> Result<(), String> {
+/// Moves the binary aside and puts a script in its place that logs
+/// `nvmimic` and then runs it.
+fn wrap_binary(binary: &Path) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
-    let bin = link.parent().ok_or("no bin directory")?;
-    let real = bin.join("real");
-    fs::create_dir_all(&real).map_err(|e| e.to_string())?;
-    let _ = fs::remove_file(real.join("nvm"));
-    std::os::unix::fs::symlink(bin.join("nvmimic"), real.join("nvm")).map_err(|e| e.to_string())?;
-    fs::remove_file(link).map_err(|e| e.to_string())?;
+    let real = binary.with_file_name("nvmimic.real");
+    fs::rename(binary, &real).map_err(|e| e.to_string())?;
     fs::write(
-        link,
+        binary,
         format!(
             "#!/bin/sh\nprintf 'nvmimic\\n' >> \"$NVMIMIC_LAUNCH_LOG\"\nexec '{}' \"$@\"\n",
-            real.join("nvm").display()
+            real.display()
         ),
     )
     .map_err(|e| e.to_string())?;
-    fs::set_permissions(link, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())
+    fs::set_permissions(binary, fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())
 }
 
 fn is_assignment(word: &str) -> bool {

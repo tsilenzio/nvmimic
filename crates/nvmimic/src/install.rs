@@ -450,9 +450,6 @@ pub fn self_install(
         ui.say("Taking over again. They replace the older copies in the backup folder.");
     }
 
-    // `nvm.sh` reaches the program through a link named `nvm`, the name the
-    // program answers to as nvm.
-    let link = dirs.data.join("bin/nvm");
     if options.dry_run {
         ui.say(&format!("Would install nvmimic for {}.", nvm_dir.display()));
         for name in &existing {
@@ -473,8 +470,7 @@ pub fn self_install(
         return Ok(());
     }
 
-    let link_dir = dirs.data.join("bin");
-    for dir in [&nvm_dir, &link_dir, &backup, &dirs.cache] {
+    for dir in [&nvm_dir, &dirs.data, &backup, &dirs.cache] {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     for name in SCRIPTS {
@@ -496,12 +492,9 @@ pub fn self_install(
         install_binary(running, target)?;
         ui.say(&format!("The nvmimic program is at {}.", target.display()));
     }
-    let _ = fs::remove_file(&link);
-    std::os::unix::fs::symlink(plan.path(), &link)
-        .map_err(|e| format!("{}: {e}", link.display()))?;
 
     let bound = Bound {
-        binary: &link,
+        binary: plan.path(),
         nvm_functions: &dirs.nvm_functions(),
         nvmimic_functions: &dirs.nvmimic_functions(),
         cache: Some(&dirs.cache),
@@ -510,11 +503,7 @@ pub fn self_install(
     write_file(&nvm_dir.join("nvm-exec"), NVM_EXEC, 0o755)?;
     write_file(&nvm_dir.join("bash_completion"), BASH_COMPLETION, 0o644)?;
     write_file(&dirs.nvm_functions(), NVM_FUNCTIONS, 0o644)?;
-    write_file(
-        &dirs.nvmimic_functions(),
-        &bind(NVMIMIC_FUNCTIONS, &bound),
-        0o644,
-    )?;
+    write_file(&dirs.nvmimic_functions(), NVMIMIC_FUNCTIONS, 0o644)?;
 
     manifest.version = env!("CARGO_PKG_VERSION").to_string();
     manifest.nvm_dir = Some(nvm_dir.clone());
@@ -599,10 +588,9 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
 
     // Only what nvmimic put into its folders is removed, file by file. A
     // folder that then still holds something of yours stays.
-    for file in ["nvm-functions.sh", "nvmimic-functions.sh", "bin/nvm"] {
+    for file in ["nvm-functions.sh", "nvmimic-functions.sh"] {
         let _ = fs::remove_file(data.join(file));
     }
-    let _ = fs::remove_dir(data.join("bin"));
     let _ = fs::remove_dir(data);
     for kind in CACHE_KINDS {
         let _ = fs::remove_dir_all(cache.join(kind));
@@ -745,14 +733,14 @@ mod tests {
 
     #[test]
     fn placeholders_are_replaced_and_quoted() {
-        let script = format!("command {BINARY_PLACEHOLDER} __fn; c={CACHE_PLACEHOLDER}");
+        let script = format!("command {BINARY_PLACEHOLDER} x; c={CACHE_PLACEHOLDER}");
         let bound = Bound {
-            binary: Path::new("/a b/bin/nvm"),
+            binary: Path::new("/a b/bin/nvmimic"),
             nvm_functions: Path::new("/d/nvm-functions.sh"),
             nvmimic_functions: Path::new("/d/nvmimic-functions.sh"),
             cache: None,
         };
-        assert_eq!(bind(&script, &bound), "command '/a b/bin/nvm' __fn; c=''");
+        assert_eq!(bind(&script, &bound), "command '/a b/bin/nvmimic' x; c=''");
     }
 
     #[test]
@@ -764,7 +752,8 @@ mod tests {
             CACHE_PLACEHOLDER,
         ] {
             assert!(NVM_SH.contains(placeholder), "{placeholder}");
-            assert!(NVMIMIC_FUNCTIONS.contains(placeholder), "{placeholder}");
+            // Only `nvm.sh` names the installation's paths.
+            assert!(!NVMIMIC_FUNCTIONS.contains(placeholder), "{placeholder}");
         }
     }
 

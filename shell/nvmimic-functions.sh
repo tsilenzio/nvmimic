@@ -314,243 +314,6 @@ nvm_process_parameters() {
 
 case " ${__nvmimic_keep-} " in *" nvm "*) ;; *)
 nvm() {
-  # `nvm __nvmimic <function> [args]` runs one of nvm's functions in the
-  # nvmimic binary. Its output goes straight to the terminal. What it changes
-  # in this shell comes back on file descriptor 8 as shell code, run here.
-  if [ "${1-}" = '__nvmimic' ]; then
-    shift
-    # Three things only this shell can see, which decide whether the call has
-    # to run nvm's own code here instead of nvmimic's program: one of nvm's
-    # functions was replaced, a shell function has the name of a tool nvm
-    # runs, or the install hook is a shell function. NVMIMIC_NVM_CODE asks
-    # for nvm's own code outright.
-    local __nvmimic_own
-    __nvmimic_own="${NVMIMIC_NVM_CODE-}"
-    local __nvmimic_now
-    __nvmimic_now=''
-    local __nvmimic_keep
-    __nvmimic_keep=''
-    local __nvmimic_name
-    local __nvmimic_trace
-    __nvmimic_trace=''
-    # While nvm.sh is being sourced the functions were defined a moment ago,
-    # so only the tool names are looked at then.
-    if [ -n "${ZSH_VERSION-}" ]; then
-      eval '() {
-        emulate -L zsh
-        setopt extendedglob
-        local -a names
-        local MATCH MBEGIN MEND
-        names=(nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters)
-        if [[ -z "${__nvmimic_sourcing-}" ]]; then
-          __nvmimic_now="${(pj:\0:)${(@)names/(#m)*/$functions[$MATCH]}}"
-          [[ "${__nvmimic_now}" == "${__nvmimic_functions-}" ]] || __nvmimic_own=1
-        fi
-        [[ -z "$functions[node]$functions[npm]$functions[iojs]$functions[curl]$functions[wget]$functions[clang]$functions[make]$functions[gmake]$functions[awk]$functions[cut]$functions[tr]$functions[grep]$functions[dirname]$functions[sysctl]$functions[getconf]$functions[pkg_info]$functions[sha256sum]$functions[shasum]$functions[sha256]$functions[gsha256sum]$functions[openssl]$functions[bssl]$functions[sha1sum]$functions[sha1]" ]] || __nvmimic_own=1
-      }'
-    elif [ -n "${BASH_VERSION-}" ] && [ -n "${__nvmimic_sourcing-}" ]; then
-      for __nvmimic_name in node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
-        if declare -F "${__nvmimic_name}" >/dev/null; then
-          __nvmimic_own=1
-        fi
-      done
-    elif [ -n "${BASH_VERSION-}" ]; then
-      # `declare -F` fails when a name is not a function, which is the
-      # usual answer for the tools. The `|| :` keeps `set -e` out of it.
-      # Under `set -x` the trace would carry the text of every function,
-      # so tracing is off for these lines.
-      case "$-" in
-        *x*)
-          set +x
-          __nvmimic_trace=1
-        ;;
-      esac
-      __nvmimic_now="$(declare -f nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters || :; declare -F node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1 || :)"
-      if [ "${__nvmimic_now}" != "${__nvmimic_functions-}" ]; then
-        __nvmimic_own=1
-      fi
-      [ -z "${__nvmimic_trace}" ] || set -x
-    else
-      # This shell cannot show what a function contains, so a replaced nvm
-      # function goes unnoticed here. Functions named like tools do not.
-      for __nvmimic_name in node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
-        if PATH=/nonexistent/nvmimic command -v "${__nvmimic_name}" >/dev/null 2>&1 &&
-            ! \alias "${__nvmimic_name}" >/dev/null 2>&1; then
-          __nvmimic_own=1
-        fi
-      done
-    fi
-    if [ -n "${NVM_INSTALL_THIRD_PARTY_HOOK-}" ]; then
-      case "${1-}:${2-}" in
-        nvm:install | nvm:i | nvm_auto:install)
-          if PATH=/nonexistent/nvmimic command -v "${NVM_INSTALL_THIRD_PARTY_HOOK}" >/dev/null 2>&1; then
-            __nvmimic_own=1
-          fi
-        ;;
-      esac
-    fi
-    if [ -n "${__nvmimic_own}" ]; then
-      # Which of nvm's functions are the caller's own now. Those are kept.
-      if [ -n "${ZSH_VERSION-}" ]; then
-        eval '() {
-          emulate -L zsh
-          local -a names was
-          local i
-          names=(nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters)
-          was=("${(@ps:\0:)__nvmimic_functions}")
-          for i in {1..$#names}; do
-            [[ "$functions[$names[i]]" == "$was[i]" ]] || __nvmimic_keep+=" $names[i]"
-          done
-        }'
-      elif [ -n "${BASH_VERSION-}" ]; then
-        [ -z "${__nvmimic_trace}" ] || set +x
-        case "${__nvmimic_now}" in
-          "${__nvmimic_functions-}"*) ;;
-          *)
-            # A function the caller removed stays removed, so it counts
-            # as the caller's too.
-            for __nvmimic_name in nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters; do
-              if ! declare -F "${__nvmimic_name}" >/dev/null; then
-                __nvmimic_keep="${__nvmimic_keep} ${__nvmimic_name}"
-                continue
-              fi
-              case "${__nvmimic_functions-}" in
-                *"$(declare -f "${__nvmimic_name}" || :)"*) ;;
-                *) __nvmimic_keep="${__nvmimic_keep} ${__nvmimic_name}" ;;
-              esac
-            done
-          ;;
-        esac
-        [ -z "${__nvmimic_trace}" ] || set -x
-      fi
-      # nvm's functions are read with aliases switched off, as nvmimic's
-      # own were.
-      __nvmimic_now="@nvmimic-nvm-functions@"
-      if [ -n "${ZSH_VERSION-}" ]; then
-        eval '() { setopt localoptions noaliases; \. "${__nvmimic_now}" }'
-      elif [ -n "${BASH_VERSION-}" ] && shopt -q expand_aliases; then
-        shopt -u expand_aliases
-        \. "${__nvmimic_now}"
-        shopt -s expand_aliases
-      else
-        \. "${__nvmimic_now}"
-      fi
-      "$@"
-      __nvmimic_own=$?
-      if ! type nvm >/dev/null 2>&1; then
-        # The call was `nvm unload`.
-        unset __nvmimic_functions
-      elif [ -z "${NVMIMIC_NVM_CODE-}" ]; then
-        \. "@nvmimic-own-functions@"
-      fi
-      return "${__nvmimic_own}"
-    fi
-    local __nvmimic_shell
-    __nvmimic_shell=posix
-    if [ -n "${ZSH_VERSION-}" ]; then
-      __nvmimic_shell=zsh
-    elif [ -n "${BASH_VERSION-}" ]; then
-      case ":${SHELLOPTS-}:" in
-        *:posix:*) __nvmimic_shell=bashposix ;;
-        *) __nvmimic_shell=bash ;;
-      esac
-    fi
-    # Two things only the shell can tell. nvm skips a checksum program whose
-    # name is a shell alias, and `nvm debug` reports how the shell finds each
-    # program it depends on. Both are looked up only for the commands that
-    # use them.
-    local __nvmimic_aliases
-    __nvmimic_aliases=''
-    local __nvmimic_info
-    __nvmimic_info=''
-    case "${1-}:${2-}" in
-      nvm:install | nvm:i | nvm:debug | nvm_auto:install | nvm_*checksum*:* | nvm_download_artifact:* | nvm_install_*:*)
-        for __nvmimic_name in sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
-          if nvm_is_alias "${__nvmimic_name}"; then
-            __nvmimic_aliases="${__nvmimic_aliases} ${__nvmimic_name}"
-          fi
-        done
-      ;;
-    esac
-    case "${1-}:${2-}" in
-      nvm:debug)
-        for __nvmimic_name in awk curl wget git grep sed cut basename rm mkdir xargs; do
-          if nvm_has "${__nvmimic_name}"; then
-            __nvmimic_info="${__nvmimic_info}${__nvmimic_name}
-$(nvm_command_info "${__nvmimic_name}")
-__nvmimic_end
-"
-          fi
-        done
-      ;;
-    esac
-    local __nvmimic_effects
-    local __nvmimic_rc
-    __nvmimic_rc=0
-    { __nvmimic_effects="$(
-      __NVMIMIC_SET="${PATH+ PATH}${MANPATH+ MANPATH}${NODE_PATH+ NODE_PATH}${HOME+ HOME}${PWD+ PWD}${TERM+ TERM}${PREFIX+ PREFIX}${DEFAULT+ DEFAULT}${NVM_DIR+ NVM_DIR}${NVM_BIN+ NVM_BIN}${NVM_INC+ NVM_INC}${NVM_CD_FLAGS+ NVM_CD_FLAGS}${NVM_COLORS+ NVM_COLORS}${NVM_NO_COLORS+ NVM_NO_COLORS}${NVM_HAS_COLORS+ NVM_HAS_COLORS}${NVM_SILENT+ NVM_SILENT}${NVM_LTS+ NVM_LTS}${NVM_CURRENT+ NVM_CURRENT}${NVM_VERSION_ONLY+ NVM_VERSION_ONLY}${NVM_RC_VERSION+ NVM_RC_VERSION}${NVM_NODEJS_ORG_MIRROR+ NVM_NODEJS_ORG_MIRROR}${NVM_IOJS_ORG_MIRROR+ NVM_IOJS_ORG_MIRROR}${NVM_AUTH_HEADER+ NVM_AUTH_HEADER}${NVM_SYMLINK_CURRENT+ NVM_SYMLINK_CURRENT}${NVM_NO_PROGRESS+ NVM_NO_PROGRESS}${NVM_NO_SOURCE_FALLBACK+ NVM_NO_SOURCE_FALLBACK}${NVM_OFFLINE+ NVM_OFFLINE}${NVM_MAKE_JOBS+ NVM_MAKE_JOBS}${NVM_DEBUG+ NVM_DEBUG}${NVM_INSTALL_LOCK+ NVM_INSTALL_LOCK}${NVM_INSTALL_LOCK_TIMEOUT+ NVM_INSTALL_LOCK_TIMEOUT}${NVM_INSTALL_LOCK_STALE+ NVM_INSTALL_LOCK_STALE}${NVM_INSTALL_THIRD_PARTY_HOOK+ NVM_INSTALL_THIRD_PARTY_HOOK}${NODE_VERSION+ NODE_VERSION}${PROGRESS_BAR+ PROGRESS_BAR}${ALIAS+ ALIAS}${provided_version+ provided_version}${SHELL+ SHELL}${CC+ CC}${CXX+ CXX}${TMPDIR+ TMPDIR}${LTS+ LTS}${SKIP_DEFAULT_PACKAGES+ SKIP_DEFAULT_PACKAGES}${PROVIDED_REINSTALL_PACKAGES_FROM+ PROVIDED_REINSTALL_PACKAGES_FROM}${REINSTALL_PACKAGES_FROM+ REINSTALL_PACKAGES_FROM}${MAKE_CXX+ MAKE_CXX}${MAKE_SHELL_OVERRIDE+ MAKE_SHELL_OVERRIDE}${OS_VERSION+ OS_VERSION}${VERSION+ VERSION}" \
-        __NVMIMIC_V_PATH="${PATH-}" \
-        __NVMIMIC_V_MANPATH="${MANPATH-}" \
-        __NVMIMIC_V_NODE_PATH="${NODE_PATH-}" \
-        __NVMIMIC_V_HOME="${HOME-}" \
-        __NVMIMIC_V_PWD="${PWD-}" \
-        __NVMIMIC_V_TERM="${TERM-}" \
-        __NVMIMIC_V_PREFIX="${PREFIX-}" \
-        __NVMIMIC_V_DEFAULT="${DEFAULT-}" \
-        __NVMIMIC_V_NVM_DIR="${NVM_DIR-}" \
-        __NVMIMIC_V_NVM_BIN="${NVM_BIN-}" \
-        __NVMIMIC_V_NVM_INC="${NVM_INC-}" \
-        __NVMIMIC_V_NVM_CD_FLAGS="${NVM_CD_FLAGS-}" \
-        __NVMIMIC_V_NVM_COLORS="${NVM_COLORS-}" \
-        __NVMIMIC_V_NVM_NO_COLORS="${NVM_NO_COLORS-}" \
-        __NVMIMIC_V_NVM_HAS_COLORS="${NVM_HAS_COLORS-}" \
-        __NVMIMIC_V_NVM_SILENT="${NVM_SILENT-}" \
-        __NVMIMIC_V_NVM_LTS="${NVM_LTS-}" \
-        __NVMIMIC_V_NVM_CURRENT="${NVM_CURRENT-}" \
-        __NVMIMIC_V_NVM_VERSION_ONLY="${NVM_VERSION_ONLY-}" \
-        __NVMIMIC_V_NVM_RC_VERSION="${NVM_RC_VERSION-}" \
-        __NVMIMIC_V_NVM_NODEJS_ORG_MIRROR="${NVM_NODEJS_ORG_MIRROR-}" \
-        __NVMIMIC_V_NVM_IOJS_ORG_MIRROR="${NVM_IOJS_ORG_MIRROR-}" \
-        __NVMIMIC_V_NVM_AUTH_HEADER="${NVM_AUTH_HEADER-}" \
-        __NVMIMIC_V_NVM_SYMLINK_CURRENT="${NVM_SYMLINK_CURRENT-}" \
-        __NVMIMIC_V_NVM_NO_PROGRESS="${NVM_NO_PROGRESS-}" \
-        __NVMIMIC_V_NVM_NO_SOURCE_FALLBACK="${NVM_NO_SOURCE_FALLBACK-}" \
-        __NVMIMIC_V_NVM_OFFLINE="${NVM_OFFLINE-}" \
-        __NVMIMIC_V_NVM_MAKE_JOBS="${NVM_MAKE_JOBS-}" \
-        __NVMIMIC_V_NVM_DEBUG="${NVM_DEBUG-}" \
-        __NVMIMIC_V_NVM_INSTALL_LOCK="${NVM_INSTALL_LOCK-}" \
-        __NVMIMIC_V_NVM_INSTALL_LOCK_TIMEOUT="${NVM_INSTALL_LOCK_TIMEOUT-}" \
-        __NVMIMIC_V_NVM_INSTALL_LOCK_STALE="${NVM_INSTALL_LOCK_STALE-}" \
-        __NVMIMIC_V_NVM_INSTALL_THIRD_PARTY_HOOK="${NVM_INSTALL_THIRD_PARTY_HOOK-}" \
-        __NVMIMIC_V_NODE_VERSION="${NODE_VERSION-}" \
-        __NVMIMIC_V_PROGRESS_BAR="${PROGRESS_BAR-}" \
-        __NVMIMIC_V_ALIAS="${ALIAS-}" \
-        __NVMIMIC_V_provided_version="${provided_version-}" \
-        __NVMIMIC_V_SHELL="${SHELL-}" \
-        __NVMIMIC_V_CC="${CC-}" \
-        __NVMIMIC_V_CXX="${CXX-}" \
-        __NVMIMIC_V_TMPDIR="${TMPDIR-}" \
-        __NVMIMIC_V_LTS="${LTS-}" \
-        __NVMIMIC_V_SKIP_DEFAULT_PACKAGES="${SKIP_DEFAULT_PACKAGES-}" \
-        __NVMIMIC_V_PROVIDED_REINSTALL_PACKAGES_FROM="${PROVIDED_REINSTALL_PACKAGES_FROM-}" \
-        __NVMIMIC_V_REINSTALL_PACKAGES_FROM="${REINSTALL_PACKAGES_FROM-}" \
-        __NVMIMIC_V_MAKE_CXX="${MAKE_CXX-}" \
-        __NVMIMIC_V_MAKE_SHELL_OVERRIDE="${MAKE_SHELL_OVERRIDE-}" \
-        __NVMIMIC_V_OS_VERSION="${OS_VERSION-}" \
-        __NVMIMIC_V_VERSION="${VERSION-}" \
-        __NVMIMIC_ALIASES="${__nvmimic_aliases}" \
-        __NVMIMIC_COMMAND_INFO="${__nvmimic_info}" \
-        __NVMIMIC_SHELL="${__nvmimic_shell}" \
-        __NVMIMIC_ARG0="$0" \
-        __NVMIMIC_SOURCE="${BASH_SOURCE-}" \
-        __NVMIMIC_OPTS="$-" \
-        __NVMIMIC_CACHE="@nvmimic-cache@" \
-        __NVMIMIC_FD=8 \
-        command "@nvmimic-binary@" __fn "$@" 8>&1 1>&9 9>&-
-    )" || __nvmimic_rc=$?; } 9>&1
-    eval "${__nvmimic_effects}"
-    return "${__nvmimic_rc}"
-  fi
   if [ "$#" -lt 1 ]; then
     nvm --help
     return
@@ -587,7 +350,7 @@ __nvmimic_end
     return "$?"
   fi
 
-  nvm __nvmimic nvm "$@"
+  __nvmimic_handoff nvm "$@"
 }
 ;; esac
 
@@ -596,387 +359,387 @@ nvm_auto() {
   case "${1-}" in
     none) return 0 ;;
   esac
-  nvm __nvmimic nvm_auto "$@"
+  __nvmimic_handoff nvm_auto "$@"
 }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_has_colors "*) ;; *)
-nvm_has_colors() { nvm __nvmimic nvm_has_colors "$@"; }
+nvm_has_colors() { __nvmimic_handoff nvm_has_colors "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_curl_libz_support "*) ;; *)
-nvm_curl_libz_support() { nvm __nvmimic nvm_curl_libz_support "$@"; }
+nvm_curl_libz_support() { __nvmimic_handoff nvm_curl_libz_support "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_curl_use_compression "*) ;; *)
-nvm_curl_use_compression() { nvm __nvmimic nvm_curl_use_compression "$@"; }
+nvm_curl_use_compression() { __nvmimic_handoff nvm_curl_use_compression "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_latest "*) ;; *)
-nvm_get_latest() { nvm __nvmimic nvm_get_latest "$@"; }
+nvm_get_latest() { __nvmimic_handoff nvm_get_latest "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_download "*) ;; *)
-nvm_download() { nvm __nvmimic nvm_download "$@"; }
+nvm_download() { __nvmimic_handoff nvm_download "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_sanitize_auth_header "*) ;; *)
-nvm_sanitize_auth_header() { nvm __nvmimic nvm_sanitize_auth_header "$@"; }
+nvm_sanitize_auth_header() { __nvmimic_handoff nvm_sanitize_auth_header "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_has_system_node "*) ;; *)
-nvm_has_system_node() { nvm __nvmimic nvm_has_system_node "$@"; }
+nvm_has_system_node() { __nvmimic_handoff nvm_has_system_node "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_has_system_iojs "*) ;; *)
-nvm_has_system_iojs() { nvm __nvmimic nvm_has_system_iojs "$@"; }
+nvm_has_system_iojs() { __nvmimic_handoff nvm_has_system_iojs "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_is_version_installed "*) ;; *)
-nvm_is_version_installed() { nvm __nvmimic nvm_is_version_installed "$@"; }
+nvm_is_version_installed() { __nvmimic_handoff nvm_is_version_installed "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_validate_install "*) ;; *)
-nvm_validate_install() { nvm __nvmimic nvm_validate_install "$@"; }
+nvm_validate_install() { __nvmimic_handoff nvm_validate_install "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_npm_version "*) ;; *)
-nvm_print_npm_version() { nvm __nvmimic nvm_print_npm_version "$@"; }
+nvm_print_npm_version() { __nvmimic_handoff nvm_print_npm_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_latest_npm "*) ;; *)
-nvm_install_latest_npm() { nvm __nvmimic nvm_install_latest_npm "$@"; }
+nvm_install_latest_npm() { __nvmimic_handoff nvm_install_latest_npm "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_nvmrc_invalid_msg "*) ;; *)
-nvm_nvmrc_invalid_msg() { nvm __nvmimic nvm_nvmrc_invalid_msg "$@"; }
+nvm_nvmrc_invalid_msg() { __nvmimic_handoff nvm_nvmrc_invalid_msg "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_process_nvmrc_content "*) ;; *)
-nvm_process_nvmrc_content() { nvm __nvmimic nvm_process_nvmrc_content "$@"; }
+nvm_process_nvmrc_content() { __nvmimic_handoff nvm_process_nvmrc_content "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_process_nvmrc "*) ;; *)
-nvm_process_nvmrc() { nvm __nvmimic nvm_process_nvmrc "$@"; }
+nvm_process_nvmrc() { __nvmimic_handoff nvm_process_nvmrc "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_rc_version "*) ;; *)
-nvm_rc_version() { nvm __nvmimic nvm_rc_version "$@"; }
+nvm_rc_version() { __nvmimic_handoff nvm_rc_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_clang_version "*) ;; *)
-nvm_clang_version() { nvm __nvmimic nvm_clang_version "$@"; }
+nvm_clang_version() { __nvmimic_handoff nvm_clang_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_curl_version "*) ;; *)
-nvm_curl_version() { nvm __nvmimic nvm_curl_version "$@"; }
+nvm_curl_version() { __nvmimic_handoff nvm_curl_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_version_greater "*) ;; *)
-nvm_version_greater() { nvm __nvmimic nvm_version_greater "$@"; }
+nvm_version_greater() { __nvmimic_handoff nvm_version_greater "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_version_greater_than_or_equal_to "*) ;; *)
-nvm_version_greater_than_or_equal_to() { nvm __nvmimic nvm_version_greater_than_or_equal_to "$@"; }
+nvm_version_greater_than_or_equal_to() { __nvmimic_handoff nvm_version_greater_than_or_equal_to "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_version_path "*) ;; *)
-nvm_version_path() { nvm __nvmimic nvm_version_path "$@"; }
+nvm_version_path() { __nvmimic_handoff nvm_version_path "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ensure_version_installed "*) ;; *)
-nvm_ensure_version_installed() { nvm __nvmimic nvm_ensure_version_installed "$@"; }
+nvm_ensure_version_installed() { __nvmimic_handoff nvm_ensure_version_installed "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_version "*) ;; *)
-nvm_version() { nvm __nvmimic nvm_version "$@"; }
+nvm_version() { __nvmimic_handoff nvm_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_remote_version "*) ;; *)
-nvm_remote_version() { nvm __nvmimic nvm_remote_version "$@"; }
+nvm_remote_version() { __nvmimic_handoff nvm_remote_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_remote_versions "*) ;; *)
-nvm_remote_versions() { nvm __nvmimic nvm_remote_versions "$@"; }
+nvm_remote_versions() { __nvmimic_handoff nvm_remote_versions "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_is_valid_version "*) ;; *)
-nvm_is_valid_version() { nvm __nvmimic nvm_is_valid_version "$@"; }
+nvm_is_valid_version() { __nvmimic_handoff nvm_is_valid_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_normalize_version "*) ;; *)
-nvm_normalize_version() { nvm __nvmimic nvm_normalize_version "$@"; }
+nvm_normalize_version() { __nvmimic_handoff nvm_normalize_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_normalize_lts "*) ;; *)
-nvm_normalize_lts() { nvm __nvmimic nvm_normalize_lts "$@"; }
+nvm_normalize_lts() { __nvmimic_handoff nvm_normalize_lts "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ensure_version_prefix "*) ;; *)
-nvm_ensure_version_prefix() { nvm __nvmimic nvm_ensure_version_prefix "$@"; }
+nvm_ensure_version_prefix() { __nvmimic_handoff nvm_ensure_version_prefix "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_format_version "*) ;; *)
-nvm_format_version() { nvm __nvmimic nvm_format_version "$@"; }
+nvm_format_version() { __nvmimic_handoff nvm_format_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_num_version_groups "*) ;; *)
-nvm_num_version_groups() { nvm __nvmimic nvm_num_version_groups "$@"; }
+nvm_num_version_groups() { __nvmimic_handoff nvm_num_version_groups "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_strip_path "*) ;; *)
-nvm_strip_path() { nvm __nvmimic nvm_strip_path "$@"; }
+nvm_strip_path() { __nvmimic_handoff nvm_strip_path "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_change_path "*) ;; *)
-nvm_change_path() { nvm __nvmimic nvm_change_path "$@"; }
+nvm_change_path() { __nvmimic_handoff nvm_change_path "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_binary_available "*) ;; *)
-nvm_binary_available() { nvm __nvmimic nvm_binary_available "$@"; }
+nvm_binary_available() { __nvmimic_handoff nvm_binary_available "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_set_colors "*) ;; *)
-nvm_set_colors() { nvm __nvmimic nvm_set_colors "$@"; }
+nvm_set_colors() { __nvmimic_handoff nvm_set_colors "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_colors "*) ;; *)
-nvm_get_colors() { nvm __nvmimic nvm_get_colors "$@"; }
+nvm_get_colors() { __nvmimic_handoff nvm_get_colors "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_wrap_with_color_code "*) ;; *)
-nvm_wrap_with_color_code() { nvm __nvmimic nvm_wrap_with_color_code "$@"; }
+nvm_wrap_with_color_code() { __nvmimic_handoff nvm_wrap_with_color_code "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_color_legend "*) ;; *)
-nvm_print_color_legend() { nvm __nvmimic nvm_print_color_legend "$@"; }
+nvm_print_color_legend() { __nvmimic_handoff nvm_print_color_legend "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_color_code "*) ;; *)
-nvm_print_color_code() { nvm __nvmimic nvm_print_color_code "$@"; }
+nvm_print_color_code() { __nvmimic_handoff nvm_print_color_code "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_formatted_alias "*) ;; *)
-nvm_print_formatted_alias() { nvm __nvmimic nvm_print_formatted_alias "$@"; }
+nvm_print_formatted_alias() { __nvmimic_handoff nvm_print_formatted_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_alias_path "*) ;; *)
-nvm_print_alias_path() { nvm __nvmimic nvm_print_alias_path "$@"; }
+nvm_print_alias_path() { __nvmimic_handoff nvm_print_alias_path "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_default_alias "*) ;; *)
-nvm_print_default_alias() { nvm __nvmimic nvm_print_default_alias "$@"; }
+nvm_print_default_alias() { __nvmimic_handoff nvm_print_default_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_make_alias "*) ;; *)
-nvm_make_alias() { nvm __nvmimic nvm_make_alias "$@"; }
+nvm_make_alias() { __nvmimic_handoff nvm_make_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_list_aliases "*) ;; *)
-nvm_list_aliases() { nvm __nvmimic nvm_list_aliases "$@"; }
+nvm_list_aliases() { __nvmimic_handoff nvm_list_aliases "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_alias_file "*) ;; *)
-nvm_print_alias_file() { nvm __nvmimic nvm_print_alias_file "$@"; }
+nvm_print_alias_file() { __nvmimic_handoff nvm_print_alias_file "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_alias "*) ;; *)
-nvm_alias() { nvm __nvmimic nvm_alias "$@"; }
+nvm_alias() { __nvmimic_handoff nvm_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ls_current "*) ;; *)
-nvm_ls_current() { nvm __nvmimic nvm_ls_current "$@"; }
+nvm_ls_current() { __nvmimic_handoff nvm_ls_current "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_resolve_alias "*) ;; *)
-nvm_resolve_alias() { nvm __nvmimic nvm_resolve_alias "$@"; }
+nvm_resolve_alias() { __nvmimic_handoff nvm_resolve_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_resolve_local_alias "*) ;; *)
-nvm_resolve_local_alias() { nvm __nvmimic nvm_resolve_local_alias "$@"; }
+nvm_resolve_local_alias() { __nvmimic_handoff nvm_resolve_local_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_add_iojs_prefix "*) ;; *)
-nvm_add_iojs_prefix() { nvm __nvmimic nvm_add_iojs_prefix "$@"; }
+nvm_add_iojs_prefix() { __nvmimic_handoff nvm_add_iojs_prefix "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ls "*) ;; *)
-nvm_ls() { nvm __nvmimic nvm_ls "$@"; }
+nvm_ls() { __nvmimic_handoff nvm_ls "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ls_remote "*) ;; *)
-nvm_ls_remote() { nvm __nvmimic nvm_ls_remote "$@"; }
+nvm_ls_remote() { __nvmimic_handoff nvm_ls_remote "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ls_remote_iojs "*) ;; *)
-nvm_ls_remote_iojs() { nvm __nvmimic nvm_ls_remote_iojs "$@"; }
+nvm_ls_remote_iojs() { __nvmimic_handoff nvm_ls_remote_iojs "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ls_remote_index_tab "*) ;; *)
-nvm_ls_remote_index_tab() { nvm __nvmimic nvm_ls_remote_index_tab "$@"; }
+nvm_ls_remote_index_tab() { __nvmimic_handoff nvm_ls_remote_index_tab "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_checksum_binary "*) ;; *)
-nvm_get_checksum_binary() { nvm __nvmimic nvm_get_checksum_binary "$@"; }
+nvm_get_checksum_binary() { __nvmimic_handoff nvm_get_checksum_binary "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_checksum_alg "*) ;; *)
-nvm_get_checksum_alg() { nvm __nvmimic nvm_get_checksum_alg "$@"; }
+nvm_get_checksum_alg() { __nvmimic_handoff nvm_get_checksum_alg "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_compute_checksum "*) ;; *)
-nvm_compute_checksum() { nvm __nvmimic nvm_compute_checksum "$@"; }
+nvm_compute_checksum() { __nvmimic_handoff nvm_compute_checksum "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_compare_checksum "*) ;; *)
-nvm_compare_checksum() { nvm __nvmimic nvm_compare_checksum "$@"; }
+nvm_compare_checksum() { __nvmimic_handoff nvm_compare_checksum "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_checksum "*) ;; *)
-nvm_get_checksum() { nvm __nvmimic nvm_get_checksum "$@"; }
+nvm_get_checksum() { __nvmimic_handoff nvm_get_checksum "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_versions "*) ;; *)
-nvm_print_versions() { nvm __nvmimic nvm_print_versions "$@"; }
+nvm_print_versions() { __nvmimic_handoff nvm_print_versions "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_print_implicit_alias "*) ;; *)
-nvm_print_implicit_alias() { nvm __nvmimic nvm_print_implicit_alias "$@"; }
+nvm_print_implicit_alias() { __nvmimic_handoff nvm_print_implicit_alias "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_os "*) ;; *)
-nvm_get_os() { nvm __nvmimic nvm_get_os "$@"; }
+nvm_get_os() { __nvmimic_handoff nvm_get_os "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_arch "*) ;; *)
-nvm_get_arch() { nvm __nvmimic nvm_get_arch "$@"; }
+nvm_get_arch() { __nvmimic_handoff nvm_get_arch "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_minor_version "*) ;; *)
-nvm_get_minor_version() { nvm __nvmimic nvm_get_minor_version "$@"; }
+nvm_get_minor_version() { __nvmimic_handoff nvm_get_minor_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ensure_default_set "*) ;; *)
-nvm_ensure_default_set() { nvm __nvmimic nvm_ensure_default_set "$@"; }
+nvm_ensure_default_set() { __nvmimic_handoff nvm_ensure_default_set "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_is_merged_node_version "*) ;; *)
-nvm_is_merged_node_version() { nvm __nvmimic nvm_is_merged_node_version "$@"; }
+nvm_is_merged_node_version() { __nvmimic_handoff nvm_is_merged_node_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_mirror "*) ;; *)
-nvm_get_mirror() { nvm __nvmimic nvm_get_mirror "$@"; }
+nvm_get_mirror() { __nvmimic_handoff nvm_get_mirror "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_binary_extract "*) ;; *)
-nvm_install_binary_extract() { nvm __nvmimic nvm_install_binary_extract "$@"; }
+nvm_install_binary_extract() { __nvmimic_handoff nvm_install_binary_extract "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_binary "*) ;; *)
-nvm_install_binary() { nvm __nvmimic nvm_install_binary "$@"; }
+nvm_install_binary() { __nvmimic_handoff nvm_install_binary "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_download_slug "*) ;; *)
-nvm_get_download_slug() { nvm __nvmimic nvm_get_download_slug "$@"; }
+nvm_get_download_slug() { __nvmimic_handoff nvm_get_download_slug "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_artifact_compression "*) ;; *)
-nvm_get_artifact_compression() { nvm __nvmimic nvm_get_artifact_compression "$@"; }
+nvm_get_artifact_compression() { __nvmimic_handoff nvm_get_artifact_compression "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_download_artifact "*) ;; *)
-nvm_download_artifact() { nvm __nvmimic nvm_download_artifact "$@"; }
+nvm_download_artifact() { __nvmimic_handoff nvm_download_artifact "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_extract_tarball "*) ;; *)
-nvm_extract_tarball() { nvm __nvmimic nvm_extract_tarball "$@"; }
+nvm_extract_tarball() { __nvmimic_handoff nvm_extract_tarball "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_make_jobs "*) ;; *)
-nvm_get_make_jobs() { nvm __nvmimic nvm_get_make_jobs "$@"; }
+nvm_get_make_jobs() { __nvmimic_handoff nvm_get_make_jobs "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_source "*) ;; *)
-nvm_install_source() { nvm __nvmimic nvm_install_source "$@"; }
+nvm_install_source() { __nvmimic_handoff nvm_install_source "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_use_if_needed "*) ;; *)
-nvm_use_if_needed() { nvm __nvmimic nvm_use_if_needed "$@"; }
+nvm_use_if_needed() { __nvmimic_handoff nvm_use_if_needed "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_npm_if_needed "*) ;; *)
-nvm_install_npm_if_needed() { nvm __nvmimic nvm_install_npm_if_needed "$@"; }
+nvm_install_npm_if_needed() { __nvmimic_handoff nvm_install_npm_if_needed "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_match_version "*) ;; *)
-nvm_match_version() { nvm __nvmimic nvm_match_version "$@"; }
+nvm_match_version() { __nvmimic_handoff nvm_match_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_npm_global_modules "*) ;; *)
-nvm_npm_global_modules() { nvm __nvmimic nvm_npm_global_modules "$@"; }
+nvm_npm_global_modules() { __nvmimic_handoff nvm_npm_global_modules "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_npmrc_bad_news_bears "*) ;; *)
-nvm_npmrc_bad_news_bears() { nvm __nvmimic nvm_npmrc_bad_news_bears "$@"; }
+nvm_npmrc_bad_news_bears() { __nvmimic_handoff nvm_npmrc_bad_news_bears "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_die_on_prefix "*) ;; *)
-nvm_die_on_prefix() { nvm __nvmimic nvm_die_on_prefix "$@"; }
+nvm_die_on_prefix() { __nvmimic_handoff nvm_die_on_prefix "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_iojs_version_has_solaris_binary "*) ;; *)
-nvm_iojs_version_has_solaris_binary() { nvm __nvmimic nvm_iojs_version_has_solaris_binary "$@"; }
+nvm_iojs_version_has_solaris_binary() { __nvmimic_handoff nvm_iojs_version_has_solaris_binary "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_node_version_has_solaris_binary "*) ;; *)
-nvm_node_version_has_solaris_binary() { nvm __nvmimic nvm_node_version_has_solaris_binary "$@"; }
+nvm_node_version_has_solaris_binary() { __nvmimic_handoff nvm_node_version_has_solaris_binary "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_has_solaris_binary "*) ;; *)
-nvm_has_solaris_binary() { nvm __nvmimic nvm_has_solaris_binary "$@"; }
+nvm_has_solaris_binary() { __nvmimic_handoff nvm_has_solaris_binary "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_sanitize_path "*) ;; *)
-nvm_sanitize_path() { nvm __nvmimic nvm_sanitize_path "$@"; }
+nvm_sanitize_path() { __nvmimic_handoff nvm_sanitize_path "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_write_nvmrc "*) ;; *)
-nvm_write_nvmrc() { nvm __nvmimic nvm_write_nvmrc "$@"; }
+nvm_write_nvmrc() { __nvmimic_handoff nvm_write_nvmrc "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_check_file_permissions "*) ;; *)
-nvm_check_file_permissions() { nvm __nvmimic nvm_check_file_permissions "$@"; }
+nvm_check_file_permissions() { __nvmimic_handoff nvm_check_file_permissions "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_lock_name "*) ;; *)
-nvm_install_lock_name() { nvm __nvmimic nvm_install_lock_name "$@"; }
+nvm_install_lock_name() { __nvmimic_handoff nvm_install_lock_name "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_acquire_install_lock "*) ;; *)
-nvm_acquire_install_lock() { nvm __nvmimic nvm_acquire_install_lock "$@"; }
+nvm_acquire_install_lock() { __nvmimic_handoff nvm_acquire_install_lock "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_release_install_lock "*) ;; *)
-nvm_release_install_lock() { nvm __nvmimic nvm_release_install_lock "$@"; }
+nvm_release_install_lock() { __nvmimic_handoff nvm_release_install_lock "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_ls_cached "*) ;; *)
-nvm_ls_cached() { nvm __nvmimic nvm_ls_cached "$@"; }
+nvm_ls_cached() { __nvmimic_handoff nvm_ls_cached "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_offline_version "*) ;; *)
-nvm_offline_version() { nvm __nvmimic nvm_offline_version "$@"; }
+nvm_offline_version() { __nvmimic_handoff nvm_offline_version "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_get_default_packages "*) ;; *)
-nvm_get_default_packages() { nvm __nvmimic nvm_get_default_packages "$@"; }
+nvm_get_default_packages() { __nvmimic_handoff nvm_get_default_packages "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_install_default_packages "*) ;; *)
-nvm_install_default_packages() { nvm __nvmimic nvm_install_default_packages "$@"; }
+nvm_install_default_packages() { __nvmimic_handoff nvm_install_default_packages "$@"; }
 ;; esac
 
 case " ${__nvmimic_keep-} " in *" nvm_supports_xz "*) ;; *)
-nvm_supports_xz() { nvm __nvmimic nvm_supports_xz "$@"; }
+nvm_supports_xz() { __nvmimic_handoff nvm_supports_xz "$@"; }
 ;; esac
 

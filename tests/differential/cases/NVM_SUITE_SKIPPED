@@ -13,9 +13,6 @@
 #   mock-tool      redefines an outside program (clang, wget) as a shell
 #                  function or alias and expects nvm to run that instead.
 #                  Not under dash, like mock-internal
-#   replaces-nvm   redefines the function `nvm` itself and then calls one of
-#                  nvm's helpers. nvmimic's helpers reach its program through
-#                  `nvm`, so the helper ends up in the test's function
 #   copied-lines   compares the shell's own error lines from a function that
 #                  nvmimic's nvm.sh copies from nvm. The copy sits on other
 #                  line numbers than in nvm's nvm.sh
@@ -96,7 +93,7 @@ mock-internal: fast/Unit tests/nvm_print_npm_version
 mock-internal: fast/Unit tests/nvm_remote_version
 mock-internal: fast/Unit tests/nvm_remote_versions
 mock-internal: fast/Unit tests/nvm_remote_versions propagates iojs failure
-replaces-nvm: fast/Unit tests/nvm_use_if_needed
+mock-internal: fast/Unit tests/nvm_use_if_needed
 mock-internal: fast/Unit tests/nvm_version
 mock-internal: fast/Unit tests/nvm version-remote
 real-node-hook: installation_node/install hook
