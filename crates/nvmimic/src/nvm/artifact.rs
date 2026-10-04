@@ -4,6 +4,7 @@
 //! programs here, the same ones nvm runs.
 
 use super::checksum;
+use super::complaint::{self, Site, sites};
 use super::local;
 use super::paths;
 use super::platform;
@@ -748,7 +749,14 @@ fn build(nvm: &mut Nvm, build: Build) -> bool {
     }
     nvm.io.echo(&shown.join(" "));
 
-    let in_source = |nvm: &mut Nvm, program: &str, args: &[&str]| -> bool {
+    // Each step is a command word in nvm's own code, so when one cannot be
+    // started the shell says so, naming that line.
+    let in_source = |nvm: &mut Nvm, site: &Site, program: &str, args: &[&str]| -> bool {
+        if let Some(why) = complaint::cannot_start_in(nvm, build.tmpdir, program) {
+            let line = complaint::not_started(nvm, site, program, why);
+            nvm.io.err(&line);
+            return false;
+        }
         let Some(mut command) = tools::command(nvm, program) else {
             return false;
         };
@@ -761,7 +769,7 @@ fn build(nvm: &mut Nvm, build: Build) -> bool {
 
     let mut configure = vec![prefix.as_str()];
     configure.extend(&options);
-    if !in_source(nvm, "./configure", &configure) {
+    if !in_source(nvm, &sites::BUILD_CONFIGURE, "./configure", &configure) {
         return false;
     }
 
@@ -770,7 +778,7 @@ fn build(nvm: &mut Nvm, build: Build) -> bool {
     let mut make_args: Vec<&str> = make_words.collect();
     make_args.extend(["-j", build.make_jobs]);
     make_args.extend(build.make_cxx.split_whitespace());
-    if !in_source(nvm, make_program, &make_args) {
+    if !in_source(nvm, &sites::BUILD_MAKE, make_program, &make_args) {
         return false;
     }
     // `rm -f` of the version path: fine when nothing is there, a failure
@@ -785,7 +793,7 @@ fn build(nvm: &mut Nvm, build: Build) -> bool {
         Err(_) => {}
     }
     make_args.push("install");
-    in_source(nvm, make_program, &make_args)
+    in_source(nvm, &sites::BUILD_MAKE_INSTALL, make_program, &make_args)
 }
 
 /// Whether an installed version has what it needs to run: a `bin/node`

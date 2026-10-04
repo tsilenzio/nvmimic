@@ -1,6 +1,7 @@
 //! `nvm install-latest-npm` and `nvm reinstall-packages`.
 
 use crate::context::Nvm;
+use crate::nvm::complaint::{self, sites};
 use crate::nvm::{local, npm, tools};
 use crate::text::install as text;
 
@@ -62,16 +63,30 @@ pub fn reinstall_packages(nvm: &mut Nvm, command: &str, args: &[String]) -> i32 
 
     nvm.io.echo(&text::linking_from(&version));
     if !links.is_empty() {
-        for link in links.lines().filter(|link| !link.is_empty()) {
-            let dir = if link.starts_with('/') {
-                link.to_string()
+        // nvm splits the list at line breaks with `IFS`. zsh does not split
+        // a variable it expands, so there the whole list is one name.
+        let links: Vec<&str> = if nvm.dialect.is_zsh() {
+            vec![links]
+        } else {
+            links.lines().filter(|link| !link.is_empty()).collect()
+        };
+        for link in links {
+            let (dir, site) = if link.starts_with('/') {
+                (link.to_string(), &sites::LINK_ABSOLUTE)
             } else {
-                let root = tools::run(nvm, "npm", &["root", "-g"])
-                    .map(|ran| ran.text())
-                    .unwrap_or_default();
-                format!("{root}/../{link}")
+                let root = match complaint::cannot_start(nvm, "npm") {
+                    Some(why) => {
+                        let line = complaint::not_started(nvm, &sites::LINK_RELATIVE, "npm", why);
+                        nvm.io.err(&line);
+                        String::new()
+                    }
+                    None => tools::run(nvm, "npm", &["root", "-g"])
+                        .map(|ran| ran.text())
+                        .unwrap_or_default(),
+                };
+                (format!("{root}/../{link}"), &sites::LINK_RELATIVE)
             };
-            status = npm::link_in(nvm, &dir);
+            status = npm::link_in(nvm, &dir, site);
         }
     } else {
         nvm.io.echo(text::NO_LINKED_PACKAGES);

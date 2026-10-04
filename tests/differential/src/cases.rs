@@ -70,6 +70,10 @@ pub fn load_all() -> Vec<Case> {
     let only: Option<BTreeSet<String>> = std::env::var_os("NVMIMIC_PARITY_ONLY")
         .and_then(|file| fs::read_to_string(file).ok())
         .map(|text| text.lines().map(str::to_string).collect());
+    // A network pass holds only the suite tests that need the network.
+    if crate::mirror::network_pass() {
+        files.clear();
+    }
     files
         .iter()
         .map(|file| parse(file))
@@ -223,6 +227,17 @@ impl Plan {
             left,
             right,
             recordings,
+            one_shell: false,
+        }
+    }
+
+    /// Both sides run fresh and nothing is recorded: what nodejs.org serves
+    /// is not fixed the way the test mirror's files are.
+    pub fn network() -> Plan {
+        Plan {
+            left: Impl::Nvm,
+            right: Impl::Nvmimic,
+            recordings: Recordings::Unused,
             one_shell: false,
         }
     }

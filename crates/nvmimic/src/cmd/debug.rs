@@ -3,6 +3,7 @@
 //! the exit status is always 42.
 
 use crate::context::Nvm;
+use crate::nvm::complaint::{self, sites};
 use crate::nvm::{checksum, local, paths, platform, tools};
 use std::collections::BTreeMap;
 
@@ -85,16 +86,19 @@ pub fn run(nvm: &mut Nvm, command_info: &str) -> i32 {
         var(nvm, "NVM_IOJS_ORG_MIRROR")
     ));
 
-    // `${SHELL} --version`, with the value split into words.
+    // `${SHELL} --version`, with the value split into words. With `SHELL`
+    // empty the command word is `--version` itself, and the shell says what
+    // it thinks of that.
     let shell = var(nvm, "SHELL");
-    let mut words = shell.split_whitespace();
-    let shell_version = match words.next() {
-        Some(program) => {
-            let mut args: Vec<&str> = words.collect();
-            args.push("--version");
-            first_line(&printed(nvm, program, &args))
+    let mut words: Vec<&str> = shell.split_whitespace().collect();
+    words.push("--version");
+    let shell_version = match complaint::cannot_start(nvm, words[0]) {
+        Some(why) => {
+            let line = complaint::not_started(nvm, &sites::DEBUG_SHELL_VERSION, words[0], why);
+            nvm.io.err(&line);
+            String::new()
         }
-        None => String::new(),
+        None => first_line(&printed(nvm, words[0], &words[1..])),
     };
     nvm.io.err(&format!("shell version: '{shell_version}'"));
 
@@ -234,9 +238,14 @@ pub fn run(nvm: &mut Nvm, command_info: &str) -> i32 {
                 Some(found) => found,
                 None => format!("{} not found", args[0]),
             },
-            _ => tools::run_merged(nvm, program, args)
-                .map(|ran| ran.text())
-                .unwrap_or_default(),
+            // `2>&1` puts the shell's own complaint about a missing
+            // program into what is shown.
+            _ => match complaint::cannot_start(nvm, program) {
+                Some(why) => complaint::not_started(nvm, &sites::DEBUG_COMMAND, program, why),
+                None => tools::run_merged(nvm, program, args)
+                    .map(|ran| ran.text())
+                    .unwrap_or_default(),
+            },
         };
         let line = format!("{program} {}", args.join(" "));
         let output = shown(nvm, &output);

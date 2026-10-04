@@ -1,147 +1,67 @@
 //! npm, as `nvm use` sees it: its version and the npmrc settings nvm refuses.
 
+use super::complaint;
 use super::local;
 use super::paths::{self, tree_contains_path};
+use super::remembered::{self, Remembered, fingerprint};
 use crate::context::Nvm;
 use crate::text::install as text;
 use crate::text::messages;
 use crate::text::npm_ladder as ladder;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Size, both timestamps and the inode of a file, as text. Replacing a
-/// file changes at least one of them, even when the new copy keeps the old
-/// modified time, as files unpacked from an archive do.
-fn fingerprint(path: &Path) -> Option<String> {
-    use std::os::unix::fs::MetadataExt;
-    let meta = std::fs::metadata(path).ok()?;
-    Some(format!(
-        "{} {}.{} {}.{} {}",
-        meta.size(),
-        meta.mtime(),
-        meta.mtime_nsec(),
-        meta.ctime(),
-        meta.ctime_nsec(),
-        meta.ino()
-    ))
-}
-
-/// FNV-1a, to name a remembered answer after the files it belongs to.
-fn fnv1a(text: &str) -> u64 {
-    text.bytes().fold(0xcbf2_9ce4_8422_2325, |hash, byte| {
-        (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
-/// Where one remembered `npm --version` answer lives, and the line that has
-/// to match for it to still be true.
-struct Remembered {
-    file: PathBuf,
-    key: String,
-}
-
-impl Remembered {
-    /// `None` when the answer cannot be tied to files on disk: the `npm` on
-    /// `PATH` does not lead into a package named `npm` (Corepack's shim and
-    /// version-manager shims answer differently from one directory to the
-    /// next), or nvmimic is not installed in this `$NVM_DIR`.
-    fn locate(nvm: &Nvm, npm: &str) -> Option<Remembered> {
-        let own = Path::new(nvm.vars.get("NVM_DIR")).join(".nvmimic");
-        if !own.is_dir() {
+/// Where the answer of the `npm` at a path is remembered. `None` when the
+/// answer cannot be tied to files on disk: the path does not lead into a
+/// package named `npm` (Corepack's shim and version-manager shims answer
+/// differently from one directory to the next), or nothing is remembered in
+/// this `$NVM_DIR`.
+fn remembered_npm(nvm: &Nvm, npm: &str) -> Option<Remembered> {
+    let entry = std::fs::canonicalize(npm).ok()?;
+    let manifest = entry
+        .ancestors()
+        .skip(1)
+        .map(|dir| dir.join("package.json"))
+        .find(|path| path.is_file())?;
+    // npm starts with `#!/usr/bin/env node`, so the node on `PATH` is part
+    // of the answer. An npm too new for it prints no version.
+    let node = local::which_node(nvm, "node")
+        .and_then(|node| std::fs::canonicalize(node).ok())
+        .unwrap_or_default();
+    let subject = format!("{}\t{}", entry.display(), node.display());
+    let key = [
+        entry.display().to_string(),
+        fingerprint(&entry)?,
+        fingerprint(&manifest)?,
+        node.display().to_string(),
+        fingerprint(&node).unwrap_or_default(),
+        nvm.vars.get("NODE_OPTIONS").to_string(),
+    ];
+    let remembered = Remembered::new(nvm, "npm-version", &subject, &key)?;
+    if remembered.read().is_none() {
+        let package: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(manifest).ok()?).ok()?;
+        if package.get("name")?.as_str()? != "npm" {
             return None;
         }
-        let entry = std::fs::canonicalize(npm).ok()?;
-        let manifest = entry
-            .ancestors()
-            .skip(1)
-            .map(|dir| dir.join("package.json"))
-            .find(|path| path.is_file())?;
-        // npm starts with `#!/usr/bin/env node`, so the node on `PATH` is
-        // part of the answer. An npm too new for it prints no version.
-        let node = local::which_node(nvm, "node")
-            .and_then(|node| std::fs::canonicalize(node).ok())
-            .unwrap_or_default();
-        let key = [
-            entry.display().to_string(),
-            fingerprint(&entry)?,
-            fingerprint(&manifest)?,
-            node.display().to_string(),
-            fingerprint(&node).unwrap_or_default(),
-            nvm.vars.get("NODE_OPTIONS").replace(['\t', '\n'], " "),
-        ]
-        .join("\t");
-        let name = format!(
-            "{:016x}",
-            fnv1a(&format!("{}\t{}", entry.display(), node.display()))
-        );
-        let file = own.join("cache/npm-version").join(name);
-        let remembered = Remembered { file, key };
-        if remembered.read().is_none() {
-            let package: serde_json::Value =
-                serde_json::from_slice(&std::fs::read(manifest).ok()?).ok()?;
-            if package.get("name")?.as_str()? != "npm" {
-                return None;
-            }
-        }
-        Some(remembered)
     }
-
-    fn read(&self) -> Option<String> {
-        let text = std::fs::read_to_string(&self.file).ok()?;
-        let (key, version) = text.split_once('\n')?;
-        (key == self.key).then(|| version.trim_end_matches('\n').to_string())
-    }
-
-    /// Written beside its final name and renamed into place, so another
-    /// shell never reads half a file.
-    fn write(&self, version: &str) {
-        let Some(dir) = self.file.parent() else {
-            return;
-        };
-        if std::fs::create_dir_all(dir).is_err() {
-            return;
-        }
-        let temporary = self.file.with_extension(std::process::id().to_string());
-        if std::fs::write(&temporary, format!("{}\n{version}\n", self.key)).is_ok()
-            && std::fs::rename(&temporary, &self.file).is_err()
-        {
-            let _ = std::fs::remove_file(&temporary);
-        }
-    }
+    Some(remembered)
 }
 
 /// What `npm --version` prints for the `npm` the shell would run, found by
 /// scanning the caller's `PATH`. Printing nothing means there is no version.
 ///
 /// nvm runs npm every time. nvmimic runs it once and remembers the answer
-/// under `$NVM_DIR/.nvmimic/cache/npm-version/` until npm's entry file, its
-/// `package.json`, the node on `PATH` or `NODE_OPTIONS` changes.
-/// An answer that came with a failing
-/// status or was empty is not remembered.
+/// until npm's entry file, its `package.json`, the node on `PATH` or
+/// `NODE_OPTIONS` changes.
 pub fn npm_version(nvm: &Nvm) -> Option<String> {
     let npm = paths::which(nvm.vars.get("PATH"), "npm")?;
-    let remembered = Remembered::locate(nvm, &npm);
+    let remembered = remembered_npm(nvm, &npm);
     if let Some(version) = remembered.as_ref().and_then(Remembered::read) {
         return Some(version);
     }
-    let mut command = std::process::Command::new(&npm);
-    command
-        .arg("--version")
-        .env_clear()
-        .envs(nvm.vars.exported())
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-    if !nvm.vars.get("PWD").is_empty() {
-        command.current_dir(nvm.vars.get("PWD"));
-    }
-    let output = command.output().ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    let version = text.trim_end_matches('\n').to_string();
-    if let Some(remembered) = remembered
-        && output.status.success()
-        && !version.is_empty()
-        && !version.contains('\n')
-    {
-        remembered.write(&version);
+    let (output, version) = remembered::ask_version(nvm, &npm)?;
+    if let Some(remembered) = remembered {
+        remembered.keep(&output, &version);
     }
     Some(version)
 }
@@ -188,7 +108,7 @@ pub fn die_on_prefix(nvm: &mut Nvm, delete_prefix: bool, command: &str, version_
     let prefix = nvm.vars.get("PREFIX").to_string();
     if !prefix.is_empty() {
         let node = local::which_node(nvm, "node")
-            .and_then(|node| local::binary_version(&node))
+            .and_then(|node| local::binary_version(nvm, &node))
             .unwrap_or_default();
         let node_dir = paths::version_path(nvm, &node).unwrap_or_default();
         if node_dir != prefix {
@@ -310,18 +230,25 @@ fn run_npm(nvm: &mut Nvm, args: &[&str]) -> i32 {
 }
 
 /// `(nvm_cd <dir> && npm link)`: links the package in a directory into the
-/// active version's global packages. Returns 1 when the directory cannot
-/// be entered.
-pub fn link_in(nvm: &mut Nvm, dir: &str) -> i32 {
-    if !Path::new(dir).is_dir() {
-        return 1;
+/// active version's global packages. When the directory cannot be entered
+/// or there is no npm, the shell's own complaint is printed and its status
+/// returned. `site` is the line of `nvm.sh` this stands for.
+pub fn link_in(nvm: &mut Nvm, dir: &str, site: &complaint::Site) -> i32 {
+    if let Some(reason) = complaint::cannot_enter(dir) {
+        let (line, status) = complaint::cd_failed(nvm, dir, &reason);
+        nvm.io.err(&line);
+        return status;
     }
     match super::tools::command(nvm, "npm") {
         Some(mut command) => {
             command.arg("link").current_dir(dir).env("PWD", dir);
             super::tools::run_through(nvm, command)
         }
-        None => 127,
+        None => {
+            let line = complaint::not_started(nvm, site, "npm", complaint::CannotStart::NotFound);
+            nvm.io.err(&line);
+            127
+        }
     }
 }
 

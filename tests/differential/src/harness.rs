@@ -200,7 +200,12 @@ impl Default for Options {
         let seconds = std::env::var("NVMIMIC_PARITY_TIMEOUT")
             .ok()
             .and_then(|value| value.parse().ok())
-            .unwrap_or(120);
+            // A network pass downloads real releases the first time.
+            .unwrap_or(if crate::mirror::network_pass() {
+                900
+            } else {
+                120
+            });
         Options {
             timeout: Duration::from_secs(seconds),
             count_launches: false,
@@ -317,9 +322,15 @@ impl World {
             body,
             plain_files,
         } = run;
-        let mirror = match plain_files {
-            true => format!("{}{}", self.mirror.url, crate::mirror::PLAIN),
-            false => self.mirror.url.trim_end_matches('/').to_string(),
+        let network = crate::mirror::network_pass();
+        let mirror = match (network, plain_files) {
+            (true, _) => format!("{}{}", self.mirror.url, crate::mirror::REAL),
+            (false, true) => format!("{}{}", self.mirror.url, crate::mirror::PLAIN),
+            (false, false) => self.mirror.url.trim_end_matches('/').to_string(),
+        };
+        let iojs_mirror = match network {
+            true => format!("{}{}", self.mirror.url, crate::mirror::REAL_IOJS),
+            false => format!("{mirror}/iojs"),
         };
         let started = Instant::now();
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -402,7 +413,7 @@ impl World {
             )
             .env("TERM", "dumb")
             .env("NVM_NODEJS_ORG_MIRROR", &mirror)
-            .env("NVM_IOJS_ORG_MIRROR", format!("{mirror}/iojs"))
+            .env("NVM_IOJS_ORG_MIRROR", &iojs_mirror)
             .env("DIFF_STATE", &state_file)
             .current_dir(&work);
         if shell.name == "zsh" {
@@ -459,7 +470,8 @@ impl World {
     /// Replaces sandbox-specific paths so the two sides can be compared.
     fn normalize(&self, text: &str, side: &Path) -> String {
         let side = side.display().to_string();
-        text.replace(&format!("{side}/home/.nvm/versions/node/"), "<install>/")
+        let text = text
+            .replace(&format!("{side}/home/.nvm/versions/node/"), "<install>/")
             .replace(&format!("{side}/home"), "<home>")
             .replace(&format!("{side}/bin"), "<bin>")
             .replace(&side, "<side>")
@@ -467,8 +479,41 @@ impl World {
             .replace(self.mirror.url.trim_end_matches('/'), "<mirror>")
             .replace(&self.mirror.root.display().to_string(), "<mirror-files>")
             // macOS reports temp paths both with and without the /private prefix.
-            .replace("/private<", "<")
+            .replace("/private<", "<");
+        match crate::mirror::network_pass() {
+            true => settle_progress(&text),
+            false => text,
+        }
     }
+}
+
+/// curl redraws its progress bar as a download goes, and how often depends
+/// on how fast the bytes arrive. Over the real network the two sides never
+/// redraw alike, so a line of redraws is cut down to the last one.
+fn settle_progress(text: &str) -> String {
+    // Two styles: `####   23.9%` when curl knows the size, and a moving
+    // `-=O=-  #  #` while it does not.
+    let is_bar = |part: &str| {
+        part.chars()
+            .all(|c| "#=O- .%".contains(c) || c.is_ascii_digit())
+    };
+    let mut lines = Vec::new();
+    for line in text.split('\n') {
+        let parts: Vec<&str> = line
+            .split('\r')
+            .filter(|part| !part.trim().is_empty())
+            .collect();
+        match parts.last() {
+            // A redraw that ended in a line break of its own leaves a line
+            // holding nothing but the return to its start.
+            None if line.contains('\r') => {}
+            Some(last) if line.contains('\r') && parts.iter().all(|part| is_bar(part)) => {
+                lines.push(*last)
+            }
+            _ => lines.push(line),
+        }
+    }
+    lines.join("\n")
 }
 
 /// Runs real nvm through a case's sourcing and setup and stops there. What

@@ -146,10 +146,30 @@ pub fn skipped() -> Vec<(String, String)> {
         .collect()
 }
 
-fn is_skipped(skipped: &[(String, String)], path: &str) -> bool {
-    skipped.iter().any(|(_, entry)| {
-        entry == path || (entry.ends_with('/') && path.starts_with(entry.as_str()))
-    })
+/// The reason a test is on the skip list, if it is.
+fn skip_reason<'a>(skipped: &'a [(String, String)], path: &str) -> Option<&'a str> {
+    // A line naming the test itself wins over one naming its directory.
+    skipped
+        .iter()
+        .find(|(_, entry)| entry == path)
+        .or_else(|| {
+            skipped
+                .iter()
+                .find(|(_, entry)| entry.ends_with('/') && path.starts_with(entry.as_str()))
+        })
+        .map(|(reason, _)| reason.as_str())
+}
+
+/// The reason given to tests that install real Node releases. A network
+/// pass runs exactly these, and every other run leaves them out.
+const REAL_NODE: &str = "real-node";
+
+/// Whether a test belongs in this run.
+fn runs_now(skipped: &[(String, String)], path: &str) -> bool {
+    match (crate::mirror::network_pass(), skip_reason(skipped, path)) {
+        (true, reason) => reason == Some(REAL_NODE),
+        (false, reason) => reason.is_none(),
+    }
 }
 
 /// Every test in the vendored suite, skipped ones included, sorted by path.
@@ -186,7 +206,7 @@ pub fn cases() -> Vec<Case> {
     let mut ids = BTreeSet::new();
     all_tests()
         .into_iter()
-        .filter(|path| !is_skipped(&skipped, path))
+        .filter(|path| runs_now(&skipped, path))
         .map(|path| {
             let text = fs::read_to_string(tree().join(&path)).unwrap_or_default();
             let traces = text.lines().any(|line| {

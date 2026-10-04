@@ -4,13 +4,15 @@
 
 use crate::cmd;
 use crate::context::Nvm;
+use crate::nvm::complaint;
 use crate::nvm::{
     alias, artifact, checksum, colors, local, lock, npm, nvmrc, output, paths, platform, remote,
     version,
 };
 
-/// Runs helper `name`. `fd3` receives what nvm writes to file descriptor 3.
-pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str)) -> i32 {
+/// Runs helper `name`. `fd3` receives what nvm writes to file descriptor 3
+/// and says whether that descriptor was open.
+pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str) -> bool) -> i32 {
     let arg = |i: usize| args.get(i).map_or("", String::as_str);
     let print = |nvm: &mut Nvm, (text, status): (String, i32)| {
         if !text.is_empty() {
@@ -24,10 +26,17 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
         "nvm_rc_version" => {
             let silent = nvm.vars.get("NVM_SILENT") == "1";
             let (version, status) = nvmrc::rc_version(nvm, silent);
-            if let Some(version) = version {
-                fd3(&format!("{version}\n"));
+            // nvm ends with `nvm_echo "${NVM_RC_VERSION}" >&3`. Called on
+            // its own, nothing has opened descriptor 3, and the shell says so.
+            match version {
+                Some(version) if !fd3(&format!("{version}\n")) => {
+                    let (line, status) =
+                        complaint::bad_descriptor(nvm, &complaint::sites::RC_VERSION_FD3, 3);
+                    nvm.io.err(&line);
+                    status
+                }
+                _ => status,
             }
-            status
         }
         "nvm_ls" => {
             let result = local::ls(nvm, arg(0));

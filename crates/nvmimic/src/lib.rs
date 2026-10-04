@@ -29,6 +29,8 @@ pub struct Caller {
     /// What the shell found out about the programs `nvm debug` reports on,
     /// see [`context::Nvm::command_info`].
     pub command_info: String,
+    /// How the shell names itself in its own error messages.
+    pub shell: context::CallerShell,
     /// Whether `out` and `err` passed to [`run`] are the process's own
     /// stdout and stderr. Programs nvm starts (curl with its progress bar,
     /// npm, make) then write to the terminal directly.
@@ -49,7 +51,7 @@ pub fn run(
     args: &[String],
     out: &mut dyn Write,
     err: &mut dyn Write,
-    fd3: &mut dyn FnMut(&str),
+    fd3: &mut dyn FnMut(&str) -> bool,
 ) -> Outcome {
     let mut nvm = Nvm {
         vars: caller.vars,
@@ -64,6 +66,7 @@ pub fn run(
         backend,
         aliases: std::rc::Rc::new(caller.aliases),
         command_info: std::rc::Rc::new(caller.command_info),
+        caller_shell: std::rc::Rc::new(caller.shell),
     };
     let status = functions::call(&mut nvm, function, args, fd3);
     nvm.io.flush();

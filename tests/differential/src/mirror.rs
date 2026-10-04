@@ -14,6 +14,16 @@
 //! writing through a symlink would change the shared copy for everyone.
 //! [`Mirror::verify`] checks after a run that the shared copies are untouched.
 //!
+//! Every release also has a source archive, for `nvm install -s`. Its
+//! `configure` and `Makefile` are stand-ins: configuring notes where to
+//! install, and `make install` copies a ready tree there. A case can make
+//! either step fail by exporting `NVMIMIC_TEST_BUILD_FAILS=configure` or
+//! `=make`.
+//!
+//! In a network pass (`cargo xtask parity --network`) the mirror also
+//! answers under `/real` and `/real-iojs` with the files nodejs.org and
+//! iojs.org serve, fetched once each and kept in `target/parity-network/`.
+//!
 //! The files are built once and kept in `target/parity-mirror/`, so every
 //! run serves the very same archives. Recorded outcomes of real nvm (see
 //! [`crate::golden`]) hold the hashes of downloaded archives, and those only
@@ -95,6 +105,7 @@ fn files(version: &str) -> Vec<String> {
             Some(arch) => format!("osx-{arch}-tar"),
             None => platform.to_string(),
         })
+        .chain(["src".to_string()])
         .collect()
 }
 
@@ -192,7 +203,7 @@ impl Mirror {
         let mut shared = Vec::new();
         for release in RELEASES {
             let top = root.join("shared").join(format!("v{}", release.version));
-            for script in SCRIPTS {
+            for script in SCRIPTS.into_iter().chain([CONFIGURE]) {
                 let path = top.join(script);
                 let mode = mode_of(&path);
                 shared.push((path.clone(), sha256(&path), mode));
@@ -264,7 +275,10 @@ fn serve(mut stream: TcpStream, dist: &Path, log: &Mutex<Vec<String>>) {
         .trim_start_matches('/');
     log.lock().unwrap().push(format!("{method} /{path}"));
 
-    let file = dist.join(path);
+    let file = match real_origin(path) {
+        Some(url) if network_pass() => fetched(&url),
+        _ => dist.join(path),
+    };
     let (code, reason, body) = if !path.contains("..") && file.is_file() {
         (200, "OK", fs::read(&file).unwrap())
     } else {
@@ -280,6 +294,86 @@ fn serve(mut stream: TcpStream, dist: &Path, log: &Mutex<Vec<String>>) {
         let _ = stream.write_all(&body);
     }
 }
+
+/// Whether this is a network pass, where nvm's tests that install real Node
+/// releases run against what nodejs.org serves.
+pub fn network_pass() -> bool {
+    std::env::var_os("NVMIMIC_PARITY_NETWORK").is_some()
+}
+
+/// The path under the mirror that stands for nodejs.org/dist.
+pub const REAL: &str = "real";
+/// The same for iojs.org/dist.
+pub const REAL_IOJS: &str = "real-iojs";
+
+/// The address on the internet that a path under `/real` or `/real-iojs`
+/// stands for.
+fn real_origin(path: &str) -> Option<String> {
+    if let Some(rest) = path.strip_prefix("real-iojs/") {
+        return Some(format!("https://iojs.org/dist/{rest}"));
+    }
+    path.strip_prefix("real/")
+        .map(|rest| format!("https://nodejs.org/dist/{rest}"))
+}
+
+/// Where a file from the internet is kept, fetching it with curl the first
+/// time it is asked for. One download at a time. An address that has no
+/// file is remembered too, so it is asked for once.
+fn fetched(url: &str) -> PathBuf {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let _turn = ONE_AT_A_TIME.lock().unwrap();
+    let kept = crate::harness::repo_root()
+        .join("target/parity-network")
+        .join(url.trim_start_matches("https://"));
+    let missing = kept.with_extension("nvmimic-missing");
+    if kept.is_file() || missing.is_file() || url.contains("..") {
+        return kept;
+    }
+    fs::create_dir_all(kept.parent().unwrap()).unwrap();
+    let partial = kept.with_extension("nvmimic-partial");
+    let status = Command::new("curl")
+        .args(["--fail", "--silent", "--show-error", "--location"])
+        .args(["--max-time", "900", "--output"])
+        .arg(&partial)
+        .arg(url)
+        .status();
+    if status.is_ok_and(|status| status.success()) {
+        fs::rename(&partial, &kept).unwrap();
+    } else {
+        let _ = fs::remove_file(&partial);
+        fs::write(&missing, "").unwrap();
+    }
+    kept
+}
+
+/// The stand-in for Node's `configure` in a source archive.
+const CONFIGURE: &str = "configure";
+
+const CONFIGURE_SCRIPT: &str = r#"#!/bin/sh
+echo "configure: $*"
+if [ "${NVMIMIC_TEST_BUILD_FAILS-}" = configure ]; then
+  echo "configure: failing because the test asked" >&2
+  exit 3
+fi
+for option in "$@"; do
+  case "$option" in
+    --prefix=*) echo "PREFIX = ${option#--prefix=}" > config.mk ;;
+  esac
+done
+"#;
+
+/// The stand-in for Node's `Makefile`. Building prints the compilers it was
+/// given, and installing copies the ready tree packed beside it.
+const MAKEFILE: &str = "include config.mk\n\
+\n\
+all:\n\
+\t@echo \"make: building with CC=$(CC) CXX=$(CXX)\"\n\
+\t@if [ \"$$NVMIMIC_TEST_BUILD_FAILS\" = make ]; then echo 'make: failing because the test asked' >&2; exit 2; fi\n\
+\n\
+install: all\n\
+\t@echo \"make: installing\"\n\
+\t@mkdir -p \"$(PREFIX)\"\n\
+\t@cp -R tree/. \"$(PREFIX)/\"\n";
 
 const INDEX_HEADER: &str =
     "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\tlts\tsecurity\n";
@@ -308,7 +402,8 @@ fn build_dist(dist: &Path, scratch: &Path, shared: Option<&Path>) {
             build_tree(&shared, &version, None);
             // Read-only, so a case that writes through a symlink fails
             // instead of changing what every other sandbox runs.
-            for script in SCRIPTS {
+            write_script(&shared.join(CONFIGURE), CONFIGURE_SCRIPT);
+            for script in SCRIPTS.into_iter().chain([CONFIGURE]) {
                 use std::os::unix::fs::PermissionsExt;
                 fs::set_permissions(shared.join(script), fs::Permissions::from_mode(0o555))
                     .unwrap();
@@ -317,10 +412,26 @@ fn build_dist(dist: &Path, scratch: &Path, shared: Option<&Path>) {
         });
 
         let mut sums = String::new();
-        for platform in platforms(release.version) {
-            let name = format!("node-{version}-{platform}");
+        let source = format!("node-{version}");
+        let builds = platforms(release.version)
+            .iter()
+            .map(|platform| format!("node-{version}-{platform}"));
+        for name in builds.chain([source.clone()]) {
             let tree = scratch.join("trees").join(&name);
-            build_tree(&tree.join(&name), &version, shared.as_deref());
+            let top = tree.join(&name);
+            if name == source {
+                build_tree(&top.join("tree"), &version, shared.as_deref());
+                fs::write(top.join("Makefile"), MAKEFILE).unwrap();
+                match &shared {
+                    Some(shared) => {
+                        std::os::unix::fs::symlink(shared.join(CONFIGURE), top.join(CONFIGURE))
+                            .unwrap()
+                    }
+                    None => write_script(&top.join(CONFIGURE), CONFIGURE_SCRIPT),
+                }
+            } else {
+                build_tree(&top, &version, shared.as_deref());
+            }
 
             for (ext, flag) in [("tar.gz", "-czf"), ("tar.xz", "-cJf")] {
                 let archive = dir.join(format!("{name}.{ext}"));

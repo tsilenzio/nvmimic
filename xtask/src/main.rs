@@ -19,6 +19,7 @@ tasks:
   parity --all-shells               the same, with every case under every shell
   parity --changed                  the everyday run on the cases a change can affect
   parity --full [--record]          run real nvm and nvmimic side by side on everything
+  parity --network                  run nvm's tests that install real Node, against nodejs.org
   parity covers                     measure what each case runs in nvm.sh, write `# covers:`
   parity determinism [--record]     run real nvm against itself on every case
   parity launches                   check everyday commands start only nvmimic
@@ -37,6 +38,10 @@ is the run for releases and for moving the nvm pin. --changed compares the
 source files with the last run that passed and runs the cases whose `# covers:`
 headers name an nvm function ported in a changed file.
 --record rewrites cases/KNOWN_FAILING or cases/NONDETERMINISTIC from a full run.
+--network runs only the tests of nvm's own suite that download real Node
+releases. Each file is fetched from nodejs.org once and kept in
+target/parity-network/. Start with one test (NVMIMIC_CASES) and read the
+`gatekeeper guard:` line before running more.
 NVMIMIC_CASES=VER,DSP-02 limits a run to cases whose id starts with a prefix.";
 
 fn main() -> ExitCode {
@@ -92,7 +97,8 @@ fn parity(args: &[&str]) -> ExitCode {
             }
         }
     }
-    let run = if record || args.contains(&"--full") {
+    let network = compares && args.contains(&"--network");
+    let run = if record || network || args.contains(&"--full") {
         "full"
     } else if args.contains(&"--all-shells") {
         "all-shells"
@@ -116,9 +122,11 @@ fn parity(args: &[&str]) -> ExitCode {
         record,
         run,
         only.as_deref(),
+        network,
     );
-    // A run narrowed by hand says nothing about the cases it left out.
-    if ok && compares && env::var_os("NVMIMIC_CASES").is_none() {
+    // A run narrowed by hand says nothing about the cases it left out, and
+    // neither does a network pass.
+    if ok && compares && !network && env::var_os("NVMIMIC_CASES").is_none() {
         changed::mark_passed();
     }
     if ok {
@@ -129,10 +137,10 @@ fn parity(args: &[&str]) -> ExitCode {
 }
 
 fn cargo(args: &[&str]) -> bool {
-    cargo_with(args, false, "full", None)
+    cargo_with(args, false, "full", None, false)
 }
 
-fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>) -> bool {
+fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>, network: bool) -> bool {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut command = Command::new(cargo);
     command
@@ -145,6 +153,10 @@ fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>) -> bo
     match only {
         Some(file) => command.env("NVMIMIC_PARITY_ONLY", file),
         None => command.env_remove("NVMIMIC_PARITY_ONLY"),
+    };
+    match network {
+        true => command.env("NVMIMIC_PARITY_NETWORK", "1"),
+        false => command.env_remove("NVMIMIC_PARITY_NETWORK"),
     };
     command.status().is_ok_and(|status| status.success())
 }

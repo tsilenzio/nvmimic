@@ -139,6 +139,20 @@ pub struct Nvm<'a> {
     /// nvm's `nvm_command_info` for the programs `nvm debug` reports on, as
     /// the calling shell answered it. See `cmd::debug`.
     pub command_info: std::rc::Rc<String>,
+    pub caller_shell: std::rc::Rc<CallerShell>,
+}
+
+/// What the calling shell goes by when it reports an error of its own. See
+/// `nvm::complaint`.
+#[derive(Default)]
+pub struct CallerShell {
+    /// `$0`: the shell's name or the script it is running.
+    pub arg0: String,
+    /// The path `nvm.sh` was sourced by, which bash names in its messages.
+    /// Empty in other shells.
+    pub script: String,
+    /// Whether the shell is reading commands from a person.
+    pub interactive: bool,
 }
 
 /// A variable's value before a `local` declaration hid it.
@@ -245,6 +259,7 @@ impl<'a> Nvm<'a> {
             let direct_err = self.io.direct_err;
             let aliases = self.aliases.clone();
             let command_info = self.command_info.clone();
+            let caller_shell = self.caller_shell.clone();
             let mut err = ErrForward(&mut self.io);
             let mut inner = Nvm {
                 vars: self.vars.snapshot(),
@@ -266,6 +281,7 @@ impl<'a> Nvm<'a> {
                 backend: self.backend,
                 aliases,
                 command_info,
+                caller_shell,
             };
             body(&mut inner);
         }

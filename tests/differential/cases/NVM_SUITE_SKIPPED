@@ -10,14 +10,18 @@
 #                  outside the shell cannot do
 #   mock-tool      redefines an outside program (clang, wget) as a shell
 #                  function or alias and expects nvm to run that instead
+#   hook-function  names a shell function as NVM_INSTALL_THIRD_PARTY_HOOK,
+#                  which a program outside the shell cannot call
 #   network        needs the real internet or Docker
-#   shell-error    empties PATH and compares stderr, where real nvm's shell
-#                  reports the missing program with nvm.sh's file name and
-#                  line number ("nvm.sh: line 2336: uname: command not
-#                  found"). nvmimic has no such line to name
 #   real-node      installs real Node releases from nodejs.org (0.8 to 9.x and
 #                  io.js, some built from source), which the offline test
-#                  mirror does not hold
+#                  mirror does not hold. `cargo xtask parity --network` runs
+#                  these and nothing else
+#
+# A line that names one test wins over a line that names its directory, so
+# the six tests under the real-node directories that also redefine one of
+# nvm's functions are listed below as mock-internal and stay out of the
+# network pass too.
 installer: install_script/
 fixture: mocks/
 fixture: fixtures/
@@ -26,6 +30,12 @@ real-node: slow/
 real-node: sourcing/
 real-node: installation_node/
 real-node: installation_iojs/
+mock-internal: installation_node/install from binary with binary flag set
+mock-internal: installation_node/install from source without V8 snapshot for ARM
+mock-internal: slow/nvm use/Running 'nvm use' calls 'nvm_die_on_prefix'
+mock-internal: slow/nvm_get_latest/nvm_get_latest
+mock-internal: sourcing/Sourcing nvm.sh should use the default if available and no nvm node is loaded
+mock-internal: sourcing/Sourcing nvm.sh with --install should install the default
 mock-internal: fast/Aliases/nvm_list_aliases calls nvm_get_colors
 mock-internal: fast/Aliases/nvm_list_aliases propagates NVM_HAS_COLORS through pipeline
 mock-internal: fast/Aliases/nvm_list_aliases works with LTS aliases
@@ -74,7 +84,7 @@ mock-internal: fast/Unit tests/nvm_remote_versions propagates iojs failure
 mock-internal: fast/Unit tests/nvm_use_if_needed
 mock-internal: fast/Unit tests/nvm_version
 mock-internal: fast/Unit tests/nvm version-remote
+hook-function: installation_node/install hook
 mock-tool: fast/Unit tests/nvm_clang_version
 mock-tool: fast/Unit tests/nvm_command_info
 network: fast/Unit tests/nvm_download
-shell-error: fast/Unit tests/nvm_supports_xz

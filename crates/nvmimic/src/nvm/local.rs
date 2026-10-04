@@ -1,77 +1,44 @@
 //! Installed versions: listing them, resolving a pattern to one, and finding
-//! the active one, all without running node.
+//! the active one. Node itself is asked for its version once per binary.
 
 use super::alias;
 use super::nvmrc;
 use super::paths::{self, tree_contains_path};
 use super::posix_re;
+use super::remembered::{self, Remembered};
 use super::version::{self, IOJS_PREFIX, NODE_PREFIX};
 use crate::backend::DirKind;
 use crate::context::Nvm;
 use std::cmp::Ordering;
-use std::path::{Path, PathBuf};
 
 /// The `node` (or `iojs`) that `command which` finds on `PATH`.
 pub fn which_node(nvm: &Nvm, name: &str) -> Option<String> {
     paths::which(nvm.vars.get("PATH"), name)
 }
 
-/// The version a Node binary prints for `--version`, read from files beside
-/// it where possible: `include/node/node_version.h`, which official, nvm,
-/// Homebrew and mise installs all ship, or else the install directory's name
-/// when it is one of nvm's.
-///
-/// When neither exists, as for a hand-made `node` script, this runs the
-/// binary. That is the one place an everyday command may start a program
-/// other than nvmimic.
-pub fn binary_version(binary: &str) -> Option<String> {
-    let resolved = std::fs::canonicalize(binary).unwrap_or_else(|_| PathBuf::from(binary));
-    let prefix = resolved.parent().and_then(Path::parent);
-    if let Some(version) = prefix.and_then(header_version) {
+/// What a Node binary prints for `--version`, or `None` when it cannot be
+/// started. nvm runs the binary every time. nvmimic runs it once and
+/// remembers the answer until the binary's file or `NODE_OPTIONS` changes.
+/// A binary that fails is asked again on every call, so one that cannot run
+/// on this machine is seen as nvm sees it: as printing nothing.
+pub fn binary_version(nvm: &Nvm, binary: &str) -> Option<String> {
+    let remembered = std::fs::canonicalize(binary).ok().and_then(|resolved| {
+        let subject = resolved.display().to_string();
+        let key = [
+            subject.clone(),
+            remembered::fingerprint(&resolved)?,
+            nvm.vars.get("NODE_OPTIONS").to_string(),
+        ];
+        Remembered::new(nvm, "node-version", &subject, &key)
+    });
+    if let Some(version) = remembered.as_ref().and_then(Remembered::read) {
         return Some(version);
     }
-    if let Some(name) = prefix
-        .and_then(Path::file_name)
-        .and_then(|name| name.to_str())
-    {
-        let looks_like_version = name.starts_with('v')
-            && name[1..].split('.').count() == 3
-            && name[1..]
-                .split('.')
-                .all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()));
-        if looks_like_version {
-            return Some(name.to_string());
-        }
+    let (output, version) = remembered::ask_version(nvm, binary)?;
+    if let Some(remembered) = remembered {
+        remembered.keep(&output, &version);
     }
-    let output = std::process::Command::new(binary)
-        .arg("--version")
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
-        .ok()?;
-    let text = String::from_utf8_lossy(&output.stdout);
-    Some(text.trim_end_matches('\n').to_string())
-}
-
-fn header_version(prefix: &Path) -> Option<String> {
-    let header = std::fs::read_to_string(prefix.join("include/node/node_version.h")).ok()?;
-    let define = |name: &str| {
-        header.lines().find_map(|line| {
-            let rest = line.trim_start().strip_prefix("#define ")?.trim_start();
-            let value = rest.strip_prefix(name)?;
-            value
-                .starts_with([' ', '\t'])
-                .then(|| value.trim().to_string())
-        })
-    };
-    let major = define("NODE_MAJOR_VERSION")?;
-    let minor = define("NODE_MINOR_VERSION")?;
-    let patch = define("NODE_PATCH_VERSION")?;
-    let tag = match define("NODE_VERSION_IS_RELEASE").as_deref() {
-        Some("0") => "-pre",
-        _ => "",
-    };
-    Some(format!("v{major}.{minor}.{patch}{tag}"))
+    Some(version)
 }
 
 /// nvm: nvm_ls_current
@@ -81,15 +48,15 @@ pub fn ls_current(nvm: &Nvm) -> String {
     };
     let iojs_dir = nvm.backend.version_dir(&nvm.vars, DirKind::Iojs);
     if tree_contains_path(&iojs_dir, &node_path) == Some(true) {
-        let iojs = which_node(nvm, "iojs").and_then(|path| binary_version(&path));
+        let iojs = which_node(nvm, "iojs").and_then(|path| binary_version(nvm, &path));
         return version::add_iojs_prefix(&iojs.unwrap_or_default());
     }
     let root = nvm.backend.root(&nvm.vars);
     if tree_contains_path(&root, &node_path) == Some(true) {
-        return match binary_version(&node_path) {
+        return match binary_version(nvm, &node_path) {
             Some(v) if v == "v0.6.21-pre" => "v0.6.21".to_string(),
-            Some(v) => v,
-            None => "none".to_string(),
+            Some(v) if !v.is_empty() => v,
+            _ => "none".to_string(),
         };
     }
     "system".to_string()
@@ -113,7 +80,7 @@ pub fn has_system_iojs(nvm: &Nvm) -> bool {
 /// What `node -v` prints for the system node, outside nvm's `PATH` entries.
 pub fn system_node_version(nvm: &Nvm) -> String {
     paths::which(&deactivated_path(nvm), "node")
-        .and_then(|node| binary_version(&node))
+        .and_then(|node| binary_version(nvm, &node))
         .unwrap_or_default()
 }
 

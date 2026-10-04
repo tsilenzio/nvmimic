@@ -83,6 +83,15 @@ fn main() -> ExitCode {
         _ => ("nvm".to_string(), args.clone()),
     };
 
+    // nvm's code runs inside the shell, and bash and dash end a shell that
+    // writes to a pipe nobody reads, as in `nvm install 20 | head -1`. Rust
+    // programs ignore that signal unless told otherwise. zsh carries on, so
+    // nvmimic does too there.
+    if dialect() != Dialect::Zsh {
+        // SAFETY: sets a signal back to its default before any thread starts.
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    }
+
     let caller = Caller {
         vars: caller_vars(),
         dialect: dialect(),
@@ -93,6 +102,11 @@ fn main() -> ExitCode {
             .map(str::to_string)
             .collect(),
         command_info: env::var("__NVMIMIC_COMMAND_INFO").unwrap_or_default(),
+        shell: nvmimic::context::CallerShell {
+            arg0: env::var("__NVMIMIC_ARG0").unwrap_or_default(),
+            script: env::var("__NVMIMIC_SOURCE").unwrap_or_default(),
+            interactive: env::var("__NVMIMIC_OPTS").is_ok_and(|options| options.contains('i')),
+        },
         direct_output: true,
     };
     let mut stdout = std::io::stdout();
@@ -112,7 +126,7 @@ fn main() -> ExitCode {
         .ok()
         .and_then(|value| value.parse::<i32>().ok())
     {
-        write_fd(fd, &shell::render(&outcome.effects));
+        let _ = write_fd(fd, &shell::render(&outcome.effects));
     }
     ExitCode::from(outcome.status.rem_euclid(256) as u8)
 }
@@ -230,14 +244,17 @@ fn is_tty(fd: i32) -> bool {
 }
 
 /// Writes to a descriptor the shell opened for us, if it is open.
-fn write_fd(fd: i32, text: &str) {
+/// Writes to a file descriptor the shell handed over. `false` when it is
+/// not open.
+fn write_fd(fd: i32, text: &str) -> bool {
     let mut bytes = text.as_bytes();
     while !bytes.is_empty() {
         // SAFETY: the pointer and length describe `bytes` for the whole call.
         let written = unsafe { libc::write(fd, bytes.as_ptr().cast(), bytes.len()) };
         if written <= 0 {
-            return;
+            return std::io::Error::last_os_error().raw_os_error() != Some(libc::EBADF);
         }
         bytes = &bytes[written as usize..];
     }
+    true
 }

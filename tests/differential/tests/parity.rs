@@ -15,6 +15,9 @@ fn recording() -> bool {
 /// real nvm and runs shell-independent cases under one shell, `all-shells`
 /// replays and runs every shell, and anything else is the full run.
 fn plan() -> Plan {
+    if nvmimic_parity::mirror::network_pass() {
+        return Plan::network();
+    }
     match std::env::var("NVMIMIC_PARITY_RUN").as_deref() {
         Ok("everyday") if !recording() => Plan::everyday(true),
         Ok("all-shells") if !recording() => Plan::everyday(false),
@@ -235,7 +238,8 @@ fn no_known_failures() {
 }
 
 /// Everyday commands start nvmimic once each and nothing else: no node, no
-/// sed or awk, and npm only when its version is not remembered yet.
+/// sed or awk, and node and npm only when their versions are not
+/// remembered yet.
 #[test]
 #[ignore = "full run, use `cargo xtask parity launches`"]
 fn everyday_commands_launch_only_nvmimic() {
@@ -279,8 +283,8 @@ fn everyday_commands_launch_only_nvmimic() {
             );
         }
 
-        // With nothing remembered, the first `nvm use` asks npm for its
-        // version and the second one reuses the answer.
+        // With nothing remembered, the first `nvm use` asks node and npm for
+        // their versions and the second one reuses the answers.
         let outcome = world.run_with(
             Impl::Nvmimic,
             &shell,
@@ -289,10 +293,11 @@ fn everyday_commands_launch_only_nvmimic() {
             "nvm use 24.15.0\nnvm use 24.15.0",
         );
         let npm = outcome.launches.iter().filter(|l| l.ends_with("/bin/npm"));
+        let node = outcome.launches.iter().filter(|l| l.ends_with("/bin/node"));
         let ours = outcome.launches.iter().filter(|l| *l == "nvmimic");
         assert!(
-            npm.count() == 1 && ours.count() == 2 && outcome.launches.len() == 3,
-            "{}: npm should run once for two `nvm use` calls, launched {:?}",
+            npm.count() == 1 && node.count() == 1 && ours.count() == 2,
+            "{}: node and npm should each run once for two `nvm use` calls, launched {:?}",
             shell.name,
             outcome.launches
         );

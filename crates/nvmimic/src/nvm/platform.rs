@@ -1,6 +1,7 @@
 //! Which operating system and processor this is, as nvm names them, and
 //! what each kind of Node release exists for.
 
+use super::complaint;
 use super::tools;
 use super::version;
 use crate::context::Nvm;
@@ -14,6 +15,13 @@ use std::path::Path;
 pub fn get_os(nvm: &mut Nvm) -> String {
     if let Some(os) = nvm.cache.borrow().os.clone() {
         return os;
+    }
+    // With no `uname` the shell complains every time nvm asks, so that
+    // answer is not kept.
+    if let Some(why) = complaint::cannot_start(nvm, "uname") {
+        let line = complaint::not_started(nvm, &complaint::sites::GET_OS_UNAME, "uname", why);
+        nvm.io.err(&line);
+        return String::new();
     }
     let os = find_os(nvm);
     nvm.cache.borrow_mut().os = Some(os.clone());

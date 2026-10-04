@@ -84,7 +84,7 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
             nvm.quiet(|nvm| deactivate::deactivate(nvm, silent));
             if !silent {
                 let iojs = local::which_node(nvm, "iojs")
-                    .and_then(|path| local::binary_version(&path))
+                    .and_then(|path| local::binary_version(nvm, &path))
                     .unwrap_or_default();
                 let npm = npm::print_npm_version(nvm);
                 nvm.io.echo(&messages::now_using_system_iojs(&iojs, &npm));
@@ -119,6 +119,9 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
         }
     };
     activate(nvm, &version_dir);
+    // Asks the newly active node for its version while a switch is being
+    // paid for anyway, so `nvm current` and the next shell start nothing.
+    local::ls_current(nvm);
 
     if nvm.vars.get("NVM_SYMLINK_CURRENT") == "true" {
         let current = format!("{}/current", nvm.vars.get("NVM_DIR"));

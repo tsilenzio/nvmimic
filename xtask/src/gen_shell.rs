@@ -241,6 +241,9 @@ __nvmimic_end
         __NVMIMIC_ALIASES="${{__nvmimic_aliases}}" \
         __NVMIMIC_COMMAND_INFO="${{__nvmimic_info}}" \
         __NVMIMIC_SHELL="${{__nvmimic_shell}}" \
+        __NVMIMIC_ARG0="$0" \
+        __NVMIMIC_SOURCE="${{BASH_SOURCE-}}" \
+        __NVMIMIC_OPTS="$-" \
         __NVMIMIC_FD=8 \
         command "${{NVM_DIR}}/.nvmimic/bin/nvm" __fn "$@" 8>&1 1>&9 9>&-
     )" || __nvmimic_rc=$?; }} 9>&1
