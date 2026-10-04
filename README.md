@@ -52,8 +52,9 @@ cargo build --release
 ./target/release/nvmimic self install
 ```
 
-`self install` sets nvmimic up for `$NVM_DIR` (usually `~/.nvm`). If nvm is
-already there, nvmimic takes it over: it keeps your Node versions, aliases and
+`self install` sets nvmimic up for `$NVM_DIR` (usually `~/.nvm`). You don't
+need nvm first. With no nvm on the machine, nvmimic makes that folder and
+you start from scratch. If nvm is already there, nvmimic takes it over: it keeps your Node versions, aliases and
 settings, moves nvm's own scripts into a backup folder, and offers to copy
 the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
@@ -82,8 +83,9 @@ If you use the `XDG_DATA_HOME`, `XDG_STATE_HOME` or `XDG_CACHE_HOME`
 settings, nvmimic follows them too. If something that isn't nvmimic already
 sits at `~/.local/bin/nvmimic`, `self install` stops and leaves it alone.
 
-`nvmimic self uninstall` puts nvm's scripts back and removes nvmimic. Add
-`--dry-run` to either one to see what it would do without changing anything.
+`nvmimic self uninstall` removes nvmimic. If it took over from an nvm, that
+nvm's scripts come back. Add `--dry-run` to either one to see what it would
+do without changing anything, and `--help` to read what it does.
 
 ### Upgrading nvm itself
 

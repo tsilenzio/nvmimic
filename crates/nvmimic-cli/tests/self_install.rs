@@ -157,6 +157,52 @@ fn fresh_install_works_and_uninstall_removes_it() {
 }
 
 #[test]
+fn help_reads_right_with_and_without_an_nvm() {
+    let home = Home::new();
+    for args in [&[][..], &["help"], &["--help"]] {
+        let out = home.nvmimic(args);
+        assert!(out.status.success());
+        assert!(text(&out.stdout).contains("self install"));
+    }
+    let out = home.nvmimic(&["self", "install", "--help"]);
+    let help = text(&out.stdout);
+    assert!(out.status.success());
+    assert!(help.contains("If you have no nvm yet"), "{help}");
+    assert!(help.contains("If nvm is already there"), "{help}");
+    assert!(!home.has_own_files(), "asking for help installs nothing");
+    let out = home.nvmimic(&["self", "uninstall", "--help"]);
+    assert!(text(&out.stdout).contains("If there was no nvm before nvmimic"));
+
+    let out = home.nvmimic(&["self", "install", "--nope"]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(text(&out.stderr).contains("has no option `--nope`"));
+    let out = home.nvmimic(&["frobnicate"]);
+    assert_eq!(out.status.code(), Some(2));
+    // The internal entry point stays out of every help text.
+    for args in [&["help"][..], &["self", "--help"]] {
+        assert!(!text(&home.nvmimic(args).stdout).contains("__internal"));
+    }
+}
+
+#[test]
+fn messages_say_which_situation_this_is() {
+    let home = Home::new();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(text(&out.stdout).contains("sets one up from scratch"));
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    let said = text(&out.stdout);
+    assert!(said.contains("there is no `nvm` command"), "{said}");
+    assert!(!said.contains("nvm is back"), "{said}");
+
+    let home = Home::new();
+    real_nvm(&home);
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(!text(&out.stdout).contains("from scratch"));
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(text(&out.stdout).contains("nvm is back"));
+}
+
+#[test]
 fn nothing_of_nvmimics_own_goes_into_nvm_dir() {
     let home = Home::new();
     real_nvm(&home);

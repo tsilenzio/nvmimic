@@ -441,6 +441,13 @@ pub fn self_install(
         }
     }
 
+    if existing.is_empty() && !reinstall {
+        ui.say(&format!(
+            "There is no nvm in {} yet, so nvmimic sets one up from scratch.",
+            nvm_dir.display()
+        ));
+    }
+
     if !existing.is_empty() && reinstall {
         ui.say(&format!(
             "nvm's own {} came back in {}, most likely from nvm's install script.",
@@ -528,7 +535,9 @@ pub fn self_install(
         ));
     }
     if startup_files_mentioning(env, "/nvm.sh").is_empty() {
-        ui.say("To load nvm in new shells, add these lines to your shell's startup file:");
+        ui.say(
+            "To get the `nvm` command in new shells, add these lines to your shell's startup file:",
+        );
         ui.say(&format!("  export NVM_DIR=\"{}\"", nvm_dir.display()));
         ui.say("  [ -s \"$NVM_DIR/nvm.sh\" ] && \\. \"$NVM_DIR/nvm.sh\"  # This loads nvm");
     } else {
@@ -548,10 +557,16 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     };
     let nvm_dir = manifest.nvm_dir.clone().unwrap_or_else(|| env.nvm_dir());
     let backup = dirs.backup();
-    if !manifest.backed_up.is_empty() {
+    let restores = !manifest.backed_up.is_empty();
+    if restores {
         ui.say(&format!(
-            "This puts nvm's own {} back.",
+            "This puts nvm's own {} back, so nvm works as it did before nvmimic.",
             manifest.backed_up.join(", ")
+        ));
+    } else {
+        ui.say(&format!(
+            "There was no nvm in {} before nvmimic, so afterwards there is no `nvm` command.",
+            nvm_dir.display()
         ));
     }
     ui.say("Your Node versions and aliases stay as they are.");
@@ -603,7 +618,11 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     let _ = fs::remove_dir(&backup);
     let _ = fs::remove_dir(&dirs.state);
 
-    ui.say("Done. nvmimic is gone.");
+    ui.say(if restores {
+        "Done. nvmimic is gone and nvm is back."
+    } else {
+        "Done. nvmimic is gone."
+    });
     if let Some(binary) = manifest.binary.as_ref().filter(|_| !manifest.placed) {
         ui.say(&format!(
             "The nvmimic program stays at {}, because `nvmimic self install` didn't put it there.",

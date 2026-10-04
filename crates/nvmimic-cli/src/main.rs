@@ -135,55 +135,136 @@ fn handoff(function: &str, rest: &[String]) -> ExitCode {
 const USAGE: &str = "\
 usage: nvmimic <command>
 
-commands:
-  self install [--yes] [--dry-run]     install nvmimic into $NVM_DIR, taking over nvm
-  self uninstall [--yes] [--dry-run]   remove nvmimic and put nvm's scripts back
-  --version                            print nvmimic's own version
+nvmimic does nvm's job, only faster. In your shell you keep typing `nvm`.
+The `nvmimic` command sets nvmimic up and removes it again.
 
---yes answers yes to every question. --dry-run shows what would happen and
-changes nothing. self install copies the nvmimic program to
-~/.local/bin/nvmimic, or to the path in NVMIMIC_INSTALL_PATH.";
+commands:
+  self install     set nvmimic up for your nvm folder ($NVM_DIR, usually ~/.nvm)
+  self uninstall   remove nvmimic again
+  help             show this text
+  --version        print nvmimic's own version
+
+`nvmimic self install --help` and `nvmimic self uninstall --help` say what
+each one does, step by step.";
+
+const INSTALL_USAGE: &str = "\
+usage: nvmimic self install [--yes] [--dry-run]
+
+Sets nvmimic up, so that `nvm` in your shell is nvmimic.
+
+If you have no nvm yet, this makes the nvm folder and puts nvmimic's nvm.sh,
+nvm-exec and bash_completion into it. Then it shows the two lines to add to
+your shell's startup file.
+
+If nvm is already there, nvmimic takes over from it. Your Node versions,
+aliases and settings stay as they are. Only nvm's own three scripts are
+swapped. They are kept as a backup, and `nvmimic self uninstall` puts them
+back.
+
+Either way, the nvmimic program is copied to ~/.local/bin/nvmimic, so you
+can run it again later. Run this again any time to repair the setup, for
+example after nvm's own install script was run over it.
+
+  --yes       answer yes to every question
+  --dry-run   show what would happen and change nothing
+
+Settings, as environment variables:
+  NVM_DIR                the nvm folder, if it isn't ~/.nvm
+  NVMIMIC_INSTALL_PATH   where the nvmimic program goes
+  NVMIMIC_DATA_DIR, NVMIMIC_STATE_DIR, NVMIMIC_CACHE_DIR
+                         where nvmimic keeps its other files";
+
+const UNINSTALL_USAGE: &str = "\
+usage: nvmimic self uninstall [--yes] [--dry-run]
+
+Removes nvmimic. Your Node versions, aliases and settings stay as they are.
+
+If nvmimic took over from an nvm, that nvm's scripts come back and it works
+as it did before. If there was no nvm before nvmimic, the nvm folder keeps
+your Node versions but has no `nvm` command any more.
+
+  --yes       answer yes to every question
+  --dry-run   show what would happen and change nothing";
+
+/// The help for `nvmimic self <action>`, or for `self` alone.
+fn self_usage(action: Option<&str>) -> String {
+    match action {
+        Some("install") => INSTALL_USAGE.to_string(),
+        Some("uninstall") => UNINSTALL_USAGE.to_string(),
+        _ => format!("{INSTALL_USAGE}\n\n{UNINSTALL_USAGE}"),
+    }
+}
+
+fn is_help(word: &str) -> bool {
+    matches!(word, "help" | "--help" | "-h")
+}
 
 /// The commands people type.
 fn nvmimic_command(args: &[String]) -> ExitCode {
-    let flags: Vec<&str> = args.iter().skip(2).map(String::as_str).collect();
+    let words: Vec<&str> = args.iter().map(String::as_str).collect();
+    let (action, flags) = match words.as_slice() {
+        [] => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        [word] if is_help(word) => {
+            println!("{USAGE}");
+            return ExitCode::SUCCESS;
+        }
+        ["--version"] => {
+            println!("{}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        ["self"] => {
+            println!("{}", self_usage(None));
+            return ExitCode::SUCCESS;
+        }
+        ["self", word] if is_help(word) => {
+            println!("{}", self_usage(None));
+            return ExitCode::SUCCESS;
+        }
+        ["self", action @ ("install" | "uninstall"), flags @ ..] => (*action, flags),
+        _ => {
+            eprintln!(
+                "nvmimic: there is no command `{}`.\n\n{USAGE}",
+                words.join(" ")
+            );
+            return ExitCode::from(2);
+        }
+    };
+    if flags.iter().any(|flag| is_help(flag)) {
+        println!("{}", self_usage(Some(action)));
+        return ExitCode::SUCCESS;
+    }
+    if let Some(unknown) = flags
+        .iter()
+        .find(|flag| !matches!(**flag, "--yes" | "--dry-run"))
+    {
+        eprintln!(
+            "nvmimic: `self {action}` has no option `{unknown}`.\n\n{}",
+            self_usage(Some(action))
+        );
+        return ExitCode::from(2);
+    }
     let options = nvmimic::install::Options {
         yes: flags.contains(&"--yes"),
         dry_run: flags.contains(&"--dry-run"),
     };
-    let unknown = flags
-        .iter()
-        .find(|flag| !matches!(**flag, "--yes" | "--dry-run"));
+    if !options.yes && !options.dry_run && !is_tty(0) {
+        eprintln!(
+            "nvmimic: this asks questions, and there is no terminal to answer them. Run it again with --yes."
+        );
+        return ExitCode::from(2);
+    }
     let env = nvmimic::install::Env::from_process();
     let mut ui = nvmimic::install::TerminalUi;
-    let result = match (
-        args.first().map(String::as_str),
-        args.get(1).map(String::as_str),
-    ) {
-        (Some("--version"), None) => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
-            return ExitCode::SUCCESS;
+    let result = if action == "install" {
+        match env::current_exe() {
+            Ok(binary) => nvmimic::install::self_install(&env, &binary, &options, &mut ui),
+            Err(error) => Err(format!("cannot find this program's own file: {error}")),
         }
-        (Some("self"), Some(action @ ("install" | "uninstall"))) if unknown.is_none() => {
-            if !options.yes && !options.dry_run && !is_tty(0) {
-                eprintln!(
-                    "nvmimic: this asks questions, and there is no terminal to answer them. Run it again with --yes."
-                );
-                return ExitCode::from(2);
-            }
-            if action == "install" {
-                match env::current_exe() {
-                    Ok(binary) => nvmimic::install::self_install(&env, &binary, &options, &mut ui),
-                    Err(error) => Err(format!("cannot find this program's own file: {error}")),
-                }
-            } else {
-                nvmimic::install::self_uninstall(&env, &options, &mut ui)
-            }
-        }
-        _ => {
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
+    } else {
+        nvmimic::install::self_uninstall(&env, &options, &mut ui)
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
