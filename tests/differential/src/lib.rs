@@ -9,6 +9,7 @@ pub mod guard;
 pub mod harness;
 pub mod mirror;
 pub mod nvmsh;
+pub mod own;
 pub mod suite;
 
 use std::path::PathBuf;

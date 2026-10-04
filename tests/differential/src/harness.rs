@@ -712,52 +712,7 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, options: &Options) {
             }
             link_staged("nvm/nvm-exec", &reference.join("nvm-exec"), nvm_dir);
         }
-        Impl::Nvmimic => {
-            let shell_dir = repo_root().join("shell");
-            copy(
-                &shell_dir.join("bash_completion"),
-                &nvm_dir.join("bash_completion"),
-            );
-            link_staged("nvmimic/nvm-exec", &shell_dir.join("nvm-exec"), nvm_dir);
-            let bin = nvm_dir.join(".nvmimic/bin");
-            fs::create_dir_all(&bin).unwrap();
-            // Both scripts that hold `nvm()` name the binary and the files
-            // beside it by full path, as `self install` writes them.
-            let link = nvm_dir.join(".nvmimic/bin/nvm").display().to_string();
-            for (name, to) in [
-                ("nvm.sh", nvm_dir.join("nvm.sh")),
-                (
-                    "nvmimic-functions.sh",
-                    nvm_dir.join(".nvmimic/nvmimic-functions.sh"),
-                ),
-            ] {
-                if let Ok(template) = fs::read_to_string(shell_dir.join(name)) {
-                    fs::write(to, nvmimic::install::bind_binary(&template, &link)).unwrap();
-                }
-            }
-            copy(
-                &shell_dir.join("nvm-functions.sh"),
-                &nvm_dir.join(".nvmimic/nvm-functions.sh"),
-            );
-            let binary = nvmimic_bin();
-            std::os::unix::fs::symlink(&binary, bin.join("nvmimic")).unwrap();
-            if count_launches {
-                // The binary picks its persona from argv0, so the logging
-                // wrapper execs a symlink that is also named `nvm`.
-                let real = side.join("real");
-                fs::create_dir_all(&real).unwrap();
-                std::os::unix::fs::symlink(&binary, real.join("nvm")).unwrap();
-                write_script(
-                    &bin.join("nvm"),
-                    &format!(
-                        "#!/bin/sh\n[ -z \"$NVMIMIC_LAUNCH_LOG\" ] || printf 'nvmimic\\n' >> \"$NVMIMIC_LAUNCH_LOG\"\nexec '{}' \"$@\"\n",
-                        real.join("nvm").display()
-                    ),
-                );
-            } else {
-                std::os::unix::fs::symlink("nvmimic", bin.join("nvm")).unwrap();
-            }
-        }
+        Impl::Nvmimic => crate::own::install(nvm_dir, side, count_launches),
     }
 }
 
@@ -778,7 +733,7 @@ fn block_sudo(side: &Path) {
 
 /// Puts `nvm-exec` into `$NVM_DIR` as a hard link to one staged copy. It is
 /// the one script of nvm's that gets run rather than sourced.
-fn link_staged(name: &str, source: &Path, nvm_dir: &Path) {
+pub(crate) fn link_staged(name: &str, source: &Path, nvm_dir: &Path) {
     let staged = staged(Path::new(name), |staged| copy(source, staged));
     fs::hard_link(staged, nvm_dir.join("nvm-exec")).unwrap();
 }
@@ -1023,15 +978,14 @@ fn is_implementation_file(relative: &str) -> bool {
     matches!(
         relative,
         ".nvm/nvm.sh" | ".nvm/nvm-exec" | ".nvm/bash_completion"
-    ) || relative == ".nvm/.nvmimic"
-        || relative.starts_with(".nvm/.nvmimic/")
+    )
 }
 
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-fn copy(from: &Path, to: &Path) {
+pub(crate) fn copy(from: &Path, to: &Path) {
     fs::copy(from, to).unwrap();
 }
 
@@ -1050,7 +1004,7 @@ fn copy_tree(from: &Path, to: &Path) {
     );
 }
 
-fn write_script(path: &Path, body: &str) {
+pub(crate) fn write_script(path: &Path, body: &str) {
     fs::write(path, body).unwrap();
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
 }

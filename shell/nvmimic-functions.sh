@@ -425,7 +425,7 @@ nvm() {
       fi
       # nvm's functions are read with aliases switched off, as nvmimic's
       # own were.
-      __nvmimic_now="${NVM_DIR}/.nvmimic/nvm-functions.sh"
+      __nvmimic_now="@nvmimic-nvm-functions@"
       if [ -n "${ZSH_VERSION-}" ]; then
         eval '() { setopt localoptions noaliases; \. "${__nvmimic_now}" }'
       elif [ -n "${BASH_VERSION-}" ] && shopt -q expand_aliases; then
@@ -441,7 +441,7 @@ nvm() {
         # The call was `nvm unload`.
         unset __nvmimic_functions
       elif [ -z "${NVMIMIC_NVM_CODE-}" ]; then
-        \. "${NVM_DIR}/.nvmimic/nvmimic-functions.sh"
+        \. "@nvmimic-own-functions@"
       fi
       return "${__nvmimic_own}"
     fi
@@ -544,8 +544,9 @@ __nvmimic_end
         __NVMIMIC_ARG0="$0" \
         __NVMIMIC_SOURCE="${BASH_SOURCE-}" \
         __NVMIMIC_OPTS="$-" \
+        __NVMIMIC_CACHE="@nvmimic-cache@" \
         __NVMIMIC_FD=8 \
-        command "${NVM_DIR}/.nvmimic/bin/nvm" __fn "$@" 8>&1 1>&9 9>&-
+        command "@nvmimic-binary@" __fn "$@" 8>&1 1>&9 9>&-
     )" || __nvmimic_rc=$?; } 9>&1
     eval "${__nvmimic_effects}"
     return "${__nvmimic_rc}"

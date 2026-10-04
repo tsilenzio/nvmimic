@@ -7,6 +7,7 @@
 pub mod backend;
 pub mod cmd;
 pub mod context;
+pub mod dirs;
 pub mod functions;
 pub mod install;
 pub mod nvm;
@@ -35,6 +36,10 @@ pub struct Caller {
     /// stdout and stderr. Programs nvm starts (curl with its progress bar,
     /// npm, make) then write to the terminal directly.
     pub direct_output: bool,
+    /// Where answers from `node --version` and `npm --version` are
+    /// remembered, see [`nvm::remembered`]. `None` remembers nothing, and
+    /// both programs are then asked every time, as nvm asks them.
+    pub cache_dir: Option<std::path::PathBuf>,
 }
 
 /// What one call left behind.
@@ -67,6 +72,7 @@ pub fn run(
         aliases: std::rc::Rc::new(caller.aliases),
         command_info: std::rc::Rc::new(caller.command_info),
         caller_shell: std::rc::Rc::new(caller.shell),
+        cache_dir: caller.cache_dir.map(std::rc::Rc::new),
     };
     let status = functions::call(&mut nvm, function, args, fd3);
     nvm.io.flush();

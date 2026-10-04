@@ -275,7 +275,10 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
         for file in ["nvm.sh", "nvm-exec", "bash_completion"] {
             let _ = fs::remove_file(nvm_dir.join(file));
         }
-        let _ = fs::remove_dir_all(nvm_dir.join(".nvmimic"));
+        // nvmimic's own files sit beside the home folder, as in a parity
+        // sandbox.
+        let own = root.join(which).join("own");
+        let _ = fs::remove_dir_all(&own);
         if which == "nvm" {
             for file in ["nvm.sh", "nvm-exec", "bash_completion"] {
                 fs::copy(reference.join(file), nvm_dir.join(file)).map_err(|e| e.to_string())?;
@@ -288,16 +291,22 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
                     fs::copy(&source, nvm_dir.join(file)).map_err(|e| e.to_string())?;
                 }
             }
+            let bin = own.join("bin");
+            fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
+            fs::create_dir_all(own.join("cache")).map_err(|e| e.to_string())?;
             if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
-                let link = nvm_dir.join(".nvmimic/bin/nvm").display().to_string();
+                let bound = nvmimic::install::Bound {
+                    binary: &bin.join("nvm"),
+                    nvm_functions: &own.join("nvm-functions.sh"),
+                    nvmimic_functions: &own.join("nvmimic-functions.sh"),
+                    cache: Some(&own.join("cache")),
+                };
                 fs::write(
                     nvm_dir.join("nvm.sh"),
-                    nvmimic::install::bind_binary(&template, &link),
+                    nvmimic::install::bind(&template, &bound),
                 )
                 .map_err(|e| e.to_string())?;
             }
-            let bin = nvm_dir.join(".nvmimic/bin");
-            fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
             let binary = crate::repo_root().join("target/release/nvmimic");
             fs::copy(&binary, bin.join("nvmimic")).map_err(|e| e.to_string())?;
             std::os::unix::fs::symlink("nvmimic", bin.join("nvm")).map_err(|e| e.to_string())?;
@@ -438,7 +447,7 @@ fn launches(
     argv.insert(2, format!("NVMIMIC_LAUNCH_LOG={}", log.display()));
     // nvmimic's own binary is counted by a logging wrapper in place of its
     // `nvm` link for this one run.
-    let link = fixture.home(which).join(".nvm/.nvmimic/bin/nvm");
+    let link = fixture.root.join(which).join("own/bin/nvm");
     let wrapped = which == "nvmimic" && wrap_binary(&link).is_ok();
     let _ = Command::new(&argv[0]).args(&argv[1..]).output();
     if wrapped {

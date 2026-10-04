@@ -2,7 +2,7 @@
 //!
 //! nvm runs `node --version` and `npm --version` every time it wants to
 //! know. Starting a program is the slow part of nvm, so nvmimic keeps each
-//! answer in a small file under `$NVM_DIR/.nvmimic/cache/` together with a
+//! answer in a small file in nvmimic's cache folder together with a
 //! key: the facts the answer depends on. When the key no longer matches,
 //! because the program's file was replaced for example, the program is
 //! asked again. Only an answer that came with a clean exit is kept, so a
@@ -44,16 +44,13 @@ pub struct Remembered {
 
 impl Remembered {
     /// `kind` names the question, `subject` what it was asked about, and
-    /// `key` everything the answer depends on. `None` when nvmimic is not
-    /// installed in this `$NVM_DIR`, where nothing is remembered.
+    /// `key` everything the answer depends on. `None` when the caller gave
+    /// no cache folder, where nothing is remembered.
     pub fn new(nvm: &Nvm, kind: &str, subject: &str, key: &[String]) -> Option<Remembered> {
-        let own = Path::new(nvm.vars.get("NVM_DIR")).join(".nvmimic");
-        if !own.is_dir() {
-            return None;
-        }
+        let cache = nvm.cache_dir.as_ref()?;
         let name = format!("{:016x}", fnv1a(subject));
         Some(Remembered {
-            file: own.join("cache").join(kind).join(name),
+            file: cache.join(kind).join(name),
             key: key.join("\t").replace('\n', " "),
         })
     }

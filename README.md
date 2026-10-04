@@ -52,19 +52,35 @@ cargo build --release
 ./target/release/nvmimic self install
 ```
 
-`self install` puts nvmimic into `$NVM_DIR` (usually `~/.nvm`). If nvm is
+`self install` sets nvmimic up for `$NVM_DIR` (usually `~/.nvm`). If nvm is
 already there, nvmimic takes it over: it keeps your Node versions, aliases and
-settings, moves nvm's own scripts into `$NVM_DIR/.nvmimic/backup`, and offers
-to copy the whole folder somewhere safe first. If you installed nvm with
+settings, moves nvm's own scripts into a backup folder, and offers to copy
+the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
 load Homebrew's copy would keep running the real nvm.
 
-`self install` also asks to add a `nvmimic` command to `~/.local/bin`, and
-the answer is yes unless you say no. That way you can type
-`nvmimic self install` again later without hunting for the file you
-downloaded. Pass `--no-link` to skip it. nvmimic never puts a program named
-`nvm` on your `PATH`, because real nvm is a shell function and scripts check
-for that.
+`self install` also copies the nvmimic program to `~/.local/bin/nvmimic`.
+That way you can type `nvmimic self install` again later without hunting for
+the file you downloaded. nvmimic never puts a program named `nvm` on your
+`PATH`, because real nvm is a shell function and scripts check for that.
+
+### Where nvmimic keeps its files
+
+In `$NVM_DIR`, nvmimic only swaps nvm's three scripts (`nvm.sh`, `nvm-exec`
+and `bash_completion`). Everything else of its own goes where many command
+line tools keep theirs. Each place has a variable that moves it. Set it
+before you run `self install`:
+
+| What | Where | Variable |
+|---|---|---|
+| The nvmimic program | `~/.local/bin/nvmimic` | `NVMIMIC_INSTALL_PATH` |
+| A copy of nvm's functions (see [Known differences](#known-differences)) | `~/.local/share/nvmimic` | `NVMIMIC_DATA_DIR` |
+| The list of what was installed, and the backups of nvm's scripts | `~/.local/state/nvmimic` | `NVMIMIC_STATE_DIR` |
+| Remembered answers, safe to delete | `~/Library/Caches/nvmimic` on macOS, `~/.cache/nvmimic` elsewhere | `NVMIMIC_CACHE_DIR` |
+
+If you use the `XDG_DATA_HOME`, `XDG_STATE_HOME` or `XDG_CACHE_HOME`
+settings, nvmimic follows them too. If something that isn't nvmimic already
+sits at `~/.local/bin/nvmimic`, `self install` stops and leaves it alone.
 
 `nvmimic self uninstall` puts nvm's scripts back and removes nvmimic. Add
 `--dry-run` to either one to see what it would do without changing anything.
@@ -78,8 +94,8 @@ Pick one of these:
   `nvmimic self install` again.
 - Or run nvm's install script as usual. It writes nvm's scripts back over
   nvmimic's, so your shells run real nvm again until you run
-  `nvmimic self install` once more. nvm's installer leaves nvmimic's own
-  folder (`$NVM_DIR/.nvmimic`) alone, so nothing is lost in between.
+  `nvmimic self install` once more. nvm's installer doesn't touch nvmimic's
+  own files, so nothing is lost in between.
 
 If you installed nvm with git, `git status` in `$NVM_DIR` shows `nvm.sh`,
 `nvm-exec` and `bash_completion` as modified while nvmimic is installed.
@@ -163,7 +179,7 @@ What still differs here:
 - **Error messages from bash name another file.** When nvm's own code runs
   and bash itself reports an error in it, bash names the file the code came
   from. With real nvm that is `nvm.sh`. With nvmimic it is
-  `.nvmimic/nvm-functions.sh`. The line number is the same.
+  `nvm-functions.sh`. The line number is the same.
 
 ### The text of the functions
 
@@ -180,12 +196,12 @@ names a line number inside one of them names a different number.
 
 ### Files nvmimic adds
 
-- `$NVM_DIR/.nvmimic/` holds the nvmimic program, a list of what it
-  replaced, the backups of nvm's scripts, a copy of nvm's functions for the
-  calls described above, and a small folder of remembered answers. Real nvm
-  has no such folder.
 - `nvm.sh`, `nvm-exec` and `bash_completion` in `$NVM_DIR` are nvmimic's
-  versions, so their contents differ from nvm's.
+  versions, so their contents differ from nvm's. Nothing else in `$NVM_DIR`
+  is nvmimic's.
+- Outside `$NVM_DIR`, nvmimic keeps the files listed under
+  [Where nvmimic keeps its files](#where-nvmimic-keeps-its-files). Real nvm
+  has none of them.
 
 ### One extra command
 

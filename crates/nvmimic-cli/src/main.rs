@@ -108,6 +108,9 @@ fn main() -> ExitCode {
             interactive: env::var("__NVMIMIC_OPTS").is_ok_and(|options| options.contains('i')),
         },
         direct_output: true,
+        cache_dir: env::var_os("__NVMIMIC_CACHE")
+            .filter(|dir| !dir.is_empty())
+            .map(Into::into),
     };
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
@@ -135,13 +138,13 @@ const USAGE: &str = "\
 usage: nvmimic <command>
 
 commands:
-  self install [--yes] [--dry-run] [--no-link]   install nvmimic into $NVM_DIR, taking over nvm
-  self uninstall [--yes] [--dry-run]             remove nvmimic and put nvm's scripts back
-  --version                                      print nvmimic's own version
+  self install [--yes] [--dry-run]     install nvmimic into $NVM_DIR, taking over nvm
+  self uninstall [--yes] [--dry-run]   remove nvmimic and put nvm's scripts back
+  --version                            print nvmimic's own version
 
 --yes answers yes to every question. --dry-run shows what would happen and
-changes nothing. self install also adds a nvmimic command to ~/.local/bin,
-so it can be run again later. --no-link skips that.";
+changes nothing. self install copies the nvmimic program to
+~/.local/bin/nvmimic, or to the path in NVMIMIC_INSTALL_PATH.";
 
 /// `nvmimic ...`, as opposed to `nvm ...`.
 fn nvmimic_command(args: &[String]) -> ExitCode {
@@ -149,11 +152,10 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
     let options = nvmimic::install::Options {
         yes: flags.contains(&"--yes"),
         dry_run: flags.contains(&"--dry-run"),
-        no_link: flags.contains(&"--no-link"),
     };
     let unknown = flags
         .iter()
-        .find(|flag| !matches!(**flag, "--yes" | "--dry-run" | "--no-link"));
+        .find(|flag| !matches!(**flag, "--yes" | "--dry-run"));
     let env = nvmimic::install::Env::from_process();
     let mut ui = nvmimic::install::TerminalUi;
     let result = match (

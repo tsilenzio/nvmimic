@@ -140,6 +140,8 @@ pub struct Nvm<'a> {
     /// the calling shell answered it. See `cmd::debug`.
     pub command_info: std::rc::Rc<String>,
     pub caller_shell: std::rc::Rc<CallerShell>,
+    /// Where answers are remembered between calls, see `nvm::remembered`.
+    pub cache_dir: Option<std::rc::Rc<std::path::PathBuf>>,
 }
 
 /// What the calling shell goes by when it reports an error of its own. See
@@ -260,6 +262,7 @@ impl<'a> Nvm<'a> {
             let aliases = self.aliases.clone();
             let command_info = self.command_info.clone();
             let caller_shell = self.caller_shell.clone();
+            let cache_dir = self.cache_dir.clone();
             let mut err = ErrForward(&mut self.io);
             let mut inner = Nvm {
                 vars: self.vars.snapshot(),
@@ -282,6 +285,7 @@ impl<'a> Nvm<'a> {
                 aliases,
                 command_info,
                 caller_shell,
+                cache_dir,
             };
             body(&mut inner);
         }

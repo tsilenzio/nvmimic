@@ -289,7 +289,7 @@ fn everyday_commands_launch_only_nvmimic() {
             Impl::Nvmimic,
             &shell,
             "",
-            "nvm install 24.15.0\nrm -rf \"$NVM_DIR/.nvmimic/cache\"",
+            "nvm install 24.15.0\nrm -rf \"$HOME/../own/cache\"",
             "nvm use 24.15.0\nnvm use 24.15.0",
         );
         let npm = outcome.launches.iter().filter(|l| l.ends_with("/bin/npm"));
