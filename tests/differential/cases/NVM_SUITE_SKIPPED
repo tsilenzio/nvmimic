@@ -6,22 +6,32 @@
 #   fixture        an executable file the tests use, not a test itself
 #   docker         only meaningful inside nvm's Ubuntu 16.04 test image
 #   mock-internal  redefines one of nvm's internal functions as a shell
-#                  function and expects nvm to call it, which a program
-#                  outside the shell cannot do
+#                  function and expects nvm to call it. nvmimic notices that
+#                  under bash, sh and zsh and runs nvm's own code for the
+#                  call. dash cannot show what a function contains, so these
+#                  tests run under every shell but dash
 #   mock-tool      redefines an outside program (clang, wget) as a shell
-#                  function or alias and expects nvm to run that instead
-#   hook-function  names a shell function as NVM_INSTALL_THIRD_PARTY_HOOK,
-#                  which a program outside the shell cannot call
+#                  function or alias and expects nvm to run that instead.
+#                  Not under dash, like mock-internal
+#   replaces-nvm   redefines the function `nvm` itself and then calls one of
+#                  nvm's helpers. nvmimic's helpers reach its program through
+#                  `nvm`, so the helper ends up in the test's function
+#   copied-lines   compares the shell's own error lines from a function that
+#                  nvmimic's nvm.sh copies from nvm. The copy sits on other
+#                  line numbers than in nvm's nvm.sh
 #   network        needs the real internet or Docker
 #   real-node      installs real Node releases from nodejs.org (0.8 to 9.x and
 #                  io.js, some built from source), which the offline test
 #                  mirror does not hold. `cargo xtask parity --network` runs
 #                  these and nothing else
 #
-# A line that names one test wins over a line that names its directory, so
-# the six tests under the real-node directories that also redefine one of
-# nvm's functions are listed below as mock-internal and stay out of the
-# network pass too.
+#   real-node-mock both real-node and mock-internal: in the network pass
+#                  only, and not under dash
+#   real-node-hook installs real Node and names a shell function as
+#                  NVM_INSTALL_THIRD_PARTY_HOOK: in the network pass only,
+#                  and not under dash
+#
+# A line that names one test wins over a line that names its directory.
 installer: install_script/
 fixture: mocks/
 fixture: fixtures/
@@ -30,12 +40,12 @@ real-node: slow/
 real-node: sourcing/
 real-node: installation_node/
 real-node: installation_iojs/
-mock-internal: installation_node/install from binary with binary flag set
-mock-internal: installation_node/install from source without V8 snapshot for ARM
-mock-internal: slow/nvm use/Running 'nvm use' calls 'nvm_die_on_prefix'
-mock-internal: slow/nvm_get_latest/nvm_get_latest
-mock-internal: sourcing/Sourcing nvm.sh should use the default if available and no nvm node is loaded
-mock-internal: sourcing/Sourcing nvm.sh with --install should install the default
+real-node-mock: installation_node/install from binary with binary flag set
+real-node-mock: installation_node/install from source without V8 snapshot for ARM
+real-node-mock: slow/nvm use/Running 'nvm use' calls 'nvm_die_on_prefix'
+real-node-mock: slow/nvm_get_latest/nvm_get_latest
+real-node-mock: sourcing/Sourcing nvm.sh should use the default if available and no nvm node is loaded
+real-node-mock: sourcing/Sourcing nvm.sh with --install should install the default
 mock-internal: fast/Aliases/nvm_list_aliases calls nvm_get_colors
 mock-internal: fast/Aliases/nvm_list_aliases propagates NVM_HAS_COLORS through pipeline
 mock-internal: fast/Aliases/nvm_list_aliases works with LTS aliases
@@ -81,10 +91,10 @@ mock-internal: fast/Unit tests/nvm_print_npm_version
 mock-internal: fast/Unit tests/nvm_remote_version
 mock-internal: fast/Unit tests/nvm_remote_versions
 mock-internal: fast/Unit tests/nvm_remote_versions propagates iojs failure
-mock-internal: fast/Unit tests/nvm_use_if_needed
+replaces-nvm: fast/Unit tests/nvm_use_if_needed
 mock-internal: fast/Unit tests/nvm_version
 mock-internal: fast/Unit tests/nvm version-remote
-hook-function: installation_node/install hook
+real-node-hook: installation_node/install hook
 mock-tool: fast/Unit tests/nvm_clang_version
-mock-tool: fast/Unit tests/nvm_command_info
+copied-lines: fast/Unit tests/nvm_command_info
 network: fast/Unit tests/nvm_download

@@ -15,6 +15,11 @@ pub const BINARY_PLACEHOLDER: &str = "\"${NVM_DIR}/.nvmimic/bin/nvm\"";
 const NVM_SH: &str = include_str!("../../../shell/nvm.sh");
 const NVM_EXEC: &str = include_str!("../../../shell/nvm-exec");
 const BASH_COMPLETION: &str = include_str!("../../../shell/bash_completion");
+/// nvm's own functions, and nvmimic's again, for calls that have to run
+/// nvm's code inside the calling shell. `nvm.sh` reads them from nvmimic's
+/// own folder.
+const NVM_FUNCTIONS: &str = include_str!("../../../shell/nvm-functions.sh");
+const NVMIMIC_FUNCTIONS: &str = include_str!("../../../shell/nvmimic-functions.sh");
 
 /// The scripts nvm keeps in `$NVM_DIR`, which nvmimic replaces.
 const SCRIPTS: &[&str] = &["nvm.sh", "nvm-exec", "bash_completion"];
@@ -26,8 +31,22 @@ const OWN_MARKER: &str = "as nvmimic provides it";
 /// lets `$NVM_DIR` change after sourcing, and the script itself works out
 /// where it lives, so the binary cannot be found from `$NVM_DIR` alone.
 pub fn bind_binary(nvm_sh: &str, nvm_link: &str) -> String {
-    nvm_sh.replace(BINARY_PLACEHOLDER, &crate::shell::quote(nvm_link))
+    let mut bound = nvm_sh.replace(BINARY_PLACEHOLDER, &crate::shell::quote(nvm_link));
+    // The two files of functions sit two folders above the binary's link.
+    let own = Path::new(nvm_link).parent().and_then(Path::parent);
+    for name in FUNCTION_FILES {
+        let placeholder = format!("\"${{NVM_DIR}}/.nvmimic/{name}\"");
+        if let Some(own) = own {
+            let path = own.join(name).display().to_string();
+            bound = bound.replace(&placeholder, &crate::shell::quote(&path));
+        }
+    }
+    bound
 }
+
+/// The files `nvm.sh` reads from nvmimic's own folder, named there the same
+/// way as the binary: through `$NVM_DIR` until installed, by full path after.
+const FUNCTION_FILES: [&str; 2] = ["nvm-functions.sh", "nvmimic-functions.sh"];
 
 /// What the installer talks to: lines to show, and yes-or-no questions.
 pub trait Ui {
@@ -377,6 +396,12 @@ pub fn self_install(
     )?;
     write_file(&nvm_dir.join("nvm-exec"), NVM_EXEC, 0o755)?;
     write_file(&nvm_dir.join("bash_completion"), BASH_COMPLETION, 0o644)?;
+    write_file(&own.join("nvm-functions.sh"), NVM_FUNCTIONS, 0o644)?;
+    write_file(
+        &own.join("nvmimic-functions.sh"),
+        &bind_binary(NVMIMIC_FUNCTIONS, &link_text),
+        0o644,
+    )?;
 
     match link_plan {
         LinkPlan::Skip(_) => {}

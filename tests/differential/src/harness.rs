@@ -135,6 +135,8 @@ const COUNTED_TOOLS: &[&str] = &[
 const VOLATILE_VARS: &[&str] = &[
     "_",
     "__diff_rc",
+    // nvmimic's copy of nvm's functions, which real nvm has no use for.
+    "__nvmimic_functions",
     "BASHPID",
     "BASH_ARGC",
     "BASH_ARGV",
@@ -497,20 +499,29 @@ fn settle_progress(text: &str) -> String {
         part.chars()
             .all(|c| "#=O- .%".contains(c) || c.is_ascii_digit())
     };
-    let mut lines = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
     for line in text.split('\n') {
         let parts: Vec<&str> = line
             .split('\r')
             .filter(|part| !part.trim().is_empty())
             .collect();
+        // Real npm ends an install with how long it took.
+        if let Some((before, took)) = line.rsplit_once(" in ")
+            && let Some(seconds) = took.strip_suffix('s')
+            && !seconds.is_empty()
+            && seconds.chars().all(|c| c.is_ascii_digit() || c == '.')
+        {
+            lines.push(format!("{before} in <time>s"));
+            continue;
+        }
         match parts.last() {
             // A redraw that ended in a line break of its own leaves a line
             // holding nothing but the return to its start.
             None if line.contains('\r') => {}
             Some(last) if line.contains('\r') && parts.iter().all(|part| is_bar(part)) => {
-                lines.push(*last)
+                lines.push(last.to_string())
             }
-            _ => lines.push(line),
+            _ => lines.push(line.to_string()),
         }
     }
     lines.join("\n")
@@ -708,13 +719,26 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, options: &Options) {
                 &nvm_dir.join("bash_completion"),
             );
             link_staged("nvmimic/nvm-exec", &shell_dir.join("nvm-exec"), nvm_dir);
-            if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
-                let link = nvm_dir.join(".nvmimic/bin/nvm");
-                let script = nvmimic::install::bind_binary(&template, &link.display().to_string());
-                fs::write(nvm_dir.join("nvm.sh"), script).unwrap();
-            }
             let bin = nvm_dir.join(".nvmimic/bin");
             fs::create_dir_all(&bin).unwrap();
+            // Both scripts that hold `nvm()` name the binary and the files
+            // beside it by full path, as `self install` writes them.
+            let link = nvm_dir.join(".nvmimic/bin/nvm").display().to_string();
+            for (name, to) in [
+                ("nvm.sh", nvm_dir.join("nvm.sh")),
+                (
+                    "nvmimic-functions.sh",
+                    nvm_dir.join(".nvmimic/nvmimic-functions.sh"),
+                ),
+            ] {
+                if let Ok(template) = fs::read_to_string(shell_dir.join(name)) {
+                    fs::write(to, nvmimic::install::bind_binary(&template, &link)).unwrap();
+                }
+            }
+            copy(
+                &shell_dir.join("nvm-functions.sh"),
+                &nvm_dir.join(".nvmimic/nvm-functions.sh"),
+            );
             let binary = nvmimic_bin();
             std::os::unix::fs::symlink(&binary, bin.join("nvmimic")).unwrap();
             if count_launches {
@@ -944,6 +968,16 @@ fn snapshot(home: &Path, work: &Path) -> BTreeMap<String, String> {
                 let path = entry.path();
                 let relative = path.strip_prefix(root).unwrap().display().to_string();
                 if label == "home" && is_implementation_file(&relative) {
+                    continue;
+                }
+                // Real npm keeps a download cache and the time of its last
+                // update check, both different on every run.
+                if label == "home"
+                    && crate::mirror::network_pass()
+                    && [".npm", ".config/configstore"]
+                        .iter()
+                        .any(|own| Path::new(&relative).starts_with(own))
+                {
                     continue;
                 }
                 let key = format!("fs:{label}/{relative}");

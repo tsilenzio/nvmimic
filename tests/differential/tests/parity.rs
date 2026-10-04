@@ -301,5 +301,24 @@ fn everyday_commands_launch_only_nvmimic() {
             shell.name,
             outcome.launches
         );
+
+        // After the caller replaced one of nvm's functions, the call runs
+        // nvm's own code in the shell and nvmimic's program is not started.
+        // dash cannot tell that a function was replaced.
+        if shell.name != "dash" {
+            let outcome = world.run_with(
+                Impl::Nvmimic,
+                &shell,
+                "",
+                "nvm install 24.15.0",
+                "nvm_echo() { command printf '%s\\n' \"$*\"; }\nnvm current",
+            );
+            assert!(
+                !outcome.launches.iter().any(|l| l == "nvmimic"),
+                "{}: a call after a replaced function started nvmimic: {:?}",
+                shell.name,
+                outcome.launches
+            );
+        }
     }
 }

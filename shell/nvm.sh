@@ -268,6 +268,119 @@ nvm() {
   # in this shell comes back on file descriptor 8 as shell code, run here.
   if [ "${1-}" = '__nvmimic' ]; then
     shift
+    # Three things only this shell can see, which decide whether the call has
+    # to run nvm's own code here instead of nvmimic's program: one of nvm's
+    # functions was replaced, a shell function has the name of a tool nvm
+    # runs, or the install hook is a shell function. NVMIMIC_NVM_CODE asks
+    # for nvm's own code outright.
+    local __nvmimic_own
+    __nvmimic_own="${NVMIMIC_NVM_CODE-}"
+    local __nvmimic_now
+    __nvmimic_now=''
+    local __nvmimic_keep
+    __nvmimic_keep=''
+    local __nvmimic_name
+    # While nvm.sh is being sourced the functions were defined a moment ago,
+    # so only the tool names are looked at then.
+    if [ -n "${ZSH_VERSION-}" ]; then
+      eval '() {
+        emulate -L zsh
+        setopt extendedglob
+        local -a names
+        local MATCH MBEGIN MEND
+        names=(nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters)
+        if [[ -z "${__nvmimic_sourcing-}" ]]; then
+          __nvmimic_now="${(pj:\0:)${(@)names/(#m)*/$functions[$MATCH]}}"
+          [[ "${__nvmimic_now}" == "${__nvmimic_functions-}" ]] || __nvmimic_own=1
+        fi
+        [[ -z "$functions[node]$functions[npm]$functions[iojs]$functions[curl]$functions[wget]$functions[clang]$functions[make]$functions[gmake]$functions[awk]$functions[cut]$functions[tr]$functions[grep]$functions[dirname]$functions[sysctl]$functions[getconf]$functions[pkg_info]$functions[sha256sum]$functions[shasum]$functions[sha256]$functions[gsha256sum]$functions[openssl]$functions[bssl]$functions[sha1sum]$functions[sha1]" ]] || __nvmimic_own=1
+      }'
+    elif [ -n "${BASH_VERSION-}" ] && [ -n "${__nvmimic_sourcing-}" ]; then
+      for __nvmimic_name in node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
+        if declare -F "${__nvmimic_name}" >/dev/null; then
+          __nvmimic_own=1
+        fi
+      done
+    elif [ -n "${BASH_VERSION-}" ]; then
+      # `declare -F` fails when a name is not a function, which is the
+      # usual answer for the tools. The `|| :` keeps `set -e` out of it.
+      __nvmimic_now="$(declare -f nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters || :; declare -F node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1 || :)"
+      if [ "${__nvmimic_now}" != "${__nvmimic_functions-}" ]; then
+        __nvmimic_own=1
+      fi
+    else
+      # This shell cannot show what a function contains, so a replaced nvm
+      # function goes unnoticed here. Functions named like tools do not.
+      for __nvmimic_name in node npm iojs curl wget clang make gmake awk cut tr grep dirname sysctl getconf pkg_info sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
+        if PATH=/nonexistent/nvmimic command -v "${__nvmimic_name}" >/dev/null 2>&1 &&
+            ! \alias "${__nvmimic_name}" >/dev/null 2>&1; then
+          __nvmimic_own=1
+        fi
+      done
+    fi
+    if [ -n "${NVM_INSTALL_THIRD_PARTY_HOOK-}" ]; then
+      case "${1-}:${2-}" in
+        nvm:install | nvm:i | nvm_auto:install)
+          if PATH=/nonexistent/nvmimic command -v "${NVM_INSTALL_THIRD_PARTY_HOOK}" >/dev/null 2>&1; then
+            __nvmimic_own=1
+          fi
+        ;;
+      esac
+    fi
+    if [ -n "${__nvmimic_own}" ]; then
+      # Which of nvm's functions are the caller's own now. Those are kept.
+      if [ -n "${ZSH_VERSION-}" ]; then
+        eval '() {
+          emulate -L zsh
+          local -a names was
+          local i
+          names=(nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters)
+          was=("${(@ps:\0:)__nvmimic_functions}")
+          for i in {1..$#names}; do
+            [[ "$functions[$names[i]]" == "$was[i]" ]] || __nvmimic_keep+=" $names[i]"
+          done
+        }'
+      elif [ -n "${BASH_VERSION-}" ]; then
+        case "${__nvmimic_now}" in
+          "${__nvmimic_functions-}"*) ;;
+          *)
+            # A function the caller removed stays removed, so it counts
+            # as the caller's too.
+            for __nvmimic_name in nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters; do
+              if ! declare -F "${__nvmimic_name}" >/dev/null; then
+                __nvmimic_keep="${__nvmimic_keep} ${__nvmimic_name}"
+                continue
+              fi
+              case "${__nvmimic_functions-}" in
+                *"$(declare -f "${__nvmimic_name}" || :)"*) ;;
+                *) __nvmimic_keep="${__nvmimic_keep} ${__nvmimic_name}" ;;
+              esac
+            done
+          ;;
+        esac
+      fi
+      # nvm's functions are read with aliases switched off, as nvmimic's
+      # own were.
+      __nvmimic_now="${NVM_DIR}/.nvmimic/nvm-functions.sh"
+      if [ -n "${ZSH_VERSION-}" ]; then
+        eval '() { setopt localoptions noaliases; \. "${__nvmimic_now}" }'
+      elif [ -n "${BASH_VERSION-}" ] && shopt -q expand_aliases; then
+        shopt -u expand_aliases
+        \. "${__nvmimic_now}"
+        shopt -s expand_aliases
+      else
+        \. "${__nvmimic_now}"
+      fi
+      "$@"
+      __nvmimic_own=$?
+      if ! type nvm >/dev/null 2>&1; then
+        # The call was `nvm unload`.
+        unset __nvmimic_functions
+      elif [ -z "${NVMIMIC_NVM_CODE-}" ]; then
+        \. "${NVM_DIR}/.nvmimic/nvmimic-functions.sh"
+      fi
+      return "${__nvmimic_own}"
+    fi
     local __nvmimic_shell
     __nvmimic_shell=posix
     if [ -n "${ZSH_VERSION-}" ]; then
@@ -286,7 +399,6 @@ nvm() {
     __nvmimic_aliases=''
     local __nvmimic_info
     __nvmimic_info=''
-    local __nvmimic_name
     case "${1-}:${2-}" in
       nvm:install | nvm:i | nvm:debug | nvm_auto:install | nvm_*checksum*:* | nvm_download_artifact:* | nvm_install_*:*)
         for __nvmimic_name in sha256sum shasum sha256 gsha256sum openssl bssl sha1sum sha1; do
@@ -516,6 +628,26 @@ nvm_get_default_packages() { nvm __nvmimic nvm_get_default_packages "$@"; }
 nvm_install_default_packages() { nvm __nvmimic nvm_install_default_packages "$@"; }
 nvm_supports_xz() { nvm __nvmimic nvm_supports_xz "$@"; }
 
+# A copy of nvm's functions as this shell shows them, taken while they are
+# sure to be nvmimic's. `nvm` compares against it on every call. See the
+# top of `nvm()`.
+if [ -n "${ZSH_VERSION-}" ]; then
+  eval '() {
+    emulate -L zsh
+    setopt extendedglob
+    local -a names
+    local MATCH MBEGIN MEND
+    names=(nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters)
+    typeset -g __nvmimic_functions="${(pj:\0:)${(@)names/(#m)*/$functions[$MATCH]}}"
+  }'
+elif [ -n "${BASH_VERSION-}" ]; then
+  __nvmimic_functions="$(declare -f nvm_is_zsh nvm_stdout_is_terminal nvm_echo nvm_echo_with_colors nvm_cd nvm_err nvm_err_with_colors nvm_grep nvm_has nvm_has_executable nvm_has_non_aliased nvm_is_alias nvm_command_info nvm_has_colors nvm_curl_libz_support nvm_curl_use_compression nvm_get_latest nvm_download nvm_sanitize_auth_header nvm_has_system_node nvm_has_system_iojs nvm_is_version_installed nvm_validate_install nvm_print_npm_version nvm_install_latest_npm nvm_tree_contains_path nvm_find_project_dir nvm_find_up nvm_find_nvmrc nvm_nvmrc_invalid_msg nvm_process_nvmrc_content nvm_process_nvmrc nvm_rc_version nvm_clang_version nvm_curl_version nvm_version_greater nvm_version_greater_than_or_equal_to nvm_version_dir nvm_alias_path nvm_version_path nvm_ensure_version_installed nvm_version nvm_remote_version nvm_remote_versions nvm_is_valid_version nvm_normalize_version nvm_normalize_lts nvm_ensure_version_prefix nvm_format_version nvm_num_version_groups nvm_strip_path nvm_change_path nvm_hash_reset nvm_binary_available nvm_set_colors nvm_get_colors nvm_wrap_with_color_code nvm_print_color_legend nvm_print_color_code nvm_print_formatted_alias nvm_print_alias_path nvm_print_default_alias nvm_make_alias nvm_list_aliases nvm_print_alias_file nvm_alias nvm_ls_current nvm_resolve_alias nvm_resolve_local_alias nvm_iojs_prefix nvm_node_prefix nvm_is_iojs_version nvm_add_iojs_prefix nvm_strip_iojs_prefix nvm_ls nvm_ls_remote nvm_ls_remote_iojs nvm_ls_remote_index_tab nvm_get_checksum_binary nvm_get_checksum_alg nvm_compute_checksum nvm_compare_checksum nvm_get_checksum nvm_print_versions nvm_validate_implicit_alias nvm_print_implicit_alias nvm_get_os nvm_get_arch nvm_get_minor_version nvm_ensure_default_set nvm_is_merged_node_version nvm_get_mirror nvm_install_binary_extract nvm_install_binary nvm_get_download_slug nvm_get_artifact_compression nvm_download_artifact nvm_extract_tarball nvm_get_make_jobs nvm_install_source nvm_use_if_needed nvm_install_npm_if_needed nvm_match_version nvm_npm_global_modules nvm_npmrc_bad_news_bears nvm_die_on_prefix nvm_iojs_version_has_solaris_binary nvm_node_version_has_solaris_binary nvm_has_solaris_binary nvm_sanitize_path nvm_is_natural_num nvm_write_nvmrc nvm_check_file_permissions nvm_cache_dir nvm_install_lock_name nvm_acquire_install_lock nvm_release_install_lock nvm_ls_cached nvm_offline_version nvm_get_default_packages nvm_install_default_packages nvm_supports_xz nvm_auto nvm_process_parameters || :)"
+fi
+# With NVMIMIC_NVM_CODE set, nvm's own functions take over right away.
+if [ -n "${NVMIMIC_NVM_CODE-}" ]; then
+  nvm __nvmimic :
+fi
+
 # Make zsh glob matching behave same as bash
 # This fixes the "zsh: no matches found" errors
 if [ -z "${NVM_CD_FLAGS-}" ]; then
@@ -546,6 +678,10 @@ else
 fi
 unset NVM_SCRIPT_SOURCE 2>/dev/null
 
+__nvmimic_sourcing=1
 nvm_process_parameters "$@"
+# Sourcing ends with what that returned, as nvm's nvm.sh does.
+__nvmimic_sourcing=$?
+eval "unset __nvmimic_sourcing; return ${__nvmimic_sourcing}"
 
 } # this ensures the entire script is downloaded #

@@ -160,15 +160,28 @@ fn skip_reason<'a>(skipped: &'a [(String, String)], path: &str) -> Option<&'a st
         .map(|(reason, _)| reason.as_str())
 }
 
-/// The reason given to tests that install real Node releases. A network
-/// pass runs exactly these, and every other run leaves them out.
-const REAL_NODE: &str = "real-node";
+/// Reasons that keep a test out of every run but a network pass, where it
+/// installs real Node releases.
+const NETWORK: &[&str] = &["real-node", "real-node-mock", "real-node-hook"];
+
+/// Reasons that keep a test from running under dash only. dash cannot show
+/// what a function contains, so nvmimic cannot tell there that a test
+/// replaced one of nvm's functions.
+const NOT_DASH: &[&str] = &[
+    "mock-internal",
+    "mock-tool",
+    "real-node-mock",
+    "real-node-hook",
+];
 
 /// Whether a test belongs in this run.
 fn runs_now(skipped: &[(String, String)], path: &str) -> bool {
-    match (crate::mirror::network_pass(), skip_reason(skipped, path)) {
-        (true, reason) => reason == Some(REAL_NODE),
-        (false, reason) => reason.is_none(),
+    let reason = skip_reason(skipped, path);
+    match crate::mirror::network_pass() {
+        true => reason.is_some_and(|reason| NETWORK.contains(&reason)),
+        false => {
+            reason.is_none_or(|reason| NOT_DASH.contains(&reason) && !NETWORK.contains(&reason))
+        }
     }
 }
 
@@ -220,11 +233,12 @@ pub fn cases() -> Vec<Case> {
             let own_interpreter = text.starts_with("#!")
                 && !text.starts_with("#!/bin/sh")
                 && !text.starts_with("#!/usr/bin/env sh");
-            let shells = if own_interpreter {
-                harness::shells().into_iter().take(1).collect()
-            } else {
-                harness::shells()
-            };
+            let not_dash = skip_reason(&skipped, &path).is_some_and(|r| NOT_DASH.contains(&r));
+            let shells: Vec<_> = harness::shells()
+                .into_iter()
+                .filter(|shell| !(not_dash && shell.name == "dash"))
+                .take(if own_interpreter { 1 } else { usize::MAX })
+                .collect();
             let file_name = path.rsplit('/').next().unwrap_or("");
             let id = id(&path);
             // Until a test's covers are measured, its file name often names
