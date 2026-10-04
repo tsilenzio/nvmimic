@@ -721,11 +721,20 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, options: &Options) {
 /// a fingerprint, which holds a worker until the timeout and puts a prompt
 /// on the screen of whoever is at the machine. No test gets to run anything
 /// as root from here.
+///
+/// Each attempt adds a line to `target/parity-sudo.log`: the time, the
+/// folder it came from, and what it asked `sudo` to do. This only
+/// catches `sudo` looked up by name. A test that changes `PATH` or spells
+/// out `/usr/bin/sudo` gets past it.
 fn block_sudo(side: &Path) {
     let sudo = staged(Path::new("sudo"), |path| {
+        let log = repo_root().join("target/parity-sudo.log");
         write_script(
             path,
-            "#!/bin/sh\necho 'sudo: not available in a parity run' >&2\nexit 1\n",
+            &format!(
+                "#!/bin/sh\nprintf '%s\\t%s\\tsudo %s\\n' \"$(/bin/date '+%F %T')\" \"$PWD\" \"$*\" >> '{}'\necho 'sudo: not available in a parity run' >&2\nexit 1\n",
+                log.display()
+            ),
         )
     });
     fs::hard_link(sudo, side.join("bin/sudo")).unwrap();
