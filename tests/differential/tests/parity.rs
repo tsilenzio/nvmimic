@@ -305,7 +305,7 @@ fn everyday_commands_launch_only_nvmimic() {
         // After the caller replaced one of nvm's functions, the call runs
         // nvm's own code in the shell and nvmimic's program is not started.
         // dash cannot tell that a function was replaced.
-        if shell.name != "dash" {
+        if shell.kind() != "dash" {
             let outcome = world.run_with(
                 Impl::Nvmimic,
                 &shell,

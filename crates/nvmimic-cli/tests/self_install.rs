@@ -750,6 +750,7 @@ fn nvm_installed_over_a_fresh_nvmimic_survives_uninstall() {
     }
 }
 
+#[cfg(target_os = "macos")]
 /// A folder laid out like a release's downloads, holding a stand-in for a
 /// newer nvmimic: a script that reports `version` and whose `self install`
 /// exits with `install_status`.
@@ -790,6 +791,7 @@ fn fake_release(home: &Home, version: &str, install_status: u8) -> PathBuf {
     release
 }
 
+#[cfg(target_os = "macos")]
 /// Runs a `self` command against a stand-in release folder.
 fn with_release(home: &Home, release: &Path, args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_nvmimic"))

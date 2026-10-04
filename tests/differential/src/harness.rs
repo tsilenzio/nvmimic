@@ -37,6 +37,22 @@ pub struct Shell {
     pub path: PathBuf,
 }
 
+impl Shell {
+    /// The shell whose syntax this one really speaks. `sh` is bash on macOS
+    /// and dash on Debian and Ubuntu.
+    pub fn kind(&self) -> &str {
+        let is_dash = || {
+            fs::canonicalize(&self.path)
+                .is_ok_and(|real| real.file_name().is_some_and(|name| name == "dash"))
+        };
+        if self.name == "sh" && is_dash() {
+            "dash"
+        } else {
+            &self.name
+        }
+    }
+}
+
 pub const SHELL_NAMES: &[&str] = &["bash", "zsh", "sh", "dash"];
 
 /// The shells nvm supports that exist on this machine. `/bin/<name>` is
@@ -401,7 +417,7 @@ impl World {
             "{source}{}{setup}{}{count_on}{trace_on}{body}\n__diff_rc=$?\n{count_off}{trace_off}{}",
             mark("sourced"),
             mark("ready"),
-            probe_script(&shell.name)
+            probe_script(shell.kind())
         );
 
         let mut command = Command::new(&shell.path);
@@ -435,7 +451,7 @@ impl World {
         let raw_state = fs::read(&state_file).unwrap_or_default();
         let _ = fs::remove_file(&state_file);
 
-        let mut state = parse_state(&String::from_utf8_lossy(&raw_state), &shell.name);
+        let mut state = parse_state(&String::from_utf8_lossy(&raw_state), shell.kind());
         for value in state.values_mut() {
             *value = self.normalize(value, &side);
         }

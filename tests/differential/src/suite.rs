@@ -245,7 +245,7 @@ pub fn cases() -> Vec<Case> {
             let quiet = traces || reason == Some("real-node-npm");
             let shells: Vec<_> = harness::shells()
                 .into_iter()
-                .filter(|shell| !(not_dash && shell.name == "dash"))
+                .filter(|shell| !(not_dash && shell.kind() == "dash"))
                 .take(if own_interpreter { 1 } else { usize::MAX })
                 .collect();
             let file_name = path.rsplit('/').next().unwrap_or("");

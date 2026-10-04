@@ -75,6 +75,8 @@ mock-internal: fast/Unit tests/nvm_get_download_slug
 mock-internal: fast/Unit tests/nvm_get_latest missing curl or wget
 mock-internal: fast/Unit tests/nvm_get_make_jobs
 mock-internal: fast/Unit tests/nvm install NVM_NO_SOURCE_FALLBACK
+mock-internal: fast/Unit tests/nvm_install_binary_extract
+mock-internal: fast/Unit tests/nvm_install_binary_extract self-heals a broken version dir
 mock-internal: fast/Unit tests/nvm_install_binary_nosource
 mock-internal: fast/Unit tests/nvm_install_latest_npm
 mock-internal: fast/Unit tests/nvm install verifies the installed version

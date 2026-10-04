@@ -103,9 +103,13 @@ fn parse(file: &Path) -> Case {
         match header {
             Some(("id", value)) => id = Some(value.trim().to_string()),
             Some(("shells", value)) => {
-                shells = value
-                    .split_whitespace()
-                    .filter_map(harness::shell)
+                let named: Vec<&str> = value.split_whitespace().collect();
+                // A case that leaves dash out does not hold there, and on
+                // Debian and Ubuntu `sh` is dash.
+                shells = named
+                    .iter()
+                    .filter_map(|name| harness::shell(name))
+                    .filter(|shell| shell.kind() != "dash" || named.contains(&"dash"))
                     .collect()
             }
             Some(("source", value)) => source = value.trim().to_string(),

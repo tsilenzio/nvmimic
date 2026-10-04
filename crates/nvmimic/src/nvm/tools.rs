@@ -37,9 +37,16 @@ pub fn command(nvm: &Nvm, program: &str) -> Option<Command> {
     } else {
         paths::which(nvm.vars.get("PATH"), program)?
     };
-    let mut command = Command::new(resolved);
+    let mut command = if needs_shell(&resolved) {
+        let mut shell = Command::new("/bin/sh");
+        shell.arg(&resolved);
+        shell
+    } else {
+        let mut direct = Command::new(&resolved);
+        direct.arg0(program);
+        direct
+    };
     command
-        .arg0(program)
         .env_clear()
         .envs(nvm.vars.exported())
         .stdin(Stdio::null());
@@ -47,6 +54,22 @@ pub fn command(nvm: &Nvm, program: &str) -> Option<Command> {
         command.current_dir(nvm.vars.get("PWD"));
     }
     Some(command)
+}
+
+/// Whether a file is a script with no `#!` line. A shell runs such a file
+/// itself. macOS does the same for any program that starts one, by handing
+/// it to `/bin/sh`. Linux refuses to start it, so nvmimic hands it over.
+fn needs_shell(path: &str) -> bool {
+    use std::io::Read;
+    if cfg!(target_os = "macos") {
+        return false;
+    }
+    let mut start = [0; 4];
+    let Ok(read) = std::fs::File::open(path).and_then(|mut file| file.read(&mut start)) else {
+        return false;
+    };
+    let start = &start[..read];
+    !start.starts_with(b"#!") && !start.starts_with(b"\x7fELF")
 }
 
 /// Runs a program and captures its stdout. What it writes to stderr goes to
