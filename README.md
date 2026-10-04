@@ -34,9 +34,9 @@ start no other program at all.
 
 How close it is gets measured, not guessed. A test harness runs real nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
-they print, return, set and write. It runs 322 test scripts written for
+they print, return, set and write. It runs 327 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
-way (174 of them so far).
+way (178 of them so far).
 
 ## Installing
 
