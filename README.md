@@ -105,11 +105,22 @@ spends on nvm:
 
 ## Known differences
 
-nvmimic aims to be impossible to tell apart from nvm. These are the places
-where you still can, each with the reason. Nothing is left off this list on
-purpose. If you find a difference that isn't here, it's a bug.
+nvmimic matches what nvm's commands and documented helpers print, return,
+set and write. That's the promise. A helper is one of the small functions
+nvm's own README tells you to call, such as `nvm_find_nvmrc`.
+
+It promises nothing if you replace nvm's own functions, give the tools nvm
+runs an alias, or remove programs nvm needs. Some of that works anyway, and
+the sections below say how far. Don't build on it.
+
+Inside the promise, these are the places where you can still tell the two
+apart, each with the reason. If you find a difference in a command or a
+documented helper that isn't on this list, it's a bug.
 
 ### Things only your own shell can see
+
+This part is outside the promise. It's described here because the common
+cases work.
 
 Real nvm is shell code that runs inside your shell. nvmimic's `nvm` hands
 the work to a separate program, and a separate program can't look inside
@@ -140,9 +151,9 @@ What still differs here:
   loading `nvm.sh`. The other two checks do work under dash.
 - **Aliases for tools.** If an alias called `grep` or `node` existed when
   `nvm.sh` was loaded, real nvm's functions use it for the life of that
-  shell. nvmimic ignores such aliases, with two exceptions that already
-  match: nvm skips a checksum program that is an alias, and `nvm debug`
-  shows what each tool is aliased to.
+  shell. nvmimic ignores such aliases, and that isn't going to change. Two
+  cases match anyway: nvm skips a checksum program that is an alias, and
+  `nvm debug` shows what each tool is aliased to.
 - **Replacing `nvm` itself.** If you define your own function named `nvm`
   and then call one of nvm's helpers such as `nvm_version`, nvmimic's helper
   calls your `nvm`, because that's how it reaches its program.
@@ -199,7 +210,8 @@ such a thing.
 nvm hands many small jobs to programs such as `sed`, `awk`, `sort` and
 `uname`. nvmimic does most of those jobs itself. So if one of those programs
 is missing from your `PATH`, or you put a different one in front, real nvm
-fails or changes and nvmimic carries on as if nothing happened.
+fails or changes and nvmimic carries on as if nothing happened. This is
+outside the promise too.
 
 When a program is missing, the shell itself prints a complaint that names a
 line in nvm's `nvm.sh`, such as
@@ -247,6 +259,9 @@ These aren't known differences. They're places nobody has looked.
   It starts a lot of small programs. Run one at a time. More on it below.
 - `cargo xtask bench --check` times sourcing `nvm.sh` and fails if nvmimic gets
   slower than the budget in `bench/budget.toml`.
+- `cargo xtask smoke` installs nvmimic into a throwaway home folder, installs
+  three real Node releases, and switches between them under each shell. It
+  takes well under a minute once the downloads are kept.
 - `cargo xtask gen-shell` rebuilds `shell/nvm.sh` from nvm's own `nvm.sh`.
 
 ### How the parity tests stay quick

@@ -23,6 +23,7 @@ tasks:
   parity covers                     measure what each case runs in nvm.sh, write `# covers:`
   parity determinism [--record]     run real nvm against itself on every case
   parity launches                   check everyday commands start only nvmimic
+  smoke                             install nvmimic and three real Node releases, then use them
   bench [--check] [--runs=N]        time sourcing nvm.sh for real nvm and nvmimic
   gen-shell [--check]               write shell/nvm.sh from the pinned nvm.sh
   trace [--strict]                  map nvm.sh's functions to nvmimic's code and cases
@@ -53,6 +54,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["parity", rest @ ..] => parity(rest),
+        ["smoke"] => smoke(),
         ["bench", rest @ ..] => bench::run(rest),
         ["gen-shell", rest @ ..] => gen_shell::run(rest),
         ["trace", rest @ ..] => trace::run(rest),
@@ -129,6 +131,38 @@ fn parity(args: &[&str]) -> ExitCode {
     if ok && compares && !network && env::var_os("NVMIMIC_CASES").is_none() {
         changed::mark_passed();
     }
+    if ok {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// A minute or two with real Node: `nvmimic self install` into a throwaway
+/// home, three real Node releases, and the everyday commands under each
+/// shell. The archives are downloaded once and kept in
+/// `target/parity-network/`.
+fn smoke() -> ExitCode {
+    if !cargo(&["build", "--quiet", "--package", "nvmimic-cli"]) {
+        return ExitCode::FAILURE;
+    }
+    let ok = cargo_with(
+        &[
+            "test",
+            "--quiet",
+            "--package",
+            "nvmimic-parity",
+            "--test",
+            "smoke",
+            "--",
+            "--ignored",
+            "--nocapture",
+        ],
+        false,
+        "full",
+        None,
+        true,
+    );
     if ok {
         ExitCode::SUCCESS
     } else {
