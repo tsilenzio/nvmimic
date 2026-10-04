@@ -110,6 +110,7 @@ name = "nvmimic-parity"
 version = "0.1.0"
 dependencies = [
  "nvmimic",
+ "serde_json",
  "sha2",
 ]
 
@@ -241,7 +242,9 @@ name = "xtask"
 version = "0.1.0"
 dependencies = [
  "nvmimic",
+ "nvmimic-parity",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

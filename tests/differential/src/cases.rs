@@ -19,16 +19,22 @@
 //!
 //! The tests of nvm's own suite are cases too, see [`crate::suite`].
 
+use crate::golden;
 use crate::guard::Guard;
-use crate::harness::{self, Impl, Shell, World, diff};
-use std::collections::BTreeSet;
+use crate::harness::{self, Impl, Outcome, Shell, SuiteSide, World, diff};
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
+use std::time::Duration;
 
 pub struct Case {
     pub id: String,
+    /// The case file, for a case that has one.
+    pub file: Option<PathBuf>,
     pub shells: Vec<Shell>,
     pub source: String,
     pub setup: String,
@@ -38,6 +44,8 @@ pub struct Case {
     pub plain_files: bool,
     /// Set for a test from nvm's own suite, which runs instead of `body`.
     pub suite: Option<crate::suite::SuiteTest>,
+    /// Changes whenever the case does, see [`crate::golden`].
+    pub fingerprint: String,
 }
 
 pub fn cases_dir() -> PathBuf {
@@ -57,11 +65,17 @@ pub fn load_all() -> Vec<Case> {
 
     let filter = std::env::var("NVMIMIC_CASES").unwrap_or_default();
     let prefixes: Vec<&str> = filter.split(',').filter(|p| !p.is_empty()).collect();
+    // A file of case ids, one per line, written by `cargo xtask parity
+    // --changed` to name the cases a change can affect.
+    let only: Option<BTreeSet<String>> = std::env::var_os("NVMIMIC_PARITY_ONLY")
+        .and_then(|file| fs::read_to_string(file).ok())
+        .map(|text| text.lines().map(str::to_string).collect());
     files
         .iter()
         .map(|file| parse(file))
         .chain(crate::suite::cases())
         .filter(|case| prefixes.is_empty() || prefixes.iter().any(|p| case.id.starts_with(p)))
+        .filter(|case| only.as_ref().is_none_or(|only| only.contains(&case.id)))
         .collect()
 }
 
@@ -103,6 +117,7 @@ fn parse(file: &Path) -> Case {
         shells = harness::shells();
     }
     Case {
+        file: Some(file.to_path_buf()),
         id: id.unwrap_or_else(|| panic!("{} has no `# id:` header", file.display())),
         shells,
         source,
@@ -111,7 +126,24 @@ fn parse(file: &Path) -> Case {
         body: body.join("\n"),
         plain_files,
         suite: None,
+        fingerprint: fingerprint(&text),
     }
+}
+
+/// A hash of a case file that changes when the case does. The `# covers:`
+/// headers are left out, because they describe the case and change nothing
+/// about how it runs.
+fn fingerprint(text: &str) -> String {
+    let mut hasher = Sha256::new();
+    for line in text.lines().filter(|line| !line.starts_with("# covers: ")) {
+        hasher.update(line);
+        hasher.update(b"\n");
+    }
+    hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// `<id> <shell>` pairs listed in `cases/<name>`, where the shell is a name
@@ -138,27 +170,83 @@ pub struct Result {
     pub id: String,
     pub shell: String,
     pub differences: Vec<String>,
+    /// How long each side took, left then right.
+    pub elapsed: (Duration, Duration),
+    /// Each side's sourcing and sourcing-plus-setup times, when measured.
+    pub phases: (harness::Phases, harness::Phases),
 }
 
-/// Runs every case under each of its shells, `left` against `right`, on up to
-/// four worker threads. A [`Guard`] watches macOS's Gatekeeper the whole
-/// time. It can pause the workers, and when it stops the run this returns
-/// the reason instead of results.
-pub fn run_all(
-    cases: &[Case],
-    left: Impl,
-    right: Impl,
-) -> std::result::Result<Vec<Result>, String> {
-    let results = Mutex::new(Vec::new());
-    let next = Mutex::new(0usize);
-    let workers = std::env::var("NVMIMIC_PARITY_JOBS")
+/// How many cases run at once: four, or fewer on a small machine.
+/// `NVMIMIC_PARITY_JOBS` overrides it.
+fn workers() -> usize {
+    std::env::var("NVMIMIC_PARITY_JOBS")
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or_else(|| {
             thread::available_parallelism()
                 .map_or(2, |n| n.get())
                 .min(4)
-        });
+        })
+}
+
+/// What a run does about recordings of real nvm, see [`crate::golden`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recordings {
+    /// Runs the left side every time and keeps nothing.
+    Unused,
+    /// Uses a recording where a good one exists, and makes one where not.
+    Replay,
+    /// Runs the left side every time, checks each recording against it, and
+    /// writes it again.
+    Refresh,
+}
+
+/// What a run compares and how much of it.
+#[derive(Clone, Copy, Debug)]
+pub struct Plan {
+    pub left: Impl,
+    pub right: Impl,
+    pub recordings: Recordings,
+    /// Run a case under one shell when real nvm did the same in all of them.
+    pub one_shell: bool,
+}
+
+impl Plan {
+    /// Both sides run for every case under every shell. This is the run for
+    /// releases and for moving the nvm pin.
+    pub fn full(left: Impl, right: Impl) -> Plan {
+        let recordings = match (left, right) {
+            (Impl::Nvm, Impl::Nvmimic) => Recordings::Refresh,
+            _ => Recordings::Unused,
+        };
+        Plan {
+            left,
+            right,
+            recordings,
+            one_shell: false,
+        }
+    }
+
+    /// nvmimic against recordings of real nvm.
+    pub fn everyday(one_shell: bool) -> Plan {
+        Plan {
+            left: Impl::Nvm,
+            right: Impl::Nvmimic,
+            recordings: Recordings::Replay,
+            one_shell,
+        }
+    }
+}
+
+/// Runs every case under its shells, the plan's left side against its right,
+/// on up to four worker threads. A [`Guard`] watches macOS's Gatekeeper the
+/// whole time. It can pause the workers, and when it stops the run this
+/// returns the reason instead of results.
+pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, String> {
+    let Plan { left, right, .. } = plan;
+    let results = Mutex::new(Vec::new());
+    let next = Mutex::new(0usize);
+    let workers = workers();
 
     let labels = if left == right {
         (
@@ -172,18 +260,27 @@ pub fn run_all(
 
     // Building the mirror first keeps its one-time work out of the guarded part.
     crate::mirror::shared();
+    let rotation = plan.one_shell.then(golden::rotation);
     let guard = Guard::start(&crate::guard::stage_dir());
     let guard = &guard;
     let suite_root = World::new().root;
     let suite_root = &suite_root;
+    let (replayed, recorded, narrowed, sandboxes) = (
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+        AtomicUsize::new(0),
+    );
 
     thread::scope(|scope| {
         for worker in 0..workers {
             let (results, next) = (&results, &next);
+            let (replayed, recorded, narrowed, sandboxes) =
+                (&replayed, &recorded, &narrowed, &sandboxes);
             scope.spawn(move || {
                 // One reusable sandbox per side for nvm's own suite.
-                let suite_left = suite_root.join(format!("suite-{worker}-left"));
-                let suite_right = suite_root.join(format!("suite-{worker}-right"));
+                let mut suite_left = SuiteSide::new(suite_root, &format!("suite-{worker}-left"));
+                let mut suite_right = SuiteSide::new(suite_root, &format!("suite-{worker}-right"));
                 loop {
                     let index = {
                         let mut next = next.lock().unwrap();
@@ -195,19 +292,145 @@ pub fn run_all(
                         break;
                     };
                     let world = World::new();
-                    for shell in &case.shells {
+
+                    let mut stored: Vec<Option<Outcome>> = case
+                        .shells
+                        .iter()
+                        .map(|shell| match plan.recordings {
+                            Recordings::Unused => None,
+                            _ => golden::load(case, shell),
+                        })
+                        .collect();
+                    let only = rotation
+                        .filter(|_| {
+                            let all: Option<Vec<(&Shell, &Outcome)>> = case
+                                .shells
+                                .iter()
+                                .zip(&stored)
+                                .map(|(shell, outcome)| Some((shell, outcome.as_ref()?)))
+                                .collect();
+                            let differing = all.map(|all| golden::shell_differences(case, &all));
+                            if std::env::var_os("NVMIMIC_PARITY_EXPLAIN").is_some()
+                                && let Some(differing) = &differing
+                                && !differing.is_empty()
+                            {
+                                let names: Vec<&str> =
+                                    differing.iter().map(String::as_str).collect();
+                                eprintln!("{} differs by shell in: {}", case.id, names.join(" "));
+                            }
+                            case.shells.len() > 1 && differing.is_some_and(|d| d.is_empty())
+                        })
+                        .map(|rotation| golden::pick(case, rotation));
+                    if only.is_some() {
+                        narrowed.fetch_add(1, Ordering::SeqCst);
+                    }
+
+                    for (index, shell) in case.shells.iter().enumerate() {
+                        if only.is_some_and(|only| only != index) {
+                            continue;
+                        }
                         if guard.wait_turn().is_err() {
                             return;
                         }
-                        let a = world.run_case(left, shell, case, &suite_left);
-                        let b = world.run_case(right, shell, case, &suite_right);
-                        let differences = diff((&labels.0, &a), (&labels.1, &b));
+                        let mut stale = None;
+                        let a = match (plan.recordings, stored[index].take()) {
+                            (Recordings::Replay, Some(outcome)) => {
+                                replayed.fetch_add(1, Ordering::SeqCst);
+                                outcome
+                            }
+                            (recordings, old) => {
+                                let fresh = world.run_case(left, shell, case, &mut suite_left);
+                                if recordings != Recordings::Unused {
+                                    stale = old
+                                        .map(|old| diff(("recorded", &old), ("now", &fresh)))
+                                        .filter(|changes| !changes.is_empty());
+                                    golden::store(case, shell, &fresh);
+                                    recorded.fetch_add(1, Ordering::SeqCst);
+                                }
+                                fresh
+                            }
+                        };
+                        let b = world.run_case(right, shell, case, &mut suite_right);
+                        let mut differences = diff((&labels.0, &a), (&labels.1, &b));
+                        if let Some(changes) = stale {
+                            differences.push(format!(
+                                "real nvm no longer does what was recorded for this pair, so \
+                                 everyday runs compared against a stale recording:\n{}",
+                                changes.join("\n")
+                            ));
+                        }
                         results.lock().unwrap().push(Result {
                             id: case.id.clone(),
                             shell: shell.name.clone(),
                             differences,
+                            elapsed: (a.elapsed, b.elapsed),
+                            phases: (a.phases, b.phases),
                         });
                     }
+                }
+                let used = suite_left.used() + suite_right.used();
+                sandboxes.fetch_add(used as usize, Ordering::SeqCst);
+            });
+        }
+    });
+
+    eprintln!("{}", guard.finish());
+    if plan.recordings != Recordings::Unused {
+        eprintln!(
+            "recordings of real nvm: {} replayed, {} recorded",
+            replayed.into_inner(),
+            recorded.into_inner()
+        );
+    }
+    if let Some(rotation) = rotation {
+        eprintln!(
+            "{} of {} cases ran under one shell (rotation {rotation})",
+            narrowed.into_inner(),
+            cases.len()
+        );
+    }
+    if cases.iter().any(|case| case.suite.is_some()) {
+        eprintln!("suite sandboxes used: {}", sandboxes.into_inner());
+    }
+    if let Some(reason) = guard.stopped() {
+        return Err(reason);
+    }
+    crate::mirror::shared().verify()?;
+    let mut results = results.into_inner().unwrap();
+    results.sort_by(|a, b| (&a.id, &a.shell).cmp(&(&b.id, &b.shell)));
+    Ok(results)
+}
+
+/// Measures what each case's body runs in nvm.sh: every case once, under
+/// its first shell, against a traced copy of real nvm. Goes through the same
+/// guard as a parity run.
+pub fn measure_covers(
+    cases: &[Case],
+) -> std::result::Result<BTreeMap<String, BTreeSet<String>>, String> {
+    let covers = Mutex::new(BTreeMap::new());
+    let next = AtomicUsize::new(0);
+    crate::mirror::shared();
+    let guard = Guard::start(&crate::guard::stage_dir());
+    let guard = &guard;
+    let suite_root = World::new().root;
+    let suite_root = &suite_root;
+
+    thread::scope(|scope| {
+        for worker in 0..workers() {
+            let (covers, next) = (&covers, &next);
+            scope.spawn(move || {
+                let mut suite_side = SuiteSide::new(suite_root, &format!("suite-{worker}"));
+                while let Some(case) = cases.get(next.fetch_add(1, Ordering::SeqCst)) {
+                    if guard.wait_turn().is_err() {
+                        return;
+                    }
+                    let mut world = World::new();
+                    world.options.trace_covers = true;
+                    let outcome = world.run_case(Impl::Nvm, &case.shells[0], case, &mut suite_side);
+                    covers
+                        .lock()
+                        .unwrap()
+                        .insert(case.id.clone(), outcome.covered);
                 }
             });
         }
@@ -217,10 +440,7 @@ pub fn run_all(
     if let Some(reason) = guard.stopped() {
         return Err(reason);
     }
-    crate::mirror::shared().verify()?;
-    let mut results = results.into_inner().unwrap();
-    results.sort_by(|a, b| (&a.id, &a.shell).cmp(&(&b.id, &b.shell)));
-    Ok(results)
+    Ok(covers.into_inner().unwrap())
 }
 
 /// Writes `<id> <shell>` lines for every result that differs, under a header.

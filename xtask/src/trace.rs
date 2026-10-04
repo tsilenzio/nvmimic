@@ -2,11 +2,12 @@
 //! and which parity cases cover them.
 //!
 //! Rust code names the nvm function it follows with an `nvm: <name>` line in
-//! a comment. Case files name what they exercise with `# covers: <names>`.
+//! a comment. Case files name what they run with `# covers: <names>`, which
+//! `cargo xtask parity covers` measures.
 //! Until coverage is complete this only reports. `--strict` fails when a
 //! unit is neither ported nor copied into `shell/nvm.sh`.
 
-use crate::nvmsh::{self, Unit};
+use nvmimic_parity::nvmsh::{self, Unit};
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -48,10 +49,14 @@ pub fn run(args: &[&str]) -> ExitCode {
                 "real nvm (fallback)".to_string()
             }
         };
-        let cases = map
-            .covers
-            .get(&unit.name)
-            .map_or(String::new(), |ids| ids.join(" "));
+        // Some units are covered by hundreds of cases, so only a few are named.
+        let cases = map.covers.get(&unit.name).map_or(String::new(), |ids| {
+            let shown = ids.iter().take(6).cloned().collect::<Vec<_>>().join(" ");
+            match ids.len() {
+                0..=6 => shown,
+                count => format!("{shown} and {} more", count - 6),
+            }
+        });
         println!(
             "| `{}` | {}-{} | {place} | {cases} |",
             unit.name, unit.start, unit.end
@@ -86,7 +91,7 @@ impl Map {
         Ok(Map {
             units: nvmsh::units(&source),
             anchors: anchors(&root.join("crates/nvmimic/src"), &root),
-            covers: covers(&root.join("tests/differential/cases")),
+            covers: covers(),
         })
     }
 }
@@ -117,55 +122,50 @@ fn anchors(dir: &Path, root: &Path) -> BTreeMap<String, Vec<String>> {
             .unwrap_or(&file)
             .display()
             .to_string();
-        for (index, line) in text.lines().enumerate() {
-            let Some(comment) = line.trim_start().strip_prefix("//") else {
-                continue;
-            };
-            let comment = comment.trim_start_matches(['/', '!']).trim();
-            let Some(names) = comment.strip_prefix("nvm: ") else {
-                continue;
-            };
-            let is_unit = |name: &&str| {
-                !name.is_empty()
-                    && name
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || "_:-*".contains(c))
-            };
-            for name in names.split([' ', ',']).filter(is_unit) {
-                anchors
-                    .entry(name.to_string())
-                    .or_default()
-                    .push(format!("{shown}:{}", index + 1));
-            }
+        for (line, name) in anchored_units(&text) {
+            anchors
+                .entry(name)
+                .or_default()
+                .push(format!("{shown}:{line}"));
         }
     }
     anchors
 }
 
-fn covers(dir: &Path) -> BTreeMap<String, Vec<String>> {
+/// The nvm units a Rust source names in `nvm: <name>` comments, each with
+/// the line the comment is on.
+pub fn anchored_units(text: &str) -> Vec<(usize, String)> {
+    let mut found = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let Some(comment) = line.trim_start().strip_prefix("//") else {
+            continue;
+        };
+        let comment = comment.trim_start_matches(['/', '!']).trim();
+        let Some(names) = comment.strip_prefix("nvm: ") else {
+            continue;
+        };
+        let is_unit = |name: &&str| {
+            !name.is_empty()
+                && name
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || "_:-*".contains(c))
+        };
+        for name in names.split([' ', ',']).filter(is_unit) {
+            found.push((index + 1, name.to_string()));
+        }
+    }
+    found
+}
+
+/// Unit name to the ids of the cases that run it, suite tests included.
+fn covers() -> BTreeMap<String, Vec<String>> {
     let mut covers: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let Ok(entries) = fs::read_dir(dir) else {
-        return covers;
-    };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
-    for path in paths
-        .into_iter()
-        .filter(|path| path.extension().is_some_and(|e| e == "sh"))
-    {
-        let text = fs::read_to_string(&path).unwrap_or_default();
-        let id = text
-            .lines()
-            .find_map(|line| line.strip_prefix("# id: "))
-            .unwrap_or("?")
-            .trim()
-            .to_string();
-        for line in text.lines().take_while(|line| line.starts_with('#')) {
-            if let Some(names) = line.strip_prefix("# covers: ") {
-                for name in names.split_whitespace() {
-                    covers.entry(name.to_string()).or_default().push(id.clone());
-                }
-            }
+    for case in nvmimic_parity::cases::load_all() {
+        for unit in &case.covers {
+            covers
+                .entry(unit.clone())
+                .or_default()
+                .push(case.id.clone());
         }
     }
     covers

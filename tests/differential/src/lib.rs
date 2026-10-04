@@ -3,9 +3,12 @@
 //! return, export, define or write is compared.
 
 pub mod cases;
+pub mod covers;
+pub mod golden;
 pub mod guard;
 pub mod harness;
 pub mod mirror;
+pub mod nvmsh;
 pub mod suite;
 
 use std::path::PathBuf;

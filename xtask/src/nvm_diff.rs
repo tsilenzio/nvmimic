@@ -2,8 +2,8 @@
 //! revisions, and which parts of nvmimic and which parity cases that touches.
 //! It reads a clone of nvm-sh/nvm given by `--repo <path>` or `$NVM_REPO`.
 
-use crate::nvmsh::{self, Unit};
 use crate::trace::Map;
+use nvmimic_parity::nvmsh::{self, Unit};
 use std::collections::BTreeSet;
 use std::process::{Command, ExitCode};
 

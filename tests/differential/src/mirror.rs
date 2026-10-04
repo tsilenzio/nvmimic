@@ -13,6 +13,11 @@
 //! Cases that change an installed `node` or `npm` install from there, since
 //! writing through a symlink would change the shared copy for everyone.
 //! [`Mirror::verify`] checks after a run that the shared copies are untouched.
+//!
+//! The files are built once and kept in `target/parity-mirror/`, so every
+//! run serves the very same archives. Recorded outcomes of real nvm (see
+//! [`crate::golden`]) hold the hashes of downloaded archives, and those only
+//! stay true while the archives do.
 
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -95,31 +100,95 @@ fn files(version: &str) -> Vec<String> {
 
 pub struct Mirror {
     pub url: String,
+    /// The directory holding everything the mirror serves or links to.
+    pub root: PathBuf,
     pub dist: PathBuf,
     pub requests: Arc<Mutex<Vec<String>>>,
+    /// A hash over every file of the mirror. It changes when the mirror is
+    /// built again, even from the same recipe.
+    pub identity: String,
     /// The shared scripts with the hash and mode each was built with.
     shared: Vec<(PathBuf, String, u32)>,
 }
 
 static SHARED: OnceLock<Mirror> = OnceLock::new();
 
-/// One mirror per test process, since building every release archive is the
-/// slow part. Its directory is left behind on exit and swept by later runs.
+/// The name of the file listing everything in a finished mirror directory.
+const MANIFEST: &str = "manifest";
+
+/// One mirror per test process, serving the files kept in
+/// `target/parity-mirror/`.
 pub fn shared() -> &'static Mirror {
     SHARED.get_or_init(|| {
         crate::guard::sweep_stale();
-        let root = std::env::temp_dir().join(format!("nvmimic-mirror-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        Mirror::start(&root)
+        Mirror::start(&kept_files())
     })
+}
+
+/// The directory with the mirror's files, built first if it is missing or
+/// was built by a different version of this file.
+fn kept_files() -> PathBuf {
+    let recipe: String = Sha256::digest(include_str!("mirror.rs"))
+        .iter()
+        .take(6)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    let parent = crate::harness::repo_root().join("target/parity-mirror");
+    let root = parent.join(&recipe);
+    if intact(&root) {
+        return root;
+    }
+    if fs::symlink_metadata(&root).is_ok() {
+        // Moved aside instead of deleted: a sandbox from an earlier run may
+        // still link into it.
+        let aside = parent.join(format!("{recipe}.broken-{}", std::process::id()));
+        fs::rename(&root, aside).unwrap();
+    }
+    fs::create_dir_all(&root).unwrap();
+    build_dist(
+        &root.join("dist"),
+        &root.join("linked"),
+        Some(&root.join("shared")),
+    );
+    build_dist(&root.join("dist").join(PLAIN), &root.join("plain"), None);
+    fs::write(root.join(MANIFEST), manifest(&root)).unwrap();
+    root
+}
+
+/// One line per file the mirror serves or shares: path, hash and mode.
+fn manifest(root: &Path) -> String {
+    let mut files = Vec::new();
+    let mut pending = vec![root.join("dist"), root.join("shared")];
+    while let Some(dir) = pending.pop() {
+        for entry in fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            match fs::symlink_metadata(&path) {
+                Ok(meta) if meta.is_dir() => pending.push(path),
+                Ok(meta) if meta.is_file() => files.push(path),
+                _ => {}
+            }
+        }
+    }
+    files.sort();
+    files
+        .iter()
+        .map(|path| {
+            let relative = path.strip_prefix(root).unwrap().display();
+            format!("{relative}\t{}\t{:o}\n", sha256(path), mode_of(path))
+        })
+        .collect()
+}
+
+/// Whether a mirror directory is complete and still holds what it was built
+/// with.
+fn intact(root: &Path) -> bool {
+    fs::read_to_string(root.join(MANIFEST)).is_ok_and(|listed| listed == manifest(root))
 }
 
 impl Mirror {
     pub fn start(root: &Path) -> Mirror {
         let dist = root.join("dist");
-        build_dist(&dist, &root.join("linked"), Some(&root.join("shared")));
-        build_dist(&dist.join(PLAIN), &root.join("plain"), None);
+        let identity = sha256(&root.join(MANIFEST));
         let mut shared = Vec::new();
         for release in RELEASES {
             let top = root.join("shared").join(format!("v{}", release.version));
@@ -146,8 +215,10 @@ impl Mirror {
 
         Mirror {
             url,
+            root: root.to_path_buf(),
             dist,
             requests,
+            identity,
             shared,
         }
     }

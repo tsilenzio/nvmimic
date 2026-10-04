@@ -102,10 +102,39 @@ spends on nvm:
 
 - `cargo test --workspace` runs the unit tests.
 - `cargo xtask parity` compares nvmimic with real nvm on every test script.
-  It takes a while and starts a lot of small programs. Run one at a time.
+  It starts a lot of small programs. Run one at a time. More on it below.
 - `cargo xtask bench --check` times sourcing `nvm.sh` and fails if nvmimic gets
   slower than the budget in `bench/budget.toml`.
 - `cargo xtask gen-shell` rebuilds `shell/nvm.sh` from nvm's own `nvm.sh`.
+
+### How the parity tests stay quick
+
+Running real nvm is the slow half of a comparison, and real nvm at one
+version gives the same answer every time. So the first run saves what real
+nvm did for each test script under each shell, and later runs read that back
+instead of running nvm again. These saved answers are called recordings.
+They live in `target/parity-golden/` and stay on your machine.
+
+A recording is made again by itself when anything it depends on changes: the
+test script, the copy of nvm in `tests/reference/`, the shell program, your
+operating system version, or the test code that runs a script.
+
+Some more things you can ask for:
+
+- `cargo xtask parity` is the everyday run. Where real nvm did exactly the
+  same thing under bash, zsh, sh and dash, the script runs under one of them,
+  a different one each run. Where the shells differ, it runs under all four.
+- `cargo xtask parity --all-shells` runs every script under every shell.
+- `cargo xtask parity --changed` runs only the scripts your change can
+  affect. Each script lists the nvm functions it runs in `# covers:` lines,
+  and each Rust file names the nvm functions it rewrites in `nvm:` comments.
+  A change to a file picks the scripts that cover its functions. A change
+  this can't place runs everything.
+- `cargo xtask parity --full` trusts no recording. It runs real nvm and
+  nvmimic side by side on everything and tells you if a recording had gone
+  out of date. Run it before a release and when moving to a new nvm version.
+- `cargo xtask parity covers` works out the `# covers:` lines again by
+  running real nvm with a note-taking line in each of its functions.
 
 ### A warning about macOS and the parity tests
 

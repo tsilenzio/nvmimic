@@ -173,12 +173,26 @@ pub struct Outcome {
     pub state: BTreeMap<String, String>,
     /// Programs launched by the case body, in order, when counting is on.
     pub launches: Vec<String>,
+    /// The parts of nvm.sh the case body ran, when tracing is on, see
+    /// [`crate::covers`].
+    pub covered: BTreeSet<String>,
+    /// How long the whole run took, sandbox setup and probe included.
+    pub elapsed: Duration,
+    /// With `NVMIMIC_PARITY_PHASES` set: how long sourcing nvm.sh took, and
+    /// how long sourcing plus the case's setup took.
+    pub phases: Phases,
 }
+
+/// Time from starting the shell until nvm.sh was sourced, and until the
+/// case's setup was done.
+pub type Phases = Option<(Duration, Duration)>;
 
 #[derive(Clone, Debug)]
 pub struct Options {
     pub timeout: Duration,
     pub count_launches: bool,
+    /// Run real nvm from a copy that notes which of its parts run.
+    pub trace_covers: bool,
 }
 
 impl Default for Options {
@@ -190,6 +204,7 @@ impl Default for Options {
         Options {
             timeout: Duration::from_secs(seconds),
             count_launches: false,
+            trace_covers: false,
         }
     }
 }
@@ -237,18 +252,18 @@ impl World {
     /// own suite.
     ///
     /// A suite test runs in `suite_side`, a sandbox that is set up once and
-    /// then reused for every suite test, the way nvm's own test runner works
+    /// then reused for suite tests, the way nvm's own test runner works
     /// through one checkout. The caller keeps one per implementation.
     pub fn run_case(
         &self,
         which: Impl,
         shell: &Shell,
         case: &crate::cases::Case,
-        suite_side: &Path,
+        suite_side: &mut SuiteSide,
     ) -> Outcome {
         match &case.suite {
             Some(test) => {
-                prepare_suite_side(which, suite_side);
+                let side = suite_side.clean(which, &self.options);
                 let body = test.command(&shell.path);
                 let run = Run {
                     source_args: None,
@@ -256,7 +271,9 @@ impl World {
                     body: &body,
                     plain_files: false,
                 };
-                self.run_script(which, shell, run, Some(suite_side))
+                let mut outcome = self.run_script(which, shell, run, Some(&side));
+                suite_side.settle(which, &mut outcome);
+                outcome
             }
             None => {
                 let source = Some(case.source.as_str());
@@ -304,6 +321,7 @@ impl World {
             true => format!("{}{}", self.mirror.url, crate::mirror::PLAIN),
             false => self.mirror.url.trim_end_matches('/').to_string(),
         };
+        let started = Instant::now();
         let id = COUNTER.fetch_add(1, Ordering::SeqCst);
         let side = match reuse {
             Some(side) => side.to_path_buf(),
@@ -319,7 +337,7 @@ impl World {
             for dir in [&nvm_dir, &bin, &work] {
                 fs::create_dir_all(dir).unwrap();
             }
-            install(which, &nvm_dir, &side, self.options.count_launches);
+            install(which, &nvm_dir, &side, &self.options);
         }
 
         let launch_log = side.join("launches");
@@ -349,8 +367,27 @@ impl World {
             Some(args) => format!(". \"$NVM_DIR/nvm.sh\" {args}\n"),
             None => String::new(),
         };
+        let covers_log = side.join("covered");
+        let _ = fs::remove_file(&covers_log);
+        let (trace_on, trace_off) = if self.options.trace_covers {
+            let var = crate::covers::LOG_VAR;
+            (
+                format!("{var}='{}'; export {var}\n", covers_log.display()),
+                format!("unset {var}\n"),
+            )
+        } else {
+            (String::new(), String::new())
+        };
+        // Phase marks change `$?` before the body, so they are opt-in.
+        let phases = std::env::var_os("NVMIMIC_PARITY_PHASES").is_some();
+        let mark = |name: &str| match phases {
+            true => format!(": > \"$DIFF_STATE.{name}\"\n"),
+            false => String::new(),
+        };
         let script = format!(
-            "{source}{setup}{count_on}{body}\n__diff_rc=$?\n{count_off}{}",
+            "{source}{}{setup}{}{count_on}{trace_on}{body}\n__diff_rc=$?\n{count_off}{trace_off}{}",
+            mark("sourced"),
+            mark("ready"),
             probe_script(&shell.name)
         );
 
@@ -373,7 +410,15 @@ impl World {
         }
         command.arg("-c").arg(script);
 
+        let spawned = std::time::SystemTime::now();
         let (stdout, stderr, code, timed_out) = run_with_timeout(command, self.options.timeout);
+        let since_spawn = |name: &str| {
+            let mark = PathBuf::from(format!("{}.{name}", state_file.display()));
+            let at = fs::metadata(&mark).and_then(|meta| meta.modified()).ok();
+            let _ = fs::remove_file(&mark);
+            at.and_then(|at| at.duration_since(spawned).ok())
+        };
+        let phases = since_spawn("sourced").zip(since_spawn("ready"));
         let raw_state = fs::read(&state_file).unwrap_or_default();
         let _ = fs::remove_file(&state_file);
 
@@ -387,6 +432,11 @@ impl World {
                 .map(|(key, value)| (key, self.normalize(&value, &side))),
         );
 
+        let covered = fs::read_to_string(&covers_log)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect();
         let launches = fs::read_to_string(&launch_log)
             .unwrap_or_default()
             .lines()
@@ -400,6 +450,9 @@ impl World {
             timed_out,
             state,
             launches,
+            covered,
+            elapsed: started.elapsed(),
+            phases,
         }
     }
 
@@ -410,10 +463,113 @@ impl World {
             .replace(&format!("{side}/home"), "<home>")
             .replace(&format!("{side}/bin"), "<bin>")
             .replace(&side, "<side>")
+            .replace(&crate::guard::stage_dir().display().to_string(), "<stage>")
             .replace(self.mirror.url.trim_end_matches('/'), "<mirror>")
+            .replace(&self.mirror.root.display().to_string(), "<mirror-files>")
             // macOS reports temp paths both with and without the /private prefix.
             .replace("/private<", "<")
     }
+}
+
+/// Runs real nvm through a case's sourcing and setup and stops there. What
+/// this leaves behind is where the case's body starts from, so comparing a
+/// full run against it shows what the body itself did.
+pub fn before_body(shell: &Shell, case: &crate::cases::Case) -> Outcome {
+    let (source_args, setup) = match &case.suite {
+        // A suite test brings its own sourcing and has no setup.
+        Some(_) => (None, ""),
+        None => (Some(case.source.as_str()), case.setup.as_str()),
+    };
+    let run = Run {
+        source_args,
+        setup,
+        body: ":",
+        plain_files: case.plain_files,
+    };
+    World::new().run_script(Impl::Nvm, shell, run, None)
+}
+
+/// A sandbox for nvm's own suite that is used for one test after another.
+///
+/// Every test has to start from the same files, or its outcome would depend
+/// on which tests ran before it. So after each test the sandbox is compared
+/// with a fresh one. Most tests clean up after themselves and the sandbox is
+/// used again. When a test leaves something behind, the next test gets a new
+/// sandbox, and the old one stays on disk until a later run sweeps it.
+pub struct SuiteSide {
+    root: PathBuf,
+    label: String,
+    generation: u32,
+    changed: bool,
+    used: u32,
+}
+
+impl SuiteSide {
+    pub fn new(root: &Path, label: &str) -> SuiteSide {
+        SuiteSide {
+            root: root.to_path_buf(),
+            label: label.to_string(),
+            generation: 0,
+            changed: false,
+            used: 0,
+        }
+    }
+
+    /// How many sandboxes this side has gone through.
+    pub fn used(&self) -> u32 {
+        self.used
+    }
+
+    /// A sandbox no test has left anything in, set up for `which`.
+    fn clean(&mut self, which: Impl, options: &Options) -> PathBuf {
+        if self.changed {
+            self.generation += 1;
+            self.changed = false;
+        }
+        if self.used <= self.generation {
+            self.used = self.generation + 1;
+        }
+        let side = self
+            .root
+            .join(format!("{}-{}", self.label, self.generation));
+        prepare_suite_side(which, &side, options);
+        side
+    }
+
+    /// Reduces the files in a suite test's outcome to those that differ from
+    /// a fresh sandbox, and notes whether there were any.
+    fn settle(&mut self, which: Impl, outcome: &mut Outcome) {
+        let fresh = fresh_suite_files(which);
+        let gone: Vec<String> = fresh
+            .keys()
+            .filter(|key| !outcome.state.contains_key(*key))
+            .cloned()
+            .collect();
+        outcome
+            .state
+            .retain(|key, value| !key.starts_with("fs:") || fresh.get(key) != Some(value));
+        outcome
+            .state
+            .extend(gone.into_iter().map(|key| (key, "missing".to_string())));
+        self.changed = outcome.state.keys().any(|key| key.starts_with("fs:"));
+    }
+}
+
+/// The files of a suite sandbox before any test has run in it.
+fn fresh_suite_files(which: Impl) -> &'static BTreeMap<String, String> {
+    static FRESH: std::sync::Mutex<BTreeMap<&'static str, &'static BTreeMap<String, String>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let mut fresh = FRESH.lock().unwrap();
+    fresh.entry(which.name()).or_insert_with(|| {
+        let world = World::new();
+        let side = world.root.join("fresh");
+        prepare_suite_side(which, &side, &world.options);
+        let files = snapshot(&side.join("home"), &side.join("work"))
+            .into_iter()
+            .map(|(key, value)| (key, world.normalize(&value, &side)))
+            .collect();
+        Box::leak(Box::new(files))
+    })
 }
 
 // A `World` leaves its directory behind on purpose. macOS scans new files
@@ -424,15 +580,26 @@ impl World {
 
 /// Sets up a reusable sandbox for nvm's own test suite, once: the
 /// implementation in `$NVM_DIR`, and a copy of the suite at `$NVM_DIR/test`.
-pub fn prepare_suite_side(which: Impl, side: &Path) {
+pub fn prepare_suite_side(which: Impl, side: &Path, options: &Options) {
     let nvm_dir = side.join("home/.nvm");
     if nvm_dir.join("test").is_dir() {
         return;
     }
-    for dir in [nvm_dir.clone(), side.join("bin"), side.join("work")] {
+    // The suite's own hooks leave empty `src` and `alias` directories after
+    // every test, so a sandbox starts out with them.
+    for dir in [
+        nvm_dir.join("src"),
+        nvm_dir.join("alias"),
+        side.join("bin"),
+        side.join("work"),
+    ] {
         fs::create_dir_all(dir).unwrap();
     }
-    install(which, &nvm_dir, side, false);
+    let options = Options {
+        count_launches: false,
+        ..options.clone()
+    };
+    install(which, &nvm_dir, side, &options);
     copy_tree(&crate::suite::tree(), &nvm_dir.join("test"));
 
     // The suite's mock programs get run, so each sandbox links to one shared
@@ -471,12 +638,21 @@ pub fn suite_runner() -> PathBuf {
 }
 
 /// Puts one implementation into `$NVM_DIR` the way its installer would.
-fn install(which: Impl, nvm_dir: &Path, side: &Path, count_launches: bool) {
+fn install(which: Impl, nvm_dir: &Path, side: &Path, options: &Options) {
+    let count_launches = options.count_launches;
+    block_sudo(side);
     match which {
         Impl::Nvm => {
             let reference = crate::reference_dir();
-            for file in ["nvm.sh", "bash_completion"] {
-                copy(&reference.join(file), &nvm_dir.join(file));
+            copy(
+                &reference.join("bash_completion"),
+                &nvm_dir.join("bash_completion"),
+            );
+            if options.trace_covers {
+                let source = fs::read_to_string(reference.join("nvm.sh")).unwrap();
+                fs::write(nvm_dir.join("nvm.sh"), crate::covers::traced(&source)).unwrap();
+            } else {
+                copy(&reference.join("nvm.sh"), &nvm_dir.join("nvm.sh"));
             }
             link_staged("nvm/nvm-exec", &reference.join("nvm-exec"), nvm_dir);
         }
@@ -514,6 +690,21 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, count_launches: bool) {
             }
         }
     }
+}
+
+/// Puts a `sudo` that always fails first on the sandbox's `PATH`. Two of
+/// nvm's own tests call `sudo`. The real one stops to ask for a password or
+/// a fingerprint, which holds a worker until the timeout and puts a prompt
+/// on the screen of whoever is at the machine. No test gets to run anything
+/// as root from here.
+fn block_sudo(side: &Path) {
+    let sudo = staged(Path::new("sudo"), |path| {
+        write_script(
+            path,
+            "#!/bin/sh\necho 'sudo: not available in a parity run' >&2\nexit 1\n",
+        )
+    });
+    fs::hard_link(sudo, side.join("bin/sudo")).unwrap();
 }
 
 /// Puts `nvm-exec` into `$NVM_DIR` as a hard link to one staged copy. It is
@@ -634,7 +825,7 @@ fn parse_state(raw: &str, shell: &str) -> BTreeMap<String, String> {
     let mut state = BTreeMap::new();
     for record in raw.split('\u{1e}').filter(|record| !record.is_empty()) {
         if let Some(rest) = record.strip_prefix("vars\n") {
-            state.extend(parse_vars(rest));
+            state.extend(parse_vars(rest, shell));
         } else if let Some(rest) = record.strip_prefix("functions\n") {
             if matches!(shell, "bash" | "sh" | "zsh") {
                 let names: BTreeSet<&str> = rest.lines().collect();
@@ -658,7 +849,12 @@ fn parse_state(raw: &str, shell: &str) -> BTreeMap<String, String> {
 /// Splits `set` output into one entry per variable. A line starting with
 /// `NAME=` opens a new variable, and any other line continues the previous
 /// value, which keeps quoted multi-line values together.
-fn parse_vars(listing: &str) -> BTreeMap<String, String> {
+///
+/// zsh writes a value with a newline in it on one line, and lists some of
+/// its own parameters as a bare name with no value. Those bare names are
+/// dropped, since they would otherwise read as part of the variable before
+/// them.
+fn parse_vars(listing: &str, shell: &str) -> BTreeMap<String, String> {
     let mut vars: BTreeMap<String, String> = BTreeMap::new();
     let mut current: Option<String> = None;
     for line in listing.lines() {
@@ -672,6 +868,7 @@ fn parse_vars(listing: &str) -> BTreeMap<String, String> {
                 current = Some(name.to_string());
                 vars.insert(format!("var:{name}"), line[name.len() + 1..].to_string());
             }
+            None if shell == "zsh" => {}
             None => {
                 if let Some(value) = current
                     .as_ref()

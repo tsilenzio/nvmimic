@@ -1,6 +1,7 @@
 # id: DLD-09
 # nvm cache dir, clear, a failed clear, and the usage error.
 # setup: nvm install 24.15.0
+# covers: nvm nvm:cache nvm_cache_dir nvm_echo nvm_err
 nvm cache dir; echo "rc=$?"
 nvm cache clear; echo "rc=$?"
 ls -A "$NVM_DIR/.cache"

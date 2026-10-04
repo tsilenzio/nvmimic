@@ -3,6 +3,16 @@
 # shells: bash
 # setup: (nvm install 24.15.0)
 # setup: (nvm install 20.20.2)
+# covers: nvm nvm:current nvm:deactivate nvm:ls nvm:use nvm:version nvm_alias nvm_alias_path
+# covers: nvm_change_path nvm_die_on_prefix nvm_echo nvm_ensure_version_installed
+# covers: nvm_ensure_version_prefix nvm_err nvm_find_project_dir nvm_find_up nvm_get_colors
+# covers: nvm_get_os nvm_grep nvm_has nvm_has_colors nvm_has_system_iojs nvm_has_system_node
+# covers: nvm_hash_reset nvm_iojs_prefix nvm_is_iojs_version nvm_is_version_installed nvm_is_zsh
+# covers: nvm_ls nvm_ls_current nvm_match_version nvm_node_prefix nvm_normalize_lts
+# covers: nvm_npmrc_bad_news_bears nvm_num_version_groups nvm_print_alias_file nvm_print_color_code
+# covers: nvm_print_npm_version nvm_print_versions nvm_resolve_alias nvm_resolve_local_alias
+# covers: nvm_strip_iojs_prefix nvm_strip_path nvm_tree_contains_path nvm_validate_implicit_alias
+# covers: nvm_version nvm_version_dir nvm_version_greater nvm_version_path
 mkdir proj
 echo 20.20.2 > proj/.nvmrc
 shopt -s expand_aliases

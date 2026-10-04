@@ -7,4 +7,6 @@ publish = false
 
 [dependencies]
 nvmimic = { path = "../crates/nvmimic" }
+nvmimic-parity = { path = "../tests/differential" }
 serde_json = "1"
+sha2 = "0.11"

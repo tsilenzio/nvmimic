@@ -182,6 +182,7 @@ pub fn all_tests() -> Vec<String> {
 pub fn cases() -> Vec<Case> {
     let skipped = skipped();
     let names = crate::nvm_function_names();
+    let measured = crate::covers::suite_covers();
     let mut ids = BTreeSet::new();
     all_tests()
         .into_iter()
@@ -205,15 +206,23 @@ pub fn cases() -> Vec<Case> {
                 harness::shells()
             };
             let file_name = path.rsplit('/').next().unwrap_or("");
-            let covers = file_name
-                .split(' ')
-                .next()
-                .filter(|word| names.iter().any(|name| name == word))
-                .map(|word| vec![word.to_string()])
-                .unwrap_or_default();
             let id = id(&path);
+            // Until a test's covers are measured, its file name often names
+            // the one function it is about.
+            let covers = measured.get(&id).cloned().unwrap_or_else(|| {
+                file_name
+                    .split(' ')
+                    .next()
+                    .filter(|word| names.iter().any(|name| name == word))
+                    .map(|word| vec![word.to_string()])
+                    .unwrap_or_default()
+            });
             assert!(ids.insert(id.clone()), "two suite tests share the id {id}");
             Case {
+                // The test's own text is part of the vendored nvm, which
+                // every recording's key covers already.
+                fingerprint: path.clone(),
+                file: None,
                 id,
                 shells,
                 source: String::new(),

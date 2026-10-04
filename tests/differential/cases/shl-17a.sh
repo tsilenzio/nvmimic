@@ -1,6 +1,7 @@
 # id: SHL-17a
 # deactivate strips nvm dirs from PATH, MANPATH and NODE_PATH and unsets NVM_BIN and NVM_INC.
 # setup: nvm install 24.15.0
+# covers: nvm nvm:deactivate nvm_echo nvm_hash_reset nvm_strip_path
 NODE_PATH="$NVM_DIR/versions/node/v24.15.0/lib/node_modules:/opt/lib"
 export NODE_PATH
 nvm deactivate

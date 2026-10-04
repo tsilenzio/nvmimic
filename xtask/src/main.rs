@@ -1,9 +1,9 @@
 //! Project tasks: `cargo xtask <task>`.
 
 mod bench;
+mod changed;
 mod gen_shell;
 mod nvm_diff;
-mod nvmsh;
 mod string_audit;
 mod trace;
 
@@ -15,7 +15,11 @@ const USAGE: &str = "\
 usage: cargo xtask <task>
 
 tasks:
-  parity [--record]                 compare nvmimic with real nvm on every case
+  parity                            the everyday run: nvmimic against recordings of real nvm
+  parity --all-shells               the same, with every case under every shell
+  parity --changed                  the everyday run on the cases a change can affect
+  parity --full [--record]          run real nvm and nvmimic side by side on everything
+  parity covers                     measure what each case runs in nvm.sh, write `# covers:`
   parity determinism [--record]     run real nvm against itself on every case
   parity launches                   check everyday commands start only nvmimic
   bench [--check] [--runs=N]        time sourcing nvm.sh for real nvm and nvmimic
@@ -25,7 +29,14 @@ tasks:
   string-audit                      check nvmimic's messages against the pinned nvm.sh
   help                              show this list
 
---record rewrites cases/KNOWN_FAILING or cases/NONDETERMINISTIC from the run.
+The everyday run records what real nvm does the first time and reads it back
+after that. It records a case again when the case, the vendored nvm, the shell
+or the OS version changes. Cases where real nvm did the same in every shell
+run under one shell, a different one each run. --full trusts no recording and
+is the run for releases and for moving the nvm pin. --changed compares the
+source files with the last run that passed and runs the cases whose `# covers:`
+headers name an nvm function ported in a changed file.
+--record rewrites cases/KNOWN_FAILING or cases/NONDETERMINISTIC from a full run.
 NVMIMIC_CASES=VER,DSP-02 limits a run to cases whose id starts with a prefix.";
 
 fn main() -> ExitCode {
@@ -55,6 +66,8 @@ fn parity(args: &[&str]) -> ExitCode {
         "nvm_is_deterministic"
     } else if args.contains(&"launches") {
         "everyday_commands_launch_only_nvmimic"
+    } else if args.contains(&"covers") {
+        "record_covers"
     } else {
         "reference_cases_match_or_are_known"
     };
@@ -62,6 +75,30 @@ fn parity(args: &[&str]) -> ExitCode {
     if !cargo(&["build", "--quiet", "--package", "nvmimic-cli"]) {
         return ExitCode::FAILURE;
     }
+    let compares = test == "reference_cases_match_or_are_known";
+    let mut only = None;
+    if compares && args.contains(&"--changed") {
+        match changed::affected() {
+            changed::Affected::Everything(why) => eprintln!("running every case: {why}"),
+            changed::Affected::Cases(ids) if ids.is_empty() => {
+                eprintln!("no case can be affected, nothing to run");
+                return ExitCode::SUCCESS;
+            }
+            changed::Affected::Cases(ids) => {
+                let file = repo_root().join("target/parity-only.txt");
+                let ids: Vec<String> = ids.into_iter().collect();
+                std::fs::write(&file, ids.join("\n") + "\n").unwrap();
+                only = Some(file);
+            }
+        }
+    }
+    let run = if record || args.contains(&"--full") {
+        "full"
+    } else if args.contains(&"--all-shells") {
+        "all-shells"
+    } else {
+        "everyday"
+    };
     let ok = cargo_with(
         &[
             "test",
@@ -77,7 +114,13 @@ fn parity(args: &[&str]) -> ExitCode {
             "--nocapture",
         ],
         record,
+        run,
+        only.as_deref(),
     );
+    // A run narrowed by hand says nothing about the cases it left out.
+    if ok && compares && env::var_os("NVMIMIC_CASES").is_none() {
+        changed::mark_passed();
+    }
     if ok {
         ExitCode::SUCCESS
     } else {
@@ -86,16 +129,23 @@ fn parity(args: &[&str]) -> ExitCode {
 }
 
 fn cargo(args: &[&str]) -> bool {
-    cargo_with(args, false)
+    cargo_with(args, false, "full", None)
 }
 
-fn cargo_with(args: &[&str], record: bool) -> bool {
+fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>) -> bool {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let mut command = Command::new(cargo);
-    command.args(args).current_dir(repo_root());
+    command
+        .args(args)
+        .current_dir(repo_root())
+        .env("NVMIMIC_PARITY_RUN", run);
     if record {
         command.env("NVMIMIC_PARITY_RECORD", "1");
     }
+    match only {
+        Some(file) => command.env("NVMIMIC_PARITY_ONLY", file),
+        None => command.env_remove("NVMIMIC_PARITY_ONLY"),
+    };
     command.status().is_ok_and(|status| status.success())
 }
 

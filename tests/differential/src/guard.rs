@@ -194,6 +194,8 @@ pub fn sweep_stale() {
     };
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().into_owned();
+        // `nvmimic-mirror-` is where the mirror lived before it moved to
+        // `target/parity-mirror/`.
         let ours = ["nvmimic-mirror-", "nvmimic-diff-", "nvmimic-stage-"]
             .iter()
             .any(|prefix| name.starts_with(prefix));

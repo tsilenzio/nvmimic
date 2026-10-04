@@ -1,7 +1,7 @@
 //! Parity tests. The full runs take minutes, so they are ignored by default
 //! and run through `cargo xtask parity`.
 
-use nvmimic_parity::cases::{self, Result};
+use nvmimic_parity::cases::{self, Plan, Result};
 use nvmimic_parity::harness::{self, Impl, World};
 
 const KNOWN_FAILING: &str = "KNOWN_FAILING";
@@ -9,6 +9,17 @@ const NONDETERMINISTIC: &str = "NONDETERMINISTIC";
 
 fn recording() -> bool {
     std::env::var_os("NVMIMIC_PARITY_RECORD").is_some()
+}
+
+/// `NVMIMIC_PARITY_RUN` picks how much runs: `everyday` replays recordings of
+/// real nvm and runs shell-independent cases under one shell, `all-shells`
+/// replays and runs every shell, and anything else is the full run.
+fn plan() -> Plan {
+    match std::env::var("NVMIMIC_PARITY_RUN").as_deref() {
+        Ok("everyday") if !recording() => Plan::everyday(true),
+        Ok("all-shells") if !recording() => Plan::everyday(false),
+        _ => Plan::full(Impl::Nvm, Impl::Nvmimic),
+    }
 }
 
 /// The Gatekeeper guard stopped the run before it finished.
@@ -34,6 +45,33 @@ fn write_report(results: &[Result]) {
         ));
     }
     let path = harness::repo_root().join("target/parity-report.txt");
+    let _ = std::fs::write(path, text);
+}
+
+/// How long every pair took, in `target/parity-timings.tsv`: milliseconds
+/// per side, then each side's time to source nvm.sh and to finish setup when
+/// `NVMIMIC_PARITY_PHASES` is set.
+fn write_timings(results: &[Result]) {
+    let ms = |d: std::time::Duration| d.as_millis().to_string();
+    let phase = |p: harness::Phases| match p {
+        Some((sourced, ready)) => format!("{}\t{}", ms(sourced), ms(ready)),
+        None => "\t".to_string(),
+    };
+    let mut text = String::from(
+        "id\tshell\tleft_ms\tright_ms\tleft_sourced\tleft_ready\tright_sourced\tright_ready\n",
+    );
+    for r in results {
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            r.id,
+            r.shell,
+            ms(r.elapsed.0),
+            ms(r.elapsed.1),
+            phase(r.phases.0),
+            phase(r.phases.1)
+        ));
+    }
+    let path = harness::repo_root().join("target/parity-timings.tsv");
     let _ = std::fs::write(path, text);
 }
 
@@ -84,7 +122,8 @@ fn probe_sees_leaked_variables() {
 #[test]
 #[ignore = "full run, use `cargo xtask parity determinism`"]
 fn nvm_is_deterministic() {
-    let results = cases::run_all(&cases::load_all(), Impl::Nvm, Impl::Nvm).unwrap_or_else(stopped);
+    let results = cases::run_all(&cases::load_all(), Plan::full(Impl::Nvm, Impl::Nvm))
+        .unwrap_or_else(stopped);
     report(&results);
     if recording() {
         cases::record(
@@ -117,10 +156,11 @@ fn nvm_is_deterministic() {
 fn reference_cases_match_or_are_known() {
     let skipped = cases::listed(NONDETERMINISTIC);
     let all = cases::load_all();
-    let mut results = cases::run_all(&all, Impl::Nvm, Impl::Nvmimic).unwrap_or_else(stopped);
+    let mut results = cases::run_all(&all, plan()).unwrap_or_else(stopped);
     results.retain(|r| !cases::is_listed(&skipped, &r.id, &r.shell));
     report(&results);
     write_report(&results);
+    write_timings(&results);
 
     if recording() {
         cases::record(
@@ -153,6 +193,36 @@ fn reference_cases_match_or_are_known() {
         "unexpected differences:\n{}\n\nnow passing, remove from KNOWN_FAILING:\n{}",
         unexpected.join("\n\n"),
         fixed.join("\n")
+    );
+}
+
+/// Measures which parts of nvm.sh every case runs and writes the result
+/// into the `# covers:` headers and `cases/NVM_SUITE_COVERS`.
+#[test]
+#[ignore = "rewrites case files, use `cargo xtask parity covers`"]
+fn record_covers() {
+    let all = cases::load_all();
+    let measured = cases::measure_covers(&all).unwrap_or_else(|reason| {
+        panic!("the run was stopped to protect the machine: {reason}");
+    });
+    let mut rewritten = 0;
+    let mut suite = nvmimic_parity::covers::suite_covers()
+        .into_iter()
+        .map(|(id, names)| (id, names.into_iter().collect()))
+        .collect::<std::collections::BTreeMap<_, std::collections::BTreeSet<String>>>();
+    for case in &all {
+        let names = &measured[&case.id];
+        match &case.file {
+            Some(file) => rewritten += nvmimic_parity::covers::write_header(file, names) as usize,
+            None => {
+                suite.insert(case.id.clone(), names.clone());
+            }
+        }
+    }
+    nvmimic_parity::covers::write_suite_covers(&suite);
+    eprintln!(
+        "covers measured for {} cases, {rewritten} case files rewritten",
+        all.len()
     );
 }
 
