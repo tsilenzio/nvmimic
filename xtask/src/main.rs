@@ -4,6 +4,7 @@ mod bench;
 mod changed;
 mod gen_shell;
 mod nvm_diff;
+mod release;
 mod string_audit;
 mod trace;
 
@@ -29,6 +30,7 @@ tasks:
   trace [--strict]                  map nvm.sh's functions to nvmimic's code and cases
   nvm-diff <old> <new> [--repo P]   report what changed in nvm between two revisions
   string-audit                      check nvmimic's messages against the pinned nvm.sh
+  release [--unsigned]              build, sign and notarize the macOS program into target/dist/
   help                              show this list
 
 The everyday run records what real nvm does the first time and reads it back
@@ -59,6 +61,7 @@ fn main() -> ExitCode {
         ["gen-shell", rest @ ..] => gen_shell::run(rest),
         ["trace", rest @ ..] => trace::run(rest),
         ["nvm-diff", rest @ ..] => nvm_diff::run(rest),
+        ["release", rest @ ..] => release::run(rest),
         ["string-audit", rest @ ..] => string_audit::run(rest),
         [other, ..] => {
             eprintln!("xtask: unknown task `{other}`\n\n{USAGE}");
