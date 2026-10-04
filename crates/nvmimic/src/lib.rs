@@ -14,6 +14,7 @@ pub mod nvm;
 pub mod pin;
 pub mod shell;
 pub mod text;
+pub mod update;
 
 use backend::Backend;
 use context::{Io, Nvm};

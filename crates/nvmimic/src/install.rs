@@ -119,7 +119,7 @@ impl Env {
         }
     }
 
-    fn dirs(&self) -> Result<&Dirs, String> {
+    pub(crate) fn dirs(&self) -> Result<&Dirs, String> {
         self.dirs.as_ref().ok_or_else(|| {
             "there is no home folder (HOME) to keep nvmimic's own files in.".to_string()
         })
@@ -158,10 +158,13 @@ pub struct Manifest {
     pub backed_up: Vec<String>,
     /// Scripts nvmimic added where there were none.
     pub created: Vec<String>,
+    /// The version of the earlier program `self update` set aside, which
+    /// `self rollback` brings back.
+    pub previous: Option<String>,
 }
 
 impl Manifest {
-    fn render(&self) -> String {
+    pub(crate) fn render(&self) -> String {
         let mut text = String::from(
             "# What `nvmimic self install` changed. `nvmimic self uninstall` reads it.\n",
         );
@@ -185,6 +188,9 @@ impl Manifest {
         for name in &self.created {
             text.push_str(&format!("created {name}\n"));
         }
+        if let Some(version) = &self.previous {
+            text.push_str(&format!("previous {version}\n"));
+        }
         text
     }
 
@@ -204,6 +210,7 @@ impl Manifest {
                 "placed" => manifest.placed = true,
                 "backup" => manifest.backed_up.push(value.to_string()),
                 "created" => manifest.created.push(value.to_string()),
+                "previous" => manifest.previous = Some(value.to_string()),
                 _ => {}
             }
         }
@@ -276,7 +283,7 @@ fn choices(default: bool) -> &'static str {
     if default { "[Y/n]" } else { "[y/N]" }
 }
 
-fn ask(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
+pub(crate) fn ask(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
     if options.yes {
         ui.say(&format!("{question} {} y (--yes)", choices(default)));
         true
@@ -388,10 +395,12 @@ pub fn self_install(
         }
     }
 
+    // nvm-exec is the same file in nvm and nvmimic, so `nvm.sh` decides
+    // whose scripts these are: while it is nvmimic's, all three are.
     let existing: Vec<&str> = SCRIPTS
         .iter()
         .copied()
-        .filter(|name| present(&nvm_dir.join(name)) && !is_ours(&nvm_dir.join(name)))
+        .filter(|name| present(&nvm_dir.join(name)) && !is_ours(&nvm_dir.join("nvm.sh")))
         .collect();
     if !existing.is_empty() && !reinstall {
         ui.say(&format!("Found nvm in {}.", nvm_dir.display()));
@@ -615,6 +624,10 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
         let _ = fs::remove_file(binary);
     }
     let _ = fs::remove_file(dirs.manifest());
+    if let Some(version) = &manifest.previous {
+        let _ = fs::remove_file(crate::update::previous_path(dirs, version));
+    }
+    let _ = fs::remove_dir(dirs.state.join("previous"));
     let _ = fs::remove_dir(&backup);
     let _ = fs::remove_dir(&dirs.state);
 
@@ -647,7 +660,7 @@ fn install_binary(binary: &Path, target: &Path) -> Result<(), String> {
 }
 
 /// Moves a file, also from one disk to another, where a plain rename fails.
-fn move_file(from: &Path, to: &Path) -> Result<(), String> {
+pub(crate) fn move_file(from: &Path, to: &Path) -> Result<(), String> {
     match fs::rename(from, to) {
         Ok(()) => Ok(()),
         Err(error) if error.raw_os_error() == Some(libc::EXDEV) => fs::copy(from, to)
@@ -663,12 +676,12 @@ fn on_path(env: &Env, dir: &Path) -> bool {
         .is_some_and(|path| std::env::split_paths(path).any(|entry| entry == dir))
 }
 
-fn write_file(path: &Path, text: &str, mode: u32) -> Result<(), String> {
+pub(crate) fn write_file(path: &Path, text: &str, mode: u32) -> Result<(), String> {
     fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
     set_mode(path, mode)
 }
 
-fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
+pub(crate) fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(mode))
         .map_err(|e| format!("{}: {e}", path.display()))
@@ -787,6 +800,7 @@ mod tests {
             cache: Some("/h/.cache/nvmimic".into()),
             backed_up: vec!["nvm.sh".into()],
             created: vec!["bash_completion".into()],
+            previous: Some("0.0.9".into()),
         };
         assert_eq!(Manifest::parse(&manifest.render()), manifest);
     }

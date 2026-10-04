@@ -87,6 +87,19 @@ sits at `~/.local/bin/nvmimic`, `self install` stops and leaves it alone.
 nvm's scripts come back. Add `--dry-run` to either one to see what it would
 do without changing anything, and `--help` to read what it does.
 
+### Updating nvmimic
+
+`nvmimic self update` gets the newest nvmimic. Before anything changes, it
+checks the download three ways: the checksum matches, nvmimic's developer
+signed it, and it runs. Then it swaps the new program in and keeps the old
+one. `nvmimic self rollback` brings the old one back.
+
+If you installed nvmimic with Homebrew or cargo, update it with that tool
+instead. `self update` tells you the command.
+
+A copy you built yourself can't check who signed a download, so it refuses
+to update itself. Build the newer version the same way you built this one.
+
 ### Upgrading nvm itself
 
 nvmimic swaps out nvm's scripts, so nvm's own upgrade steps collide with it.
@@ -294,6 +307,11 @@ don't call them from your own scripts.
   three real Node releases, and switches between them under each shell. It
   takes well under a minute once the downloads are kept.
 - `cargo xtask gen-shell` rebuilds `shell/nvm.sh` from nvm's own `nvm.sh`.
+- `cargo xtask release` builds the macOS program for a release into
+  `target/dist/`: one file for both Apple silicon and Intel, signed and
+  checked by Apple, packed with the license, plus checksums and a Homebrew
+  formula. It needs a signing certificate. `--unsigned` skips that part so
+  you can try the rest.
 
 ### How the parity tests stay quick
 

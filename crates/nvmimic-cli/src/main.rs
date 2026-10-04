@@ -136,16 +136,18 @@ const USAGE: &str = "\
 usage: nvmimic <command>
 
 nvmimic does nvm's job, only faster. In your shell you keep typing `nvm`.
-The `nvmimic` command sets nvmimic up and removes it again.
+The `nvmimic` command sets nvmimic up, keeps it up to date and removes it
+again.
 
 commands:
   self install     set nvmimic up for your nvm folder ($NVM_DIR, usually ~/.nvm)
+  self update      get the newest nvmimic
+  self rollback    go back to the nvmimic from before the last update
   self uninstall   remove nvmimic again
   help             show this text
   --version        print nvmimic's own version
 
-`nvmimic self install --help` and `nvmimic self uninstall --help` say what
-each one does, step by step.";
+Add --help to any `self` command to read what it does, step by step.";
 
 const INSTALL_USAGE: &str = "\
 usage: nvmimic self install [--yes] [--dry-run]
@@ -186,12 +188,41 @@ your Node versions but has no `nvm` command any more.
   --yes       answer yes to every question
   --dry-run   show what would happen and change nothing";
 
+const UPDATE_USAGE: &str = "\
+usage: nvmimic self update [--yes] [--dry-run]
+
+Gets the newest nvmimic and swaps it in. This updates nvmimic only. It has
+nothing to do with which nvm version nvmimic copies, or with your Node
+versions.
+
+The download is checked before anything changes: its checksum, that
+nvmimic's developer signed it, and that it runs. The nvmimic you have now is
+kept, and `nvmimic self rollback` brings it back.
+
+If Homebrew or cargo installed nvmimic, this tells you the command to use
+instead.
+
+  --yes       answer yes to every question
+  --dry-run   show what would happen and change nothing";
+
+const ROLLBACK_USAGE: &str = "\
+usage: nvmimic self rollback [--yes] [--dry-run]
+
+Goes back to the nvmimic you had before the last `nvmimic self update`. The
+one you leave is kept in its place, so running this twice gets you back
+where you started.
+
+  --yes       answer yes to every question
+  --dry-run   show what would happen and change nothing";
+
 /// The help for `nvmimic self <action>`, or for `self` alone.
 fn self_usage(action: Option<&str>) -> String {
     match action {
         Some("install") => INSTALL_USAGE.to_string(),
         Some("uninstall") => UNINSTALL_USAGE.to_string(),
-        _ => format!("{INSTALL_USAGE}\n\n{UNINSTALL_USAGE}"),
+        Some("update") => UPDATE_USAGE.to_string(),
+        Some("rollback") => ROLLBACK_USAGE.to_string(),
+        _ => format!("{INSTALL_USAGE}\n\n{UPDATE_USAGE}\n\n{ROLLBACK_USAGE}\n\n{UNINSTALL_USAGE}"),
     }
 }
 
@@ -223,7 +254,11 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
             println!("{}", self_usage(None));
             return ExitCode::SUCCESS;
         }
-        ["self", action @ ("install" | "uninstall"), flags @ ..] => (*action, flags),
+        [
+            "self",
+            action @ ("install" | "uninstall" | "update" | "rollback"),
+            flags @ ..,
+        ] => (*action, flags),
         _ => {
             eprintln!(
                 "nvmimic: there is no command `{}`.\n\n{USAGE}",
@@ -258,13 +293,17 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
     }
     let env = nvmimic::install::Env::from_process();
     let mut ui = nvmimic::install::TerminalUi;
-    let result = if action == "install" {
-        match env::current_exe() {
+    let result = match action {
+        "install" => match env::current_exe() {
             Ok(binary) => nvmimic::install::self_install(&env, &binary, &options, &mut ui),
             Err(error) => Err(format!("cannot find this program's own file: {error}")),
+        },
+        "update" => {
+            let source = nvmimic::update::Source::from_process();
+            nvmimic::update::self_update(&env, &source, &options, &mut ui)
         }
-    } else {
-        nvmimic::install::self_uninstall(&env, &options, &mut ui)
+        "rollback" => nvmimic::update::self_rollback(&env, &options, &mut ui),
+        _ => nvmimic::install::self_uninstall(&env, &options, &mut ui),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,

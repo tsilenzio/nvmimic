@@ -749,3 +749,197 @@ fn nvm_installed_over_a_fresh_nvmimic_survives_uninstall() {
         );
     }
 }
+
+/// A folder laid out like a release's downloads, holding a stand-in for a
+/// newer nvmimic: a script that reports `version` and whose `self install`
+/// exits with `install_status`.
+fn fake_release(home: &Home, version: &str, install_status: u8) -> PathBuf {
+    let release = home
+        .root
+        .join(format!("release-{version}-{install_status}"));
+    let staging = release.join("nvmimic");
+    fs::create_dir_all(&staging).unwrap();
+    let program = staging.join("nvmimic");
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\ncase \"$1\" in\n  --version) echo {version} ;;\n  self) exit {install_status} ;;\nesac\n"
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    let archive = "nvmimic-darwin-universal.tar.gz";
+    let packed = Command::new("tar")
+        .arg("-czf")
+        .arg(release.join(archive))
+        .arg("-C")
+        .arg(&release)
+        .arg("nvmimic")
+        .status()
+        .unwrap();
+    assert!(packed.success());
+    let sum = Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(release.join(archive))
+        .output()
+        .unwrap();
+    let sum = text(&sum.stdout);
+    let sum = sum.split_whitespace().next().unwrap();
+    fs::write(release.join("SHA256SUMS"), format!("{sum}  {archive}\n")).unwrap();
+    fs::write(release.join("VERSION"), format!("{version}\n")).unwrap();
+    release
+}
+
+/// Runs a `self` command against a stand-in release folder.
+fn with_release(home: &Home, release: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_nvmimic"))
+        .args(args)
+        .env_clear()
+        .env("HOME", &home.root)
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOMEBREW_PREFIX", home.root.join("no-homebrew"))
+        .env(
+            "NVMIMIC_RELEASES_URL",
+            format!("file://{}", release.display()),
+        )
+        .env("NVMIMIC_UPDATE_UNSIGNED", "1")
+        .output()
+        .unwrap()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn update_swaps_the_program_and_rollback_brings_it_back() {
+    let home = Home::new();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let original = fs::read(home.command()).unwrap();
+    let ours = env!("CARGO_PKG_VERSION");
+    let kept = home.state().join(format!("previous/nvmimic-{ours}"));
+
+    let release = fake_release(&home, "9.9.9", 0);
+    let out = with_release(&home, &release, &["self", "update", "--yes", "--dry-run"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(
+        fs::read(home.command()).unwrap(),
+        original,
+        "a dry run changes nothing"
+    );
+
+    let out = with_release(&home, &release, &["self", "update", "--yes"]);
+    assert!(
+        out.status.success(),
+        "{}{}",
+        text(&out.stdout),
+        text(&out.stderr)
+    );
+    let now = Command::new(home.command())
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert_eq!(text(&now.stdout), "9.9.9\n");
+    assert_eq!(
+        fs::read(&kept).unwrap(),
+        original,
+        "the earlier program is kept"
+    );
+    let manifest = fs::read_to_string(home.state().join("manifest")).unwrap();
+    assert!(manifest.contains("version 9.9.9\n"), "{manifest}");
+    assert!(
+        manifest.contains(&format!("previous {ours}\n")),
+        "{manifest}"
+    );
+    // Nothing is left beside the program.
+    let beside: Vec<_> = fs::read_dir(home.command().parent().unwrap())
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(beside, ["nvmimic"]);
+
+    let out = with_release(&home, &release, &["self", "update", "--yes"]);
+    assert!(text(&out.stdout).contains("is the newest version"));
+
+    let out = with_release(&home, &release, &["self", "rollback", "--yes"]);
+    assert!(
+        out.status.success(),
+        "{}{}",
+        text(&out.stdout),
+        text(&out.stderr)
+    );
+    assert_eq!(fs::read(home.command()).unwrap(), original);
+    let manifest = fs::read_to_string(home.state().join("manifest")).unwrap();
+    assert!(
+        manifest.contains(&format!("version {ours}\n")),
+        "{manifest}"
+    );
+    assert!(manifest.contains("previous 9.9.9\n"), "{manifest}");
+    assert!(!kept.exists());
+    let nvm = home.shell("nvm --version");
+    assert_eq!(text(&nvm.stdout), "0.40.8\n", "{}", text(&nvm.stderr));
+
+    let out = home.nvmimic(&["self", "uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(!home.has_own_files());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn an_update_that_cannot_set_itself_up_is_undone() {
+    let home = Home::new();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let original = fs::read(home.command()).unwrap();
+    let manifest = fs::read_to_string(home.state().join("manifest")).unwrap();
+
+    let release = fake_release(&home, "9.9.9", 1);
+    let out = with_release(&home, &release, &["self", "update", "--yes"]);
+    assert!(!out.status.success());
+    assert!(
+        text(&out.stderr).contains("was put back"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(fs::read(home.command()).unwrap(), original);
+    assert_eq!(
+        fs::read_to_string(home.state().join("manifest")).unwrap(),
+        manifest
+    );
+    let nvm = home.shell("nvm --version");
+    assert_eq!(text(&nvm.stdout), "0.40.8\n", "{}", text(&nvm.stderr));
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_download_that_fails_its_checks_changes_nothing() {
+    let home = Home::new();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let original = fs::read(home.command()).unwrap();
+
+    let release = fake_release(&home, "9.9.9", 0);
+    fs::write(
+        release.join("SHA256SUMS"),
+        "0000  nvmimic-darwin-universal.tar.gz\n",
+    )
+    .unwrap();
+    let out = with_release(&home, &release, &["self", "update", "--yes"]);
+    assert!(text(&out.stderr).contains("does not match its checksum"));
+
+    // The archive says 9.9.9 and the release says 9.9.10.
+    let release = fake_release(&home, "9.9.9", 0);
+    fs::write(release.join("VERSION"), "9.9.10\n").unwrap();
+    let out = with_release(&home, &release, &["self", "update", "--yes"]);
+    assert!(text(&out.stderr).contains("does not run as nvmimic 9.9.10"));
+
+    // Without the switch, a program that is not a release build refuses.
+    let release = fake_release(&home, "9.9.9", 0);
+    let out = home.nvmimic_with(
+        &["self", "update", "--yes"],
+        &[("NVMIMIC_RELEASES_URL", release.as_path())],
+    );
+    assert!(text(&out.stderr).contains("not built as a release"));
+
+    assert_eq!(fs::read(home.command()).unwrap(), original);
+    let out = home.nvmimic(&["self", "rollback", "--yes"]);
+    assert!(text(&out.stderr).contains("no earlier nvmimic"));
+}
