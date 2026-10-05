@@ -179,7 +179,14 @@ fn cargo(args: &[&str]) -> bool {
 
 fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>, network: bool) -> bool {
     let cargo = env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let mut command = Command::new(cargo);
+    let mut command = match args.first() == Some(&"test") && no_sudo() {
+        true => {
+            let mut command = Command::new(SANDBOX_EXEC);
+            command.args(["-p", NO_SUDO]).arg(cargo);
+            command
+        }
+        false => Command::new(cargo),
+    };
     command
         .args(args)
         .current_dir(repo_root())
@@ -196,6 +203,34 @@ fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>, netwo
         false => command.env_remove("NVMIMIC_PARITY_NETWORK"),
     };
     command.status().is_ok_and(|status| status.success())
+}
+
+const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// A macOS sandbox rule that lets everything through except starting the
+/// programs that ask for a password or a fingerprint. Some of nvm's own tests
+/// call `sudo`. The stand-in on each sandbox's `PATH` catches that by name,
+/// and this catches every other way to reach it, for every child process.
+const NO_SUDO: &str = "(version 1)(allow default)(deny process-exec \
+    (literal \"/usr/bin/sudo\") (literal \"/usr/bin/su\") (literal \"/usr/bin/security\"))";
+
+/// Whether tests can run under [`NO_SUDO`]: on macOS, and not already inside
+/// a sandbox, which can't hold a second one. Says so once when it can't.
+fn no_sudo() -> bool {
+    if !cfg!(target_os = "macos") {
+        return false;
+    }
+    let works = Command::new(SANDBOX_EXEC)
+        .args(["-p", NO_SUDO, "/usr/bin/true"])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success());
+    if !works {
+        eprintln!(
+            "xtask: can't block sudo here (sandbox-exec failed), tests run without the block"
+        );
+    }
+    works
 }
 
 fn repo_root() -> PathBuf {
