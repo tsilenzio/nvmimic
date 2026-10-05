@@ -290,7 +290,8 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
         },
         "nvm_print_alias_file" => match std::fs::read(arg(0)) {
             Ok(bytes) => {
-                for line in alias::alias_file_lines(&String::from_utf8_lossy(&bytes)) {
+                let nul = alias::Nul::of(nvm);
+                for line in alias::alias_file_lines(&String::from_utf8_lossy(&bytes), nul) {
                     nvm.io.echo(&line);
                 }
                 0

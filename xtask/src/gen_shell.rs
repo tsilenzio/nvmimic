@@ -545,6 +545,7 @@ __nvmimic_end
         __NVMIMIC_SHELL="${{__nvmimic_shell}}" \
         __NVMIMIC_ARG0="$0" \
         __NVMIMIC_SOURCE="${{BASH_SOURCE-}}" \
+        __NVMIMIC_BASH="${{BASH_VERSINFO-}}" \
         __NVMIMIC_OPTS="$-" \
         __NVMIMIC_CACHE="@nvmimic-cache@" \
         __NVMIMIC_FD=8 \

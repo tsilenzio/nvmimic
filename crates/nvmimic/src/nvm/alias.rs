@@ -6,6 +6,7 @@ use super::local;
 use super::version::{self, IOJS_PREFIX, NODE_PREFIX};
 use crate::backend::AliasFile;
 use crate::context::Nvm;
+use crate::shell::Dialect;
 use crate::text::messages;
 
 /// Turns `lts/-N` into the Nth-newest LTS alias and rejects uppercase LTS
@@ -65,11 +66,34 @@ fn ls_names(nvm: &mut Nvm, dir: &str) -> Vec<String> {
     }
 }
 
+/// What the calling shell's `read` does with a NUL byte in a line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nul {
+    /// bash 3 ends the line there.
+    Cut,
+    /// dash and newer bash leave the byte out.
+    Drop,
+    /// zsh keeps it, and the line ends there once `printf` gets it.
+    Keep,
+}
+
+impl Nul {
+    pub fn of(nvm: &Nvm) -> Nul {
+        match nvm.dialect {
+            Dialect::Zsh => Nul::Keep,
+            Dialect::Bash | Dialect::BashPosix if (1..4).contains(&nvm.caller_shell.bash) => {
+                Nul::Cut
+            }
+            _ => Nul::Drop,
+        }
+    }
+}
+
 /// Lines of an alias file with `#` comments and trailing whitespace removed
 /// and blank lines skipped.
 ///
 /// nvm: nvm_print_alias_file
-pub fn alias_file_lines(contents: &str) -> Vec<String> {
+pub fn alias_file_lines(contents: &str, nul: Nul) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     let mut rest = contents;
     while !rest.is_empty() {
@@ -78,12 +102,18 @@ pub fn alias_file_lines(contents: &str) -> Vec<String> {
             None => (rest, ""),
         };
         rest = after;
-        let line = line.split('#').next().unwrap_or("");
+        let read = match nul {
+            Nul::Cut => line.split('\0').next().unwrap_or("").to_string(),
+            Nul::Drop => line.replace('\0', ""),
+            Nul::Keep => line.to_string(),
+        };
+        let line = read.split('#').next().unwrap_or("");
         let is_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\u{0b}' | '\u{0c}' | '\r');
         if line.chars().all(is_space) {
             continue;
         }
-        lines.push(line.trim_end_matches(is_space).to_string());
+        let line = line.trim_end_matches(is_space);
+        lines.push(line.split('\0').next().unwrap_or("").to_string());
     }
     lines
 }
@@ -117,7 +147,7 @@ pub fn alias(nvm: &mut Nvm, name: &str) -> (String, i32) {
             nvm.io.err(&messages::alias_unreadable(&path));
             (String::new(), 0)
         }
-        AliasFile::Contents(contents) => (alias_file_lines(&contents).join("\n"), 0),
+        AliasFile::Contents(contents) => (alias_file_lines(&contents, Nul::of(nvm)).join("\n"), 0),
     }
 }
 
@@ -484,5 +514,24 @@ fn emit_sorted(nvm: &mut Nvm, mut lines: Vec<String>) {
     lines.sort_by(|a, b| a.as_bytes().cmp(b.as_bytes()));
     for line in lines {
         nvm.io.echo(&line);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn nul_bytes_follow_the_shell() {
+        let file = "v22.1.0\0garbage\n\0\nab\0\0cd#x\n \0 \nz\0 \n";
+        assert_eq!(alias_file_lines(file, Nul::Cut), ["v22.1.0", "ab", "z"]);
+        assert_eq!(
+            alias_file_lines(file, Nul::Drop),
+            ["v22.1.0garbage", "abcd", "z"]
+        );
+        assert_eq!(
+            alias_file_lines(file, Nul::Keep),
+            ["v22.1.0", "", "ab", " ", "z"]
+        );
     }
 }

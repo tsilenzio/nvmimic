@@ -155,6 +155,8 @@ pub struct CallerShell {
     pub script: String,
     /// Whether the shell is reading commands from a person.
     pub interactive: bool,
+    /// bash's major version, or 0 in another shell or when it isn't known.
+    pub bash: u32,
 }
 
 /// A variable's value before a `local` declaration hid it.

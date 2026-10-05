@@ -104,6 +104,10 @@ fn handoff(function: &str, rest: &[String]) -> ExitCode {
             arg0: env::var("__NVMIMIC_ARG0").unwrap_or_default(),
             script: env::var("__NVMIMIC_SOURCE").unwrap_or_default(),
             interactive: env::var("__NVMIMIC_OPTS").is_ok_and(|options| options.contains('i')),
+            bash: env::var("__NVMIMIC_BASH")
+                .ok()
+                .and_then(|major| major.parse().ok())
+                .unwrap_or(0),
         },
         direct_output: true,
         cache_dir: env::var_os("__NVMIMIC_CACHE")
