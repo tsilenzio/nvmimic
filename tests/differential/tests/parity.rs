@@ -237,6 +237,25 @@ fn no_known_failures() {
     assert!(known.is_empty(), "{} known failures remain", known.len());
 }
 
+/// Shell text that puts a compiled `node` in place of the script each
+/// stand-in release comes with, so its answer can be remembered. One shared
+/// file, linked into every sandbox under the name `node`.
+fn compiled_node(versions: &[&str]) -> String {
+    let shared = harness::repo_root().join("target/parity-fake/node");
+    std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+    let _ = std::fs::remove_file(&shared);
+    std::fs::hard_link(env!("CARGO_BIN_EXE_fake_node"), &shared).unwrap();
+    versions
+        .iter()
+        .map(|version| {
+            format!(
+                "rm -f \"$NVM_DIR/versions/node/v{version}/bin/node\"\nln -s '{}' \"$NVM_DIR/versions/node/v{version}/bin/node\"\n",
+                shared.display()
+            )
+        })
+        .collect()
+}
+
 /// Everyday commands start nvmimic once each and nothing else: no node, no
 /// sed or awk, and node and npm only when their versions are not
 /// remembered yet.
@@ -245,6 +264,12 @@ fn no_known_failures() {
 fn everyday_commands_launch_only_nvmimic() {
     let mut world = World::new();
     world.options.count_launches = true;
+    let compiled = compiled_node(&["24.15.0", "20.20.2"]);
+    // Both versions get used once, so every answer is remembered before
+    // the counted step.
+    let installed = format!(
+        "nvm install 24.15.0\nnvm install 20.20.2\n{compiled}nvm use 24.15.0\nnvm use 20.20.2"
+    );
     let steps: &[(&str, usize)] = &[
         ("nvm current", 1),
         ("nvm ls", 1),
@@ -266,7 +291,7 @@ fn everyday_commands_launch_only_nvmimic() {
                 Impl::Nvmimic,
                 &shell,
                 "",
-                "nvm install 24.15.0\nnvm install 20.20.2",
+                &installed,
                 step,
             );
             let foreign: Vec<&String> = outcome
@@ -289,7 +314,7 @@ fn everyday_commands_launch_only_nvmimic() {
             Impl::Nvmimic,
             &shell,
             "",
-            "nvm install 24.15.0\nrm -rf \"$HOME/../own/cache\"",
+            &format!("nvm install 24.15.0\n{compiled}rm -rf \"$HOME/../own/cache\""),
             "nvm use 24.15.0\nnvm use 24.15.0",
         );
         let npm = outcome.launches.iter().filter(|l| l.ends_with("/bin/npm"));
@@ -298,6 +323,24 @@ fn everyday_commands_launch_only_nvmimic() {
         assert!(
             npm.count() == 1 && node.count() == 1 && ours.count() == 2,
             "{}: node and npm should each run once for two `nvm use` calls, launched {:?}",
+            shell.name,
+            outcome.launches
+        );
+
+        // A `node` that is a script is never remembered: it could be a
+        // version manager's stand-in that answers differently next time.
+        // The stand-in releases come with such a script.
+        let outcome = world.run_with(
+            Impl::Nvmimic,
+            &shell,
+            "",
+            "nvm install 24.15.0",
+            "nvm current\nnvm current",
+        );
+        let node = outcome.launches.iter().filter(|l| l.ends_with("/bin/node"));
+        assert!(
+            node.count() == 2,
+            "{}: a script named node should be asked on every call, launched {:?}",
             shell.name,
             outcome.launches
         );

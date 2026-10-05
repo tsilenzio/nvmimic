@@ -13,8 +13,9 @@ use std::path::Path;
 /// Where the answer of the `npm` at a path is remembered. `None` when the
 /// answer cannot be tied to files on disk: the path does not lead into a
 /// package named `npm` (Corepack's shim and version-manager shims answer
-/// differently from one directory to the next), or nothing is remembered in
-/// this `$NVM_DIR`.
+/// differently from one directory to the next), the `node` on `PATH` is
+/// missing or is not a compiled program named `node`, or the caller gave no
+/// cache folder.
 fn remembered_npm(nvm: &Nvm, npm: &str) -> Option<Remembered> {
     let entry = std::fs::canonicalize(npm).ok()?;
     let manifest = entry
@@ -23,17 +24,19 @@ fn remembered_npm(nvm: &Nvm, npm: &str) -> Option<Remembered> {
         .map(|dir| dir.join("package.json"))
         .find(|path| path.is_file())?;
     // npm starts with `#!/usr/bin/env node`, so the node on `PATH` is part
-    // of the answer. An npm too new for it prints no version.
-    let node = local::which_node(nvm, "node")
-        .and_then(|node| std::fs::canonicalize(node).ok())
-        .unwrap_or_default();
+    // of the answer. An npm too new for it prints no version. A node that
+    // is some tool's stand-in can be a different Node on the next call.
+    let node = std::fs::canonicalize(local::which_node(nvm, "node")?).ok()?;
+    if !remembered::is_compiled(&node, &local::NODE_NAMES) {
+        return None;
+    }
     let subject = format!("{}\t{}", entry.display(), node.display());
     let key = [
         entry.display().to_string(),
         fingerprint(&entry)?,
         fingerprint(&manifest)?,
         node.display().to_string(),
-        fingerprint(&node).unwrap_or_default(),
+        fingerprint(&node)?,
         nvm.vars.get("NODE_OPTIONS").to_string(),
     ];
     let remembered = Remembered::new(nvm, "npm-version", &subject, &key)?;
@@ -51,8 +54,8 @@ fn remembered_npm(nvm: &Nvm, npm: &str) -> Option<Remembered> {
 /// scanning the caller's `PATH`. Printing nothing means there is no version.
 ///
 /// nvm runs npm every time. nvmimic runs it once and remembers the answer
-/// until npm's entry file, its `package.json`, the node on `PATH` or
-/// `NODE_OPTIONS` changes.
+/// until npm's entry file, its `package.json`, the node on `PATH`,
+/// `NODE_OPTIONS` or the operating system build changes.
 pub fn npm_version(nvm: &Nvm) -> Option<String> {
     let npm = paths::which(nvm.vars.get("PATH"), "npm")?;
     let remembered = remembered_npm(nvm, &npm);

@@ -229,14 +229,40 @@ commands real nvm accepts and prints nvm's help for anything else.
 
 nvm finds out which Node is active by running `node --version`, and prints
 npm's version after `nvm use` by running `npm --version`. It does both every
-time. nvmimic asks once and reuses the answer until the file it asked
-changes. For npm that also means npm's `package.json` and the `node`
-program. Both are asked again when the `NODE_OPTIONS` setting changes. A
-program that fails to answer is asked again every time, just like nvm does.
+time. nvmimic asks once and saves the answer.
 
-If something else ever changes what one of them prints, nvmimic would keep
+The rule: a saved answer is reused only when everything we know it depends
+on is unchanged. If nvmimic can't be sure, it runs the real program, the
+same as nvm. There's no setting to switch this off.
+
+What gets checked before a saved answer is reused:
+
+- the program's file: its full path, size, both timestamps and its inode
+  (the number the disk gives each file)
+- for npm, its `package.json` too, and the `node` program that runs it
+- the `NODE_OPTIONS` setting
+- the build of your operating system, so after a system update everything
+  is asked again
+
+Some things are never saved:
+
+- A `node` that isn't a compiled program named `node` or `iojs`. Tools like
+  asdf, Volta and mise put a small stand-in called a shim on your `PATH`
+  under the name `node`. A shim picks a different Node depending on the
+  folder you're in, so its answer is only good for one call.
+- An `npm` that doesn't live inside a package named `npm`, or one whose
+  `node` is such a shim.
+- An answer from a program that failed. It's asked again every time, just
+  like nvm does.
+
+The limit: nvmimic can only check the things on this list. If something
+else changes what `node --version` or `npm --version` prints, nvmimic keeps
 showing the old answer. We tried broken npm settings files and didn't find
-such a thing.
+such a thing, but we can't prove there isn't one.
+
+If you ever suspect a stale answer, delete the cache folder from
+[Where nvmimic keeps its files](#where-nvmimic-keeps-its-files). The next
+call asks the real programs again.
 
 ### Missing helper programs
 

@@ -215,7 +215,11 @@ fn nothing_of_nvmimics_own_goes_into_nvm_dir() {
         .collect();
     let out = home.nvmimic(&["self", "install", "--yes"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
-    // One `nvm use` makes nvmimic remember node's and npm's answers.
+    // A script is never remembered, so a compiled program stands in for
+    // node: nvmimic itself, which answers `--version` with one line. One
+    // `nvm use` makes nvmimic remember that answer.
+    fs::remove_file(&node).unwrap();
+    fs::copy(env!("CARGO_BIN_EXE_nvmimic"), &node).unwrap();
     let _ = home.shell("nvm use 22");
     let after: Vec<PathBuf> = snapshot(&home.nvm_dir())
         .into_iter()
@@ -229,6 +233,24 @@ fn nothing_of_nvmimics_own_goes_into_nvm_dir() {
     assert!(
         fs::read_dir(cache.join("node-version")).unwrap().count() == 1,
         "node's answer was remembered outside $NVM_DIR"
+    );
+}
+
+#[test]
+fn a_script_named_node_is_not_remembered() {
+    let home = Home::new();
+    let node = home.nvm_dir().join("versions/node/v22.1.0/bin/node");
+    fs::create_dir_all(node.parent().unwrap()).unwrap();
+    fs::write(&node, "#!/bin/sh\necho v22.1.0\n").unwrap();
+    fs::set_permissions(&node, fs::Permissions::from_mode(0o755)).unwrap();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    let out = home.shell("nvm use 22 >/dev/null; nvm current");
+    assert_eq!(text(&out.stdout).trim(), "v22.1.0");
+    let [_, _, cache] = home.own();
+    assert!(
+        !cache.join("node-version").exists(),
+        "a script's answer was remembered"
     );
 }
 

@@ -16,13 +16,22 @@ pub fn which_node(nvm: &Nvm, name: &str) -> Option<String> {
     paths::which(nvm.vars.get("PATH"), name)
 }
 
+/// The names a Node program goes by.
+pub const NODE_NAMES: [&str; 2] = ["node", "iojs"];
+
 /// What a Node binary prints for `--version`, or `None` when it cannot be
 /// started. nvm runs the binary every time. nvmimic runs it once and
-/// remembers the answer until the binary's file or `NODE_OPTIONS` changes.
-/// A binary that fails is asked again on every call, so one that cannot run
-/// on this machine is seen as nvm sees it: as printing nothing.
+/// remembers the answer until the binary's file, `NODE_OPTIONS` or the
+/// operating system build changes. A binary that fails is asked again on
+/// every call, so one that cannot run on this machine is seen as nvm sees
+/// it: as printing nothing. So is anything that is not a compiled program
+/// named `node` or `iojs`, such as the stand-in a version manager puts on
+/// `PATH`, which picks a different Node from one directory to the next.
 pub fn binary_version(nvm: &Nvm, binary: &str) -> Option<String> {
     let remembered = std::fs::canonicalize(binary).ok().and_then(|resolved| {
+        if !remembered::is_compiled(&resolved, &NODE_NAMES) {
+            return None;
+        }
         let subject = resolved.display().to_string();
         let key = [
             subject.clone(),
