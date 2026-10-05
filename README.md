@@ -277,7 +277,13 @@ outside `$NVM_DIR`. Everything else about that failure matches.
 
 These aren't known differences. They're places nobody has looked.
 
-- **Linux.** Every test so far ran on macOS.
+- **Linux.** The tests have run once on Linux (Debian 12 on arm64, in a
+  container), and 2145 of 2150 comparisons matched. The other five come from
+  two of nvm's own tests. One defines a shell function called `manpath` on
+  a machine with no `manpath` program, and `nvm use` then leaves `MANPATH`
+  alone where nvm sets it. The other reads an alias file with a zero byte
+  in it, and nvmimic prints that byte where nvm doesn't. Everything else
+  is tested on macOS, and there's no Linux download of nvmimic yet.
 - **Building real Node from source.** The tests build from a stand-in source
   package with a tiny `configure` script and `Makefile`. Every step nvm
   takes around the build is compared. A real Node build, which takes most of
