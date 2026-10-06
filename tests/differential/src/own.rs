@@ -34,15 +34,10 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
     }
     let bound = Bound {
         binary: &bin.join("nvmimic"),
-        nvm_functions: &own.join("nvm-functions.sh"),
-        nvmimic_functions: &own.join("nvmimic-functions.sh"),
         cache: Some(&cache),
     };
     let template = fs::read_to_string(shell_dir.join("nvm.sh")).unwrap();
     fs::write(nvm_dir.join("nvm.sh"), bind(&template, &bound)).unwrap();
-    for name in ["nvm-functions.sh", "nvmimic-functions.sh"] {
-        copy(&shell_dir.join(name), &own.join(name));
-    }
 
     let binary = nvmimic_bin();
     if count_launches {

@@ -5,14 +5,16 @@
 #   installer      tests nvm's install.sh, which nvmimic does not ship
 #   fixture        an executable file the tests use, not a test itself
 #   docker         only meaningful inside nvm's Ubuntu 16.04 test image
-#   mock-internal  redefines one of nvm's internal functions as a shell
-#                  function and expects nvm to call it. nvmimic notices that
-#                  under bash, sh and zsh and runs nvm's own code for the
-#                  call. dash cannot show what a function contains, so these
-#                  tests run under every shell but dash
-#   mock-tool      redefines an outside program (clang, wget) as a shell
+#   replaced-function  redefines one of nvm's internal functions as a shell
+#                  function and expects nvm to call it. nvmimic's program
+#                  cannot see a function defined in the calling shell, and
+#                  following replaced internals is outside what nvmimic
+#                  promises
+#   function-as-tool  redefines an outside program (clang, wget) as a shell
 #                  function or alias and expects nvm to run that instead.
-#                  Not under dash, like mock-internal
+#                  Outside the promise, like replaced-function
+#   function-hook  names a shell function as NVM_INSTALL_THIRD_PARTY_HOOK.
+#                  nvmimic's program can only start a hook that is a program
 #   copied-lines   compares the shell's own error lines from a function that
 #                  nvmimic's nvm.sh copies from nvm. The copy sits on other
 #                  line numbers than in nvm's nvm.sh
@@ -21,12 +23,6 @@
 #                  io.js, some built from source), which the offline test
 #                  mirror does not hold. `cargo xtask parity --network` runs
 #                  these and nothing else
-#
-#   real-node-mock both real-node and mock-internal: in the network pass
-#                  only, and not under dash
-#   real-node-hook installs real Node and names a shell function as
-#                  NVM_INSTALL_THIRD_PARTY_HOOK: in the network pass only,
-#                  and not under dash
 #   real-node-npm  installs real Node and then many packages from the live npm
 #                  registry at once. npm prints them in whatever order they
 #                  arrive, so in the network pass only the exit status and
@@ -42,63 +38,63 @@ real-node: sourcing/
 real-node: installation_node/
 real-node: installation_iojs/
 real-node-npm: slow/nvm reinstall-packages/should work as expected
-real-node-mock: installation_node/install from binary with binary flag set
-real-node-mock: installation_node/install from source without V8 snapshot for ARM
-real-node-mock: slow/nvm use/Running 'nvm use' calls 'nvm_die_on_prefix'
-real-node-mock: slow/nvm_get_latest/nvm_get_latest
-real-node-mock: sourcing/Sourcing nvm.sh should use the default if available and no nvm node is loaded
-real-node-mock: sourcing/Sourcing nvm.sh with --install should install the default
-mock-internal: fast/Aliases/nvm_list_aliases calls nvm_get_colors
-mock-internal: fast/Aliases/nvm_list_aliases propagates NVM_HAS_COLORS through pipeline
-mock-internal: fast/Aliases/nvm_list_aliases works with LTS aliases
-mock-internal: fast/Aliases/nvm_print_alias_path calls nvm_get_colors
-mock-internal: fast/Aliases/nvm_print_formatted_alias calls nvm_get_colors
-mock-internal: fast/Listing versions/Running 'nvm ls --no-alias' does not call into nvm_alias
-mock-internal: fast/Listing versions/Running 'nvm ls' calls into nvm_alias
-mock-internal: fast/Listing versions/Running 'nvm ls' should include 'system' when appropriate
-mock-internal: fast/Listing versions/Running 'nvm ls default' should show system version when available
-mock-internal: fast/Listing versions/Running 'nvm ls system' should include 'system' when appropriate
-mock-internal: fast/Running 'nvm use' should respect alias pointing to system
-mock-internal: fast/Running 'nvm use' should respect system in .nvmrc
-mock-internal: fast/Running 'nvm use system' should work as expected
-mock-internal: fast/Set Colors/nvm_print_default_alias calls nvm_get_colors
-mock-internal: fast/Set Colors/nvm_print_versions calls nvm_get_colors
-mock-internal: fast/Subcommands with missing or invalid args show a focused usage error
-mock-internal: fast/Unit tests/Running 'nvm install --save' works as expected'
-mock-internal: fast/Unit tests/nvm_compare_checksum
-mock-internal: fast/Unit tests/nvm_download_artifact error propagation
-mock-internal: fast/Unit tests/nvm_download wget Authorization header
-mock-internal: fast/Unit tests/nvm_ensure_version_installed
-mock-internal: fast/Unit tests/nvm_get_artifact_compression
-mock-internal: fast/Unit tests/nvm_get_checksum
-mock-internal: fast/Unit tests/nvm_get_download_slug
-mock-internal: fast/Unit tests/nvm_get_latest missing curl or wget
-mock-internal: fast/Unit tests/nvm_get_make_jobs
-mock-internal: fast/Unit tests/nvm install NVM_NO_SOURCE_FALLBACK
-mock-internal: fast/Unit tests/nvm_install_binary_extract
-mock-internal: fast/Unit tests/nvm_install_binary_extract self-heals a broken version dir
-mock-internal: fast/Unit tests/nvm_install_binary_nosource
-mock-internal: fast/Unit tests/nvm_install_latest_npm
-mock-internal: fast/Unit tests/nvm install verifies the installed version
-mock-internal: fast/Unit tests/nvm_is_version_installed
-mock-internal: fast/Unit tests/nvm ls-remote
-mock-internal: fast/Unit tests/nvm ls-remote with nounset should not fail
-mock-internal: fast/Unit tests/nvm_ls_remote
-mock-internal: fast/Unit tests/nvm_ls_remote LTS aliases
-mock-internal: fast/Unit tests/nvm_ls_remote_iojs
-mock-internal: fast/Unit tests/nvm_ls_remote nightly
-mock-internal: fast/Unit tests/nvm_print_alias_path
-mock-internal: fast/Unit tests/nvm_print_color_legend
-mock-internal: fast/Unit tests/nvm_print_default_alias
-mock-internal: fast/Unit tests/nvm_print_implicit_alias success
-mock-internal: fast/Unit tests/nvm_print_npm_version
-mock-internal: fast/Unit tests/nvm_remote_version
-mock-internal: fast/Unit tests/nvm_remote_versions
-mock-internal: fast/Unit tests/nvm_remote_versions propagates iojs failure
-mock-internal: fast/Unit tests/nvm_use_if_needed
-mock-internal: fast/Unit tests/nvm_version
-mock-internal: fast/Unit tests/nvm version-remote
-real-node-hook: installation_node/install hook
-mock-tool: fast/Unit tests/nvm_clang_version
+replaced-function: installation_node/install from binary with binary flag set
+replaced-function: installation_node/install from source without V8 snapshot for ARM
+replaced-function: slow/nvm use/Running 'nvm use' calls 'nvm_die_on_prefix'
+replaced-function: slow/nvm_get_latest/nvm_get_latest
+replaced-function: sourcing/Sourcing nvm.sh should use the default if available and no nvm node is loaded
+replaced-function: sourcing/Sourcing nvm.sh with --install should install the default
+replaced-function: fast/Aliases/nvm_list_aliases calls nvm_get_colors
+replaced-function: fast/Aliases/nvm_list_aliases propagates NVM_HAS_COLORS through pipeline
+replaced-function: fast/Aliases/nvm_list_aliases works with LTS aliases
+replaced-function: fast/Aliases/nvm_print_alias_path calls nvm_get_colors
+replaced-function: fast/Aliases/nvm_print_formatted_alias calls nvm_get_colors
+replaced-function: fast/Listing versions/Running 'nvm ls --no-alias' does not call into nvm_alias
+replaced-function: fast/Listing versions/Running 'nvm ls' calls into nvm_alias
+replaced-function: fast/Listing versions/Running 'nvm ls' should include 'system' when appropriate
+replaced-function: fast/Listing versions/Running 'nvm ls default' should show system version when available
+replaced-function: fast/Listing versions/Running 'nvm ls system' should include 'system' when appropriate
+replaced-function: fast/Running 'nvm use' should respect alias pointing to system
+replaced-function: fast/Running 'nvm use' should respect system in .nvmrc
+replaced-function: fast/Running 'nvm use system' should work as expected
+replaced-function: fast/Set Colors/nvm_print_default_alias calls nvm_get_colors
+replaced-function: fast/Set Colors/nvm_print_versions calls nvm_get_colors
+replaced-function: fast/Subcommands with missing or invalid args show a focused usage error
+replaced-function: fast/Unit tests/Running 'nvm install --save' works as expected'
+replaced-function: fast/Unit tests/nvm_compare_checksum
+replaced-function: fast/Unit tests/nvm_download_artifact error propagation
+replaced-function: fast/Unit tests/nvm_download wget Authorization header
+replaced-function: fast/Unit tests/nvm_ensure_version_installed
+replaced-function: fast/Unit tests/nvm_get_artifact_compression
+replaced-function: fast/Unit tests/nvm_get_checksum
+replaced-function: fast/Unit tests/nvm_get_download_slug
+replaced-function: fast/Unit tests/nvm_get_latest missing curl or wget
+replaced-function: fast/Unit tests/nvm_get_make_jobs
+replaced-function: fast/Unit tests/nvm install NVM_NO_SOURCE_FALLBACK
+replaced-function: fast/Unit tests/nvm_install_binary_extract
+replaced-function: fast/Unit tests/nvm_install_binary_extract self-heals a broken version dir
+replaced-function: fast/Unit tests/nvm_install_binary_nosource
+replaced-function: fast/Unit tests/nvm_install_latest_npm
+replaced-function: fast/Unit tests/nvm install verifies the installed version
+replaced-function: fast/Unit tests/nvm_is_version_installed
+replaced-function: fast/Unit tests/nvm ls-remote
+replaced-function: fast/Unit tests/nvm ls-remote with nounset should not fail
+replaced-function: fast/Unit tests/nvm_ls_remote
+replaced-function: fast/Unit tests/nvm_ls_remote LTS aliases
+replaced-function: fast/Unit tests/nvm_ls_remote_iojs
+replaced-function: fast/Unit tests/nvm_ls_remote nightly
+replaced-function: fast/Unit tests/nvm_print_alias_path
+replaced-function: fast/Unit tests/nvm_print_color_legend
+replaced-function: fast/Unit tests/nvm_print_default_alias
+replaced-function: fast/Unit tests/nvm_print_implicit_alias success
+replaced-function: fast/Unit tests/nvm_print_npm_version
+replaced-function: fast/Unit tests/nvm_remote_version
+replaced-function: fast/Unit tests/nvm_remote_versions
+replaced-function: fast/Unit tests/nvm_remote_versions propagates iojs failure
+replaced-function: fast/Unit tests/nvm_use_if_needed
+replaced-function: fast/Unit tests/nvm_version
+replaced-function: fast/Unit tests/nvm version-remote
+function-hook: installation_node/install hook
+function-as-tool: fast/Unit tests/nvm_clang_version
 copied-lines: fast/Unit tests/nvm_command_info
 network: fast/Unit tests/nvm_download

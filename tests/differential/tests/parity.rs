@@ -287,13 +287,7 @@ fn everyday_commands_launch_only_nvmimic() {
     ];
     for shell in harness::shells() {
         for (step, expected) in steps {
-            let outcome = world.run_with(
-                Impl::Nvmimic,
-                &shell,
-                "",
-                &installed,
-                step,
-            );
+            let outcome = world.run_with(Impl::Nvmimic, &shell, "", &installed, step);
             let foreign: Vec<&String> = outcome
                 .launches
                 .iter()

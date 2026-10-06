@@ -297,8 +297,6 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
             if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
                 let bound = nvmimic::install::Bound {
                     binary: &bin.join("nvmimic"),
-                    nvm_functions: &own.join("nvm-functions.sh"),
-                    nvmimic_functions: &own.join("nvmimic-functions.sh"),
                     cache: Some(&own.join("cache")),
                 };
                 fs::write(

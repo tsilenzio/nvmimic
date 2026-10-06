@@ -177,7 +177,7 @@ example after nvm's own install script was run over it.
 Settings, as environment variables:
   NVM_DIR                the nvm folder, if it isn't ~/.nvm
   NVMIMIC_INSTALL_PATH   where the nvmimic program goes
-  NVMIMIC_DATA_DIR, NVMIMIC_STATE_DIR, NVMIMIC_CACHE_DIR
+  NVMIMIC_STATE_DIR, NVMIMIC_CACHE_DIR
                          where nvmimic keeps its other files";
 
 const UNINSTALL_USAGE: &str = "\

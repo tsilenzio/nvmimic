@@ -15,18 +15,11 @@ use std::process::Command;
 /// What the scripts in `shell/` hold where a path of the installation goes.
 /// `self install` writes the real paths in, see [`bind`].
 pub const BINARY_PLACEHOLDER: &str = "\"@nvmimic-binary@\"";
-const NVM_FUNCTIONS_PLACEHOLDER: &str = "\"@nvmimic-nvm-functions@\"";
-const NVMIMIC_FUNCTIONS_PLACEHOLDER: &str = "\"@nvmimic-own-functions@\"";
 const CACHE_PLACEHOLDER: &str = "\"@nvmimic-cache@\"";
 
 const NVM_SH: &str = include_str!("../../../shell/nvm.sh");
 const NVM_EXEC: &str = include_str!("../../../shell/nvm-exec");
 const BASH_COMPLETION: &str = include_str!("../../../shell/bash_completion");
-/// nvm's own functions, and nvmimic's again, for calls that have to run
-/// nvm's code inside the calling shell. `nvm.sh` reads them from nvmimic's
-/// data folder.
-const NVM_FUNCTIONS: &str = include_str!("../../../shell/nvm-functions.sh");
-const NVMIMIC_FUNCTIONS: &str = include_str!("../../../shell/nvmimic-functions.sh");
 
 /// The scripts nvm keeps in `$NVM_DIR`, which nvmimic replaces.
 const SCRIPTS: &[&str] = &["nvm.sh", "nvm-exec", "bash_completion"];
@@ -38,8 +31,6 @@ const OWN_MARKER: &str = "as nvmimic provides it";
 pub struct Bound<'a> {
     /// The program `nvm.sh` hands its work to.
     pub binary: &'a Path,
-    pub nvm_functions: &'a Path,
-    pub nvmimic_functions: &'a Path,
     /// Where answers are remembered. `None` remembers nothing.
     pub cache: Option<&'a Path>,
 }
@@ -52,11 +43,6 @@ pub fn bind(script: &str, paths: &Bound) -> String {
     let quoted = |path: &Path| crate::shell::quote(&path.display().to_string());
     script
         .replace(BINARY_PLACEHOLDER, &quoted(paths.binary))
-        .replace(NVM_FUNCTIONS_PLACEHOLDER, &quoted(paths.nvm_functions))
-        .replace(
-            NVMIMIC_FUNCTIONS_PLACEHOLDER,
-            &quoted(paths.nvmimic_functions),
-        )
         .replace(
             CACHE_PLACEHOLDER,
             &paths.cache.map_or("''".to_string(), quoted),
@@ -511,15 +497,11 @@ pub fn self_install(
 
     let bound = Bound {
         binary: plan.path(),
-        nvm_functions: &dirs.nvm_functions(),
-        nvmimic_functions: &dirs.nvmimic_functions(),
         cache: Some(&dirs.cache),
     };
     write_file(&nvm_dir.join("nvm.sh"), &bind(NVM_SH, &bound), 0o644)?;
     write_file(&nvm_dir.join("nvm-exec"), NVM_EXEC, 0o755)?;
     write_file(&nvm_dir.join("bash_completion"), BASH_COMPLETION, 0o644)?;
-    write_file(&dirs.nvm_functions(), NVM_FUNCTIONS, 0o644)?;
-    write_file(&dirs.nvmimic_functions(), NVMIMIC_FUNCTIONS, 0o644)?;
 
     manifest.version = env!("CARGO_PKG_VERSION").to_string();
     manifest.nvm_dir = Some(nvm_dir.clone());
@@ -611,7 +593,8 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     }
 
     // Only what nvmimic put into its folders is removed, file by file. A
-    // folder that then still holds something of yours stays.
+    // folder that then still holds something of yours stays. The two files
+    // in the data folder are what earlier versions kept there.
     for file in ["nvm-functions.sh", "nvmimic-functions.sh"] {
         let _ = fs::remove_file(data.join(file));
     }
@@ -768,8 +751,6 @@ mod tests {
         let script = format!("command {BINARY_PLACEHOLDER} x; c={CACHE_PLACEHOLDER}");
         let bound = Bound {
             binary: Path::new("/a b/bin/nvmimic"),
-            nvm_functions: Path::new("/d/nvm-functions.sh"),
-            nvmimic_functions: Path::new("/d/nvmimic-functions.sh"),
             cache: None,
         };
         assert_eq!(bind(&script, &bound), "command '/a b/bin/nvmimic' x; c=''");
@@ -777,15 +758,8 @@ mod tests {
 
     #[test]
     fn every_placeholder_is_in_the_scripts() {
-        for placeholder in [
-            BINARY_PLACEHOLDER,
-            NVM_FUNCTIONS_PLACEHOLDER,
-            NVMIMIC_FUNCTIONS_PLACEHOLDER,
-            CACHE_PLACEHOLDER,
-        ] {
+        for placeholder in [BINARY_PLACEHOLDER, CACHE_PLACEHOLDER] {
             assert!(NVM_SH.contains(placeholder), "{placeholder}");
-            // Only `nvm.sh` names the installation's paths.
-            assert!(!NVMIMIC_FUNCTIONS.contains(placeholder), "{placeholder}");
         }
     }
 

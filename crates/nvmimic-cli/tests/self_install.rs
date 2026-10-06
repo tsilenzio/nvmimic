@@ -272,7 +272,6 @@ fn own_folders_follow_their_variables() {
     let out = home.nvmimic_with(&["self", "install", "--yes"], &vars);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert!(elsewhere.join("tools/nvmimic").is_file());
-    assert!(elsewhere.join("data/nvm-functions.sh").is_file());
     assert!(elsewhere.join("state/manifest").is_file());
     assert!(!home.has_own_files());
     let nvm = home.shell("nvm --version");
@@ -286,7 +285,6 @@ fn own_folders_follow_their_variables() {
         fs::read_to_string(elsewhere.join("data/mine")).unwrap(),
         "mine\n"
     );
-    assert!(!elsewhere.join("data/nvm-functions.sh").exists());
 }
 
 #[test]

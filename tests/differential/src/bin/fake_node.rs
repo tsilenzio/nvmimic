@@ -14,7 +14,10 @@ fn main() {
     let mut args = std::env::args();
     let started_as = args.next().unwrap_or_default();
     if let Some(log) = std::env::var_os("NVMIMIC_LAUNCH_LOG").filter(|log| !log.is_empty())
-        && let Ok(mut log) = std::fs::OpenOptions::new().append(true).create(true).open(log)
+        && let Ok(mut log) = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(log)
     {
         let _ = writeln!(log, "{started_as}");
     }

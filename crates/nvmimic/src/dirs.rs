@@ -18,7 +18,7 @@ use std::path::PathBuf;
 pub struct Dirs {
     /// The nvmimic program itself.
     pub binary: PathBuf,
-    /// The two files of shell functions `nvm.sh` reads.
+    /// Files that belong to the installation. Nothing is kept here now.
     pub data: PathBuf,
     /// The manifest, the backups of nvm's scripts and earlier programs.
     pub state: PathBuf,
@@ -74,14 +74,6 @@ impl Dirs {
     /// Where nvm's own scripts wait while nvmimic's are in `$NVM_DIR`.
     pub fn backup(&self) -> PathBuf {
         self.state.join("backup")
-    }
-
-    pub fn nvm_functions(&self) -> PathBuf {
-        self.data.join("nvm-functions.sh")
-    }
-
-    pub fn nvmimic_functions(&self) -> PathBuf {
-        self.data.join("nvmimic-functions.sh")
     }
 }
 

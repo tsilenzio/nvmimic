@@ -79,11 +79,10 @@ before you run `self install`:
 | What | Where | Variable |
 |---|---|---|
 | The nvmimic program | `~/.local/bin/nvmimic` | `NVMIMIC_INSTALL_PATH` |
-| A copy of nvm's functions (see [Known differences](#known-differences)) | `~/.local/share/nvmimic` | `NVMIMIC_DATA_DIR` |
 | The list of what was installed, and the backups of nvm's scripts | `~/.local/state/nvmimic` | `NVMIMIC_STATE_DIR` |
 | Remembered answers, safe to delete | `~/Library/Caches/nvmimic` on macOS, `~/.cache/nvmimic` elsewhere | `NVMIMIC_CACHE_DIR` |
 
-If you use the `XDG_DATA_HOME`, `XDG_STATE_HOME` or `XDG_CACHE_HOME`
+If you use the `XDG_STATE_HOME` or `XDG_CACHE_HOME`
 settings, nvmimic follows them too. If something that isn't nvmimic already
 sits at `~/.local/bin/nvmimic`, `self install` stops and leaves it alone.
 
@@ -145,57 +144,29 @@ set and write. That's the promise. A helper is one of the small functions
 nvm's own README tells you to call, such as `nvm_find_nvmrc`.
 
 It promises nothing if you replace nvm's own functions, give the tools nvm
-runs an alias, or remove programs nvm needs. Some of that works anyway, and
-the sections below say how far. Don't build on it.
-
-Inside the promise, these are the places where you can still tell the two
-apart, each with the reason. If you find a difference in a command or a
-documented helper that isn't on this list, it's a bug.
+runs an alias or a function of the same name, or remove programs nvm needs.
 
 ### Things only your own shell can see
 
-This part is outside the promise. It's described here because the common
-cases work.
+This part is outside the promise.
 
-Real nvm is shell code that runs inside your shell. nvmimic's `nvm` hands
-the work to a separate program, and a separate program can't look inside
-your shell. So before every call, nvmimic's `nvm` checks three things that
-only the shell knows:
+Official nvm is shell code that runs inside your shell. nvmimic's `nvm`
+hands the work to a separate program, and a separate program can't look
+inside your shell. So nvmimic doesn't follow these:
 
-- **Did you replace one of nvm's own functions?** If you define your own
-  `nvm_ls`, real nvm calls yours from then on.
-- **Is your install hook a shell function?** `NVM_INSTALL_THIRD_PARTY_HOOK`
-  can name a program or a function.
-- **Does a shell function have the name of a tool nvm runs?** If you define
-  a function called `node`, `npm` or `curl`, for example, real nvm ends up
-  running yours.
+- **Your own version of one of nvm's functions.** If you define your own
+  `nvm_ls`, official nvm calls yours from then on. nvmimic's program never
+  sees it. Calling `nvm_ls` yourself still runs yours.
+- **A shell function as the install hook.** `NVM_INSTALL_THIRD_PARTY_HOOK`
+  has to name a program for nvmimic to run it.
+- **A shell function or alias with the name of a tool nvm runs.** If you
+  define a function called `node`, `npm` or `curl`, official nvm ends up
+  running yours. nvmimic runs the program. Two cases match anyway: nvm
+  skips a checksum program that is an alias, and `nvm debug` shows what
+  each tool is aliased to.
 
-When the answer to any of them is yes, that one call runs nvm's own code
-inside your shell, exactly as real nvm would, at real nvm's speed. nvmimic
-ships a copy of nvm's functions for this. Every other call stays fast.
-
-You can also ask for nvm's own code yourself. Set `NVMIMIC_NVM_CODE=1`, and
-from the next `nvm` call on, that shell runs nvm's own functions and nothing
-else. Set it before you load `nvm.sh` and it applies from the start.
-
-What still differs here:
-
-- **dash can't tell that you replaced a function.** dash has no way to show
-  what a function contains, so nvmimic has nothing to compare. If you
-  replace nvm's functions under dash, set `NVMIMIC_NVM_CODE=1` before
-  loading `nvm.sh`. The other two checks do work under dash.
-- **Aliases for tools.** If an alias called `grep` or `node` existed when
-  `nvm.sh` was loaded, real nvm's functions use it for the life of that
-  shell. nvmimic ignores such aliases, and that isn't going to change. Two
-  cases match anyway: nvm skips a checksum program that is an alias, and
-  `nvm debug` shows what each tool is aliased to.
-- **One extra variable.** In bash and zsh, nvmimic keeps a copy of the
-  function text to compare against, in a variable called
-  `__nvmimic_functions`. It shows up if you list every variable with `set`.
-- **Error messages from bash name another file.** When nvm's own code runs
-  and bash itself reports an error in it, bash names the file the code came
-  from. With real nvm that is `nvm.sh`. With nvmimic it is
-  `nvm-functions.sh`. The line number is the same.
+If you need any of these, you need official nvm. `nvmimic self uninstall`
+puts its scripts back.
 
 ### The text of the functions
 

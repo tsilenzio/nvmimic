@@ -165,7 +165,5 @@ pub fn run(nvm: &mut Nvm) -> i32 {
     for name in VARIABLES {
         nvm.vars.unset(name);
     }
-    // nvmimic's own copy of the functions, see `shell/nvm.sh`.
-    nvm.vars.unset("__nvmimic_functions");
     0
 }
