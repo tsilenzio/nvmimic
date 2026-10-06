@@ -348,6 +348,66 @@ fn an_edited_script_is_renamed_and_nvms_goes_back() {
     );
 }
 
+/// nvm's own installer, run again after nvmimic took over: it writes a newer
+/// nvm's three scripts over nvmimic's.
+fn newer_nvm_over_ours(home: &Home) {
+    for file in SCRIPTS {
+        let mut newer = fs::read_to_string(reference().join(file)).unwrap();
+        if file != "nvm-exec" {
+            newer.push_str("# a newer nvm\n");
+        }
+        fs::write(home.nvm_dir().join(file), newer).unwrap();
+    }
+}
+
+#[test]
+fn nvms_own_scripts_written_over_ours_are_left_alone() {
+    for leaving in ["uninstall", "eject"] {
+        let home = Home::new();
+        real_nvm(&home);
+        let out = home.nvmimic(&["self", "install", "--force"]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        newer_nvm_over_ours(&home);
+        let newer: Vec<Vec<u8>> = SCRIPTS
+            .iter()
+            .map(|file| fs::read(home.nvm_dir().join(file)).unwrap())
+            .collect();
+
+        let dry = home.nvmimic(&["self", leaving, "--dry-run"]);
+        assert!(dry.status.success(), "{}", text(&dry.stderr));
+        assert_eq!(
+            text(&dry.stdout).matches("Would leave it alone.").count(),
+            3,
+            "{}",
+            text(&dry.stdout)
+        );
+
+        let out = home.nvmimic(&["self", leaving, "--force"]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        let said = text(&out.stdout);
+        for (file, newer) in SCRIPTS.iter().zip(&newer) {
+            let path = home.nvm_dir().join(file);
+            assert_eq!(&fs::read(&path).unwrap(), newer, "{leaving} {file}");
+            assert!(
+                said.contains(&format!(
+                    "{} isn't the file nvmimic put there. Left it alone.",
+                    path.display()
+                )),
+                "{said}"
+            );
+            assert!(
+                !home
+                    .nvm_dir()
+                    .join(format!("{file}.nvmimic-saved"))
+                    .exists()
+            );
+            // The older nvm nvmimic kept is still there, and stayed out.
+            assert!(home.state().join("backup").join(file).is_file());
+        }
+        assert!(!said.contains("was edited"), "{said}");
+    }
+}
+
 #[test]
 fn a_script_with_no_fingerprint_is_compared_with_what_nvmimic_writes() {
     let home = Home::new();
@@ -362,13 +422,16 @@ fn a_script_with_no_fingerprint_is_compared_with_what_nvmimic_writes() {
         .map(|line| format!("{line}\n"))
         .collect();
     fs::write(&manifest, kept).unwrap();
-    fs::write(home.nvm_dir().join("bash_completion"), "# by hand\n").unwrap();
+    let completion = home.nvm_dir().join("bash_completion");
+    let mut by_hand = fs::read_to_string(&completion).unwrap();
+    by_hand.push_str("# by hand\n");
+    fs::write(&completion, &by_hand).unwrap();
 
     let out = home.nvmimic(&["self", "uninstall", "--force"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert_eq!(
         fs::read_to_string(home.nvm_dir().join("bash_completion.nvmimic-saved")).unwrap(),
-        "# by hand\n"
+        by_hand
     );
     assert!(!home.nvm_dir().join("nvm.sh").exists());
     assert!(!home.nvm_dir().join("nvm.sh.nvmimic-saved").exists());

@@ -29,6 +29,8 @@ const SCRIPTS: &[&str] = &["nvm.sh", "nvm-exec", "bash_completion"];
 
 /// Text only nvmimic's own `nvm.sh` contains.
 const OWN_MARKER: &str = "as nvmimic provides it";
+/// Text only nvmimic's own `bash_completion` contains.
+const COMPLETION_MARKER: &str = "Changed by nvmimic";
 
 /// The line in the text `nvmimic init` prints where the function
 /// definitions end. What follows runs once, when a shell loads nvmimic.
@@ -627,18 +629,49 @@ fn script_text(name: &str, binary: &Path) -> String {
     }
 }
 
-/// Whether the script at `path` holds something other than what nvmimic
-/// wrote there. Without a fingerprint on record, it is compared with what
-/// this program would write now.
-fn is_edited(path: &Path, name: &str, manifest: &Manifest, binary: &Path) -> bool {
+/// Whose a script in `$NVM_DIR` is, going by what it holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Found {
+    Missing,
+    /// What nvmimic wrote, untouched.
+    Ours,
+    /// nvmimic's script with someone's changes in it.
+    OursEdited,
+    /// Anything else. The usual way to get here is running nvm's own
+    /// installer again, which writes nvm's scripts over nvmimic's.
+    NotOurs,
+}
+
+/// Text only nvmimic's copy of a script holds. nvmimic's `nvm-exec` is
+/// nvm's own file, byte for byte, so it has none.
+fn own_marker(name: &str) -> Option<&'static str> {
+    match name {
+        "nvm.sh" => Some(OWN_MARKER),
+        "bash_completion" => Some(COMPLETION_MARKER),
+        _ => None,
+    }
+}
+
+/// Looks at the script at `path`. Without a fingerprint on record, it is
+/// compared with what this program would write now. A changed file only
+/// counts as nvmimic's when it carries nvmimic's marker. Everything that
+/// can't be told apart for sure is `NotOurs`, which gets left alone.
+fn found(path: &Path, name: &str, manifest: &Manifest, binary: &Path) -> Found {
     let Ok(contents) = fs::read(path) else {
-        return false;
+        return Found::Missing;
     };
     let written = match manifest.fingerprints.get(name) {
         Some(sum) => sum.clone(),
         None => fingerprint(script_text(name, binary).as_bytes()),
     };
-    fingerprint(&contents) != written
+    if fingerprint(&contents) == written {
+        return Found::Ours;
+    }
+    let text = String::from_utf8_lossy(&contents);
+    match own_marker(name) {
+        Some(marker) if text.contains(marker) => Found::OursEdited,
+        _ => Found::NotOurs,
+    }
 }
 
 /// Where an edited script goes: `<script>.nvmimic-saved`, with a number
@@ -767,7 +800,7 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
     let cache = manifest.cache.clone().unwrap_or_else(|| dirs.cache.clone());
     let placed = manifest.placed.then(|| binary.clone());
     // A backup someone deleted can't go back.
-    let restore: Vec<String> = manifest
+    let mut restore: Vec<String> = manifest
         .backed_up
         .iter()
         .filter(|name| present(&backup.join(name)))
@@ -796,6 +829,9 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
     let mut steps: Vec<Step> = Vec::new();
     // Scripts someone changed since nvmimic wrote them: name, path, new path.
     let mut edited: Vec<(&str, PathBuf, PathBuf)> = Vec::new();
+    // Scripts that aren't nvmimic's any more. They stay as they are, and
+    // nvm's older copy in the backup folder doesn't go back over them.
+    let mut not_ours: Vec<&str> = Vec::new();
     if how == Leaving::Purge {
         steps.push(Step::new(format!(
             "delete {} and everything in it, your Node versions and aliases included ({})",
@@ -810,21 +846,45 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             )));
         }
     } else if !manifest.ejected {
+        // With an `nvm.sh` that isn't nvmimic's, nobody can say whose
+        // `nvm-exec` is: nvm's and nvmimic's are the same file.
+        let nvm_sh_is_ours =
+            found(&nvm_dir.join("nvm.sh"), "nvm.sh", &manifest, &binary) != Found::NotOurs;
         for name in SCRIPTS {
             let path = nvm_dir.join(name);
-            if is_edited(&path, name, &manifest, &binary) {
-                let saved = saved_path(&path);
-                steps.push(Step {
-                    note: Some(format!("{name} was edited after nvmimic installed it.")),
-                    action: format!("rename {} to {}", path.display(), saved.display()),
-                });
-                edited.push((name, path, saved));
+            let state = match found(&path, name, &manifest, &binary) {
+                Found::Ours if *name == "nvm-exec" && !nvm_sh_is_ours => Found::NotOurs,
+                state => state,
+            };
+            match state {
+                Found::OursEdited => {
+                    let saved = saved_path(&path);
+                    steps.push(Step {
+                        note: Some(format!("{name} was edited after nvmimic installed it.")),
+                        action: format!("rename {} to {}", path.display(), saved.display()),
+                    });
+                    edited.push((name, path, saved));
+                }
+                Found::NotOurs => {
+                    steps.push(Step {
+                        note: Some(format!(
+                            "{} isn't the file nvmimic put there.",
+                            path.display()
+                        )),
+                        action: "leave it alone".to_string(),
+                    });
+                    not_ours.push(name);
+                }
+                Found::Ours | Found::Missing => {}
             }
         }
-        steps.push(Step::new(format!(
-            "remove nvmimic's scripts from {}",
-            nvm_dir.display()
-        )));
+        restore.retain(|name| !not_ours.contains(&name.as_str()));
+        if not_ours.len() < SCRIPTS.len() {
+            steps.push(Step::new(format!(
+                "remove nvmimic's scripts from {}",
+                nvm_dir.display()
+            )));
+        }
         if !restore.is_empty() {
             steps.push(Step::new(format!(
                 "put nvm's own {} back in {}",
@@ -851,6 +911,10 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
         Leaving::Purge => {}
         _ if manifest.ejected => ui.say(&format!(
             "nvmimic's scripts are already out of {}.",
+            nvm_dir.display()
+        )),
+        _ if restore.is_empty() && !not_ours.is_empty() => ui.say(&format!(
+            "{} holds nvm's own scripts again, so there is nothing to put back.",
             nvm_dir.display()
         )),
         Leaving::Eject => ui.say(&format!(
@@ -919,8 +983,19 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
                 saved.display()
             ));
         }
+        for name in &not_ours {
+            let kept = backup.join(name);
+            let older = match present(&kept) {
+                true => format!(" nvmimic's older copy of it stays at {}.", kept.display()),
+                false => String::new(),
+            };
+            ui.say(&format!(
+                "{} isn't the file nvmimic put there. Left it alone.{older}",
+                nvm_dir.join(name).display()
+            ));
+        }
         for name in SCRIPTS {
-            if !edited.iter().any(|(edited, _, _)| edited == name) {
+            if !edited.iter().any(|(edited, _, _)| edited == name) && !not_ours.contains(name) {
                 let _ = fs::remove_file(nvm_dir.join(name));
             }
         }
@@ -968,7 +1043,9 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
 
     ui.say(match how {
         Leaving::Purge => "Done. nvmimic and the nvm folder are gone.",
-        _ if !restore.is_empty() || manifest.ejected => "Done. nvmimic is gone and nvm is back.",
+        _ if !restore.is_empty() || manifest.ejected || !not_ours.is_empty() => {
+            "Done. nvmimic is gone and nvm is back."
+        }
         _ => "Done. nvmimic is gone.",
     });
     if placed.is_none() {

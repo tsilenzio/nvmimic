@@ -116,6 +116,11 @@ If you changed one of nvmimic's scripts by hand, your version isn't thrown
 away. It gets a new name, `nvm.sh.nvmimic-saved` for example, and nvmimic
 tells you where it went.
 
+If you ran nvm's own install script after nvmimic took over, the scripts in
+the nvm folder are nvm's again, and likely newer than the ones nvmimic kept.
+`self eject` and `self uninstall` leave those where they are and tell you
+so. They don't put the older copies back over them.
+
 If Homebrew or cargo installed nvmimic, `self uninstall` leaves the program
 alone and tells you the command that removes it. Run `nvmimic self
 uninstall` before `brew uninstall nvmimic`. Homebrew runs nothing of

@@ -232,18 +232,15 @@ fn init_shell(cache_dir: Option<std::path::PathBuf>) -> Option<nvmimic::init::Sh
 }
 
 const INIT_USAGE: &str = "\
-usage: eval \"$(nvmimic init)\"
+usage: nvmimic init
 
 Prints the shell code that makes `nvm` work in a shell: nvm's functions, and
 then the lines that switch to your default Node version. A shell has to run
-that code itself, which is what `eval` does.
+that code itself, with `eval`.
 
-You don't normally type this. `nvmimic self install` puts an `nvm.sh` into
-your nvm folder that runs it for you, and your startup file loads that
-`nvm.sh` the way it always did. If you'd rather not have that file, put this
-into your startup file instead, after the line that sets NVM_DIR:
-
-  eval \"$(nvmimic init)\"
+You don't type this. `nvmimic self install` puts an `nvm.sh` into your nvm
+folder that runs it for you, and your startup file loads that `nvm.sh` the
+way it always did.
 
 The same code works in bash, zsh, sh and dash.";
 
