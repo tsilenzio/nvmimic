@@ -152,6 +152,10 @@ Pick one of these:
   `nvmimic self install` once more. nvm's installer doesn't touch nvmimic's
   own files, so nothing is lost in between.
 
+The zsh plugin zsh-nvm has an `nvm upgrade` command that does the second of
+these for you. It runs git inside the nvm folder and puts nvm's scripts
+back. Run `nvmimic self install` afterwards.
+
 If you installed nvm with git, `git status` in `$NVM_DIR` shows `nvm.sh`,
 `nvm-exec` and `bash_completion` as modified while nvmimic is installed.
 That's expected. It also means nvm's manual upgrade (`git checkout` of a newer

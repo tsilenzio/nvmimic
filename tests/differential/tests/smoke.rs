@@ -9,6 +9,10 @@
 //!
 //! The Node archives come through the mirror's network mode, so each one is
 //! downloaded from nodejs.org once and kept in `target/parity-network/`.
+//!
+//! It also loads nvmimic through the oh-my-zsh nvm plugin, in the plugin's
+//! default, lazy and autoload modes. The plugin file is downloaded once
+//! from GitHub and kept in the same folder.
 
 use nvmimic_parity::{guard, harness, mirror};
 use std::collections::BTreeMap;
@@ -27,8 +31,9 @@ const EXPECT: &str = r#"expect() {
   fi
 }
 export NVM_DIR="$HOME/.nvm"
-. "$NVM_DIR/nvm.sh" || echo "FAIL sourcing nvm.sh returned $?"
 "#;
+
+const LOAD: &str = ". \"$NVM_DIR/nvm.sh\" || echo \"FAIL sourcing nvm.sh returned $?\"\n";
 
 const ZSH_BODY: &str = r#"
 for major in 20 22 24; do
@@ -72,9 +77,86 @@ fn run(home: &Path, vars: &BTreeMap<String, String>, program: &Path, args: &[&st
         .unwrap()
 }
 
+/// The oh-my-zsh nvm plugin, as of this commit of ohmyzsh/ohmyzsh.
+const OMZ_COMMIT: &str = "4d4cfc287e9d887b81242c0e431b5f49f9cec5c1";
+
+/// What the plugin needs from oh-my-zsh before it is sourced: zsh's
+/// completion system, which oh-my-zsh starts ahead of every plugin.
+const OMZ_BEFORE: &str = "autoload -U compinit && compinit -D\n";
+
+/// The plugin as people have it by default: it loads nvm.sh right away and
+/// then nvm's bash_completion.
+const OMZ_DEFAULT: &str = r#"
+source "$OMZ_NVM_PLUGIN"
+expect "omz default: nvm.sh loaded" "1" "$+functions[nvm_find_nvmrc]"
+expect "omz default: node --version" "$NODE_22" "$(node --version)"
+[ -n "${_comps[nvm]-}" ] && echo "ok omz default: completion registered" || echo "FAIL omz default: no completion for nvm"
+"#;
+
+/// Lazy mode: `nvm`, `node` and others are placeholders that load nvm.sh
+/// from inside a function the first time one of them is used.
+const OMZ_LAZY: &str = r#"
+zstyle ':omz:plugins:nvm' lazy yes
+source "$OMZ_NVM_PLUGIN"
+expect "omz lazy: nvm.sh not loaded yet" "0" "$+functions[nvm_find_nvmrc]"
+expect "omz lazy: node through the placeholder" "$NODE_22" "$(node --version)"
+nvm use 20 >/dev/null || echo "FAIL omz lazy: nvm use 20 returned $?"
+expect "omz lazy: nvm.sh loaded by nvm" "1" "$+functions[nvm_find_nvmrc]"
+expect "omz lazy: node --version" "$NODE_20" "$(node --version)"
+expect "omz lazy: placeholders gone" "0" "$+functions[_omz_nvm_load]"
+"#;
+
+/// Autoload mode: the plugin's own `.nvmrc` hook on every `cd`.
+const OMZ_AUTOLOAD: &str = r#"
+zstyle ':omz:plugins:nvm' autoload yes
+mkdir -p "$HOME/proj" && echo 20 > "$HOME/proj/.nvmrc"
+source "$OMZ_NVM_PLUGIN"
+expect "omz autoload: default at the start" "$NODE_22" "$(nvm current)"
+cd "$HOME/proj"
+expect "omz autoload: .nvmrc" "$NODE_20" "$(nvm current)"
+cd "$HOME"
+expect "omz autoload: back to default" "$NODE_22" "$(nvm current)"
+"#;
+
+/// The plugin file, downloaded once and kept beside the Node archives.
+/// `None` when it isn't there and can't be fetched.
+fn omz_plugin() -> Option<std::path::PathBuf> {
+    let dir = harness::repo_root()
+        .join("target/parity-network/ohmyzsh")
+        .join(OMZ_COMMIT);
+    let file = dir.join("nvm.plugin.zsh");
+    if !file.is_file() {
+        fs::create_dir_all(&dir).ok()?;
+        let url = format!(
+            "https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/{OMZ_COMMIT}/plugins/nvm/nvm.plugin.zsh"
+        );
+        let fetched = Command::new("/usr/bin/curl")
+            .args(["--fail", "--silent", "--location", "--output"])
+            .arg(&file)
+            .arg(&url)
+            .status();
+        if !fetched.is_ok_and(|status| status.success()) {
+            let _ = fs::remove_file(&file);
+            return None;
+        }
+    }
+    Some(file)
+}
+
+/// Runs a script that loads nvm.sh first, see [`check_script`].
+fn check(home: &Path, vars: &BTreeMap<String, String>, shell: &str, body: &str, checks: usize) {
+    check_script(home, vars, shell, &format!("{LOAD}{body}"), checks);
+}
+
 /// Runs a script and checks that it printed `checks` lines starting with
 /// `ok` and none starting with `FAIL`.
-fn check(home: &Path, vars: &BTreeMap<String, String>, shell: &str, body: &str, checks: usize) {
+fn check_script(
+    home: &Path,
+    vars: &BTreeMap<String, String>,
+    shell: &str,
+    body: &str,
+    checks: usize,
+) {
     let shell = harness::shell(shell).unwrap_or_else(|| panic!("no {shell} on this machine"));
     let script = format!("{EXPECT}{body}");
     let output = run(home, vars, &shell.path, &["-c", &script]);
@@ -153,6 +235,18 @@ fn real_node_smoke() {
              expect 'node --version' \"$NODE_{major}\" \"$(node --version)\"\n"
         );
         check(&home, &vars, shell, &body, 1);
+    }
+
+    // People load nvm through the oh-my-zsh plugin too, in three modes.
+    match omz_plugin() {
+        Some(plugin) => {
+            let mut vars = vars.clone();
+            vars.insert("OMZ_NVM_PLUGIN".to_string(), plugin.display().to_string());
+            for (body, checks) in [(OMZ_DEFAULT, 3), (OMZ_LAZY, 5), (OMZ_AUTOLOAD, 3)] {
+                check_script(&home, &vars, "zsh", &format!("{OMZ_BEFORE}{body}"), checks);
+            }
+        }
+        None => eprintln!("oh-my-zsh plugin: not downloaded and not reachable, skipped"),
     }
 
     let uninstalled = run(
