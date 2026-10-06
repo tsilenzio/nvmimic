@@ -147,11 +147,32 @@ pub fn rm_rf_quiet(paths: &[&str]) -> bool {
     paths.iter().all(|path| remove(path).is_ok())
 }
 
+/// Writes `input` to a program's stdin and closes it.
+///
+/// A program that stops reading early, or exits before it reads anything,
+/// closes the pipe. In a shell pipeline that ends whatever was writing on
+/// the left and the shell carries on with the program's status. nvmimic is
+/// the writer here and has to carry on too, so the signal that ends a
+/// process writing to a closed pipe is switched off for the write and then
+/// put back as it was. GNU grep exits on a bad option before it reads.
+fn feed(stdin: Option<std::process::ChildStdin>, input: &[u8]) {
+    use std::io::Write;
+    let Some(mut stdin) = stdin else {
+        return;
+    };
+    // SAFETY: changes how one signal is handled and restores it below.
+    // nvmimic runs no other thread that could write to a pipe meanwhile.
+    let before = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) };
+    let _ = stdin.write_all(input);
+    drop(stdin);
+    // SAFETY: puts back the handling read just above.
+    unsafe { libc::signal(libc::SIGPIPE, before) };
+}
+
 /// Runs a prepared command with `input` on its stdin, like the right-hand
 /// side of a pipe. Its stdout and stderr go where nvm's own are going.
 pub fn run_fed(nvm: &mut Nvm, mut command: Command, input: &[u8]) -> i32 {
     use crate::context::ChildStream;
-    use std::io::Write;
     nvm.io.flush();
     let stdio = |stream: ChildStream| match stream {
         ChildStream::Inherit => Stdio::inherit(),
@@ -169,11 +190,7 @@ pub fn run_fed(nvm: &mut Nvm, mut command: Command, input: &[u8]) -> i32 {
     let Ok(mut child) = command.spawn() else {
         return 127;
     };
-    if let Some(mut stdin) = child.stdin.take() {
-        // A program that stops reading early closes the pipe. That is its
-        // business, as it is in a shell pipeline.
-        let _ = stdin.write_all(input);
-    }
+    feed(child.stdin.take(), input);
     match child.wait_with_output() {
         Ok(output) => {
             nvm.io.out_raw(&String::from_utf8_lossy(&output.stdout));
@@ -188,15 +205,12 @@ pub fn run_fed(nvm: &mut Nvm, mut command: Command, input: &[u8]) -> i32 {
 /// and what it prints to stdout comes back. Its stderr goes to nvm's
 /// stderr. `None` when the program is not on `PATH`.
 pub fn filter(nvm: &mut Nvm, mut command: Command, input: &[u8]) -> Option<Ran> {
-    use std::io::Write;
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().ok()?;
-    if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(input);
-    }
+    feed(child.stdin.take(), input);
     let output = child.wait_with_output().ok()?;
     nvm.io.err_raw(&String::from_utf8_lossy(&output.stderr));
     Some(Ran {
@@ -224,4 +238,30 @@ pub fn run_merged(nvm: &Nvm, program: &str, args: &[&str]) -> Option<Ran> {
     reader.read_to_end(&mut stdout).ok()?;
     let status = child.wait().ok()?.code().unwrap_or(1);
     Some(Ran { stdout, status })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A reader that exits without reading must not take the writer with
+    /// it. More is written than a pipe holds, so the write always meets
+    /// the closed pipe, however the two processes are scheduled. A wrong
+    /// `feed` ends this test program instead of failing an assertion.
+    #[test]
+    fn feeding_a_program_that_already_exited_is_survived() {
+        // SAFETY: the test sets the signal as nvmimic's hand-off does under
+        // bash and dash, and puts Rust's own setting back at the end.
+        let rust_default = unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+        let mut child = Command::new("/bin/sh")
+            .args(["-c", "exit 2"])
+            .stdin(Stdio::piped())
+            .spawn()
+            .unwrap();
+        feed(child.stdin.take(), &vec![b'x'; 1 << 20]);
+        assert_eq!(child.wait().unwrap().code(), Some(2));
+        // SAFETY: as above.
+        let after = unsafe { libc::signal(libc::SIGPIPE, rust_default) };
+        assert_eq!(after, libc::SIG_DFL, "feed left the signal changed");
+    }
 }

@@ -83,7 +83,7 @@ pub fn system_build() -> Option<String> {
         }
         name
     };
-    let mut build = format!(
+    let build = format!(
         "{} {} {} {}",
         text(&name.sysname),
         text(&name.release),
@@ -91,7 +91,7 @@ pub fn system_build() -> Option<String> {
         text(&name.machine)
     );
     #[cfg(target_os = "macos")]
-    {
+    let build = {
         let mut buffer = [0 as libc::c_char; 64];
         let mut len = buffer.len();
         // SAFETY: the name is NUL-terminated, and `len` is the size of the
@@ -108,9 +108,8 @@ pub fn system_build() -> Option<String> {
         if status != 0 {
             return None;
         }
-        build.push(' ');
-        build.push_str(&text(&buffer));
-    }
+        format!("{build} {}", text(&buffer))
+    };
     Some(build)
 }
 
