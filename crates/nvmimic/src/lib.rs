@@ -9,6 +9,7 @@ pub mod cmd;
 pub mod context;
 pub mod dirs;
 pub mod functions;
+pub mod init;
 pub mod install;
 pub mod nvm;
 pub mod pin;

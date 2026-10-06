@@ -139,6 +139,10 @@ impl Fixture {
             format!("NVM_DIR={}", home.join(".nvm").display()),
             format!("PATH={}", self.path(which, scenario)),
             "TERM=xterm".to_string(),
+            // A login session exports SHELL. Without it bash sets the
+            // variable for itself and doesn't export it, and nvmimic then
+            // can't tell what the shell holds without a second start.
+            format!("SHELL={}", shell.path),
         ];
         if shell.interactive {
             command.push(format!("ZDOTDIR={}", self.zdotdir().display()));
@@ -574,8 +578,7 @@ fn check_budget(rows: &[Row]) -> ExitCode {
         }
         let launches = row.nvmimic_launches.as_ref().unwrap();
         let foreign: Vec<_> = launches.keys().filter(|name| *name != "nvmimic").collect();
-        // One start prints the functions and one loads the default version.
-        if !foreign.is_empty() || launches.get("nvmimic").copied().unwrap_or(0) > 2 {
+        if !foreign.is_empty() || launches.get("nvmimic").copied().unwrap_or(0) > 1 {
             failures.push(format!(
                 "{} {}: launched {}",
                 row.shell,

@@ -185,14 +185,50 @@ fn init() -> ExitCode {
             .and_then(|manifest| manifest.cache)
             .unwrap_or_else(|| dirs.cache.clone())
     });
+    let load = init_shell(cache.clone())
+        .and_then(|shell| nvmimic::init::load(FORWARDED, shell, &NvmDirBackend));
     print!(
         "{}",
-        nvmimic::install::init_text(&nvmimic::install::Bound {
-            binary: &binary,
-            cache: cache.as_deref(),
-        })
+        nvmimic::install::init_text(
+            &nvmimic::install::Bound {
+                binary: &binary,
+                cache: cache.as_deref(),
+            },
+            load.as_deref(),
+        )
     );
     ExitCode::SUCCESS
+}
+
+/// The shell `nvm.sh` says it is running `init` for. `None` when `init` was
+/// typed directly, where nothing says which shell will read the output.
+fn init_shell(cache_dir: Option<std::path::PathBuf>) -> Option<nvmimic::init::Shell> {
+    let hint = |name: &str| env::var(name).unwrap_or_default();
+    env::var_os("__NVMIMIC_OPTS")?;
+    let bash: u32 = hint("__NVMIMIC_BASH").parse().unwrap_or(0);
+    let dialect = if !hint("__NVMIMIC_ZSH").is_empty() {
+        Dialect::Zsh
+    } else if bash == 0 {
+        Dialect::Posix
+    } else if hint("__NVMIMIC_SHELLOPTS").split(':').any(|o| o == "posix") {
+        Dialect::BashPosix
+    } else {
+        Dialect::Bash
+    };
+    Some(nvmimic::init::Shell {
+        env: env::vars_os()
+            .map(|(name, value)| (lossy(name), lossy(value)))
+            .filter(|(name, _)| !name.starts_with("__NVMIMIC_"))
+            .collect(),
+        dialect,
+        caller: nvmimic::context::CallerShell {
+            arg0: hint("__NVMIMIC_ARG0"),
+            script: hint("__NVMIMIC_SOURCE"),
+            interactive: hint("__NVMIMIC_OPTS").contains('i'),
+            bash,
+        },
+        cache_dir,
+    })
 }
 
 const INIT_USAGE: &str = "\

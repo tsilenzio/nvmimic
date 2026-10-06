@@ -283,8 +283,9 @@ fn everyday_commands_launch_only_nvmimic() {
         ("nvm alias", 1),
         ("nvm unalias dev", 1),
         ("nvm_find_nvmrc", 0),
-        // One start prints the functions and one loads the default version.
-        (". \"$NVM_DIR/nvm.sh\"", 2),
+        // bash sets SHELL for itself when nothing handed it one, and a
+        // variable that is set and not exported costs a second start.
+        ("export SHELL\n. \"$NVM_DIR/nvm.sh\"", 1),
         (". \"$NVM_DIR/nvm.sh\" --no-use", 1),
     ];
     for shell in harness::shells() {

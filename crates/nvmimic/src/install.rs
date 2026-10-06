@@ -71,9 +71,14 @@ pub fn nvm_sh(binary: &Path) -> String {
 }
 
 /// What `nvmimic init` prints: the shell functions, then the lines that
-/// load the default version.
-pub fn init_text(paths: &Bound) -> String {
-    bind(INIT, paths)
+/// load the default version. `load` takes the place of the last of those
+/// lines, see [`crate::init::load`].
+pub fn init_text(paths: &Bound, load: Option<&str>) -> String {
+    let text = bind(INIT, paths);
+    match (load, text.strip_suffix(crate::init::SECOND_START)) {
+        (Some(load), Some(head)) => format!("{head}{load}"),
+        _ => text,
+    }
 }
 
 /// The shell functions alone, for a shell that already loaded nvmimic and
@@ -795,7 +800,7 @@ mod tests {
         }
         let (functions, load) = INIT.split_once(LOAD_MARKER).unwrap();
         assert!(functions.contains("__nvmimic_handoff() {"));
-        assert!(load.contains("nvm_process_parameters \"$@\""));
+        assert!(load.ends_with(crate::init::SECOND_START));
     }
 
     #[test]

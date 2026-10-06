@@ -81,11 +81,15 @@ case "$-" in
     __nvmimic_trace=1
   ;;
 esac
-# The program gets NVM_DIR whether or not it is exported, and the path it
-# was started by, which the functions keep using. What it prints ends by
-# loading the default version, and this file returns what that returned, as
-# nvm's nvm.sh does.
-eval "$(NVM_DIR="${NVM_DIR-}" __NVMIMIC_PROGRAM="@nvmimic-binary@" command "@nvmimic-binary@" init)" || return $?
+# The program gets NVM_DIR whether or not it is exported, which shell this
+# is, and the path it was started by, which the functions keep using. What
+# it prints ends by loading the default version, and this file returns what
+# that returned, as nvm's nvm.sh does.
+eval "$(NVM_DIR="${NVM_DIR-}" \
+  __NVMIMIC_ZSH="${ZSH_VERSION-}" __NVMIMIC_BASH="${BASH_VERSINFO-}" \
+  __NVMIMIC_SHELLOPTS="${SHELLOPTS-}" __NVMIMIC_OPTS="$-" \
+  __NVMIMIC_ARG0="$0" __NVMIMIC_SOURCE="${BASH_SOURCE-}" \
+  __NVMIMIC_PROGRAM="@nvmimic-binary@" command "@nvmimic-binary@" init)" || return $?
 
 # What the program prints unsets this. Still set means it printed nothing.
 if [ -n "${__nvmimic_trace+x}" ]; then
@@ -396,7 +400,9 @@ __nvmimic_end
         .position(|line| *line == "unset NVM_SCRIPT_SOURCE 2>/dev/null")
         .ok_or("nvm.sh top-level block moved")?;
     out.push_str(&lines[top_start..=top_end].join("\n"));
-    // Loading ends with what this returns, as nvm's nvm.sh does.
-    out.push_str("\n\nnvm_process_parameters \"$@\"\n");
+    // Loading ends with what this returns, as nvm's nvm.sh does. `init`
+    // puts the switch to the default version in its place when it can.
+    out.push_str("\n\n");
+    out.push_str(nvmimic::init::SECOND_START);
     Ok(out)
 }

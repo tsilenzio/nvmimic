@@ -123,11 +123,16 @@ of quietly replacing nvmimic. Use the first option above in that case.
 
 ## How it stays fast
 
-nvmimic's `nvm.sh` is a few lines long. It starts the nvmimic program
-twice. The first start, `nvmimic init`, prints the same functions nvm
-defines, and the shell takes them in with `eval`. The second works out what
-`nvm use default` would do and hands the result back to the shell. Loading
-with `--no-use` skips the second start. Real nvm starts around 40
+nvmimic's `nvm.sh` is a few lines long. It starts the nvmimic program once,
+as `nvmimic init`. That prints the same functions nvm defines, followed by
+what `nvm use default` would change, and the shell takes all of it in with
+`eval`.
+
+One thing can cost a second start. A program only sees the variables your
+shell exported, and nvm also reads some that are set without `export`. So
+the printed code first checks that every variable nvmimic looked at holds
+what nvmimic saw. If one doesn't, the shell starts nvmimic again and hands
+every variable over. You get the same result either way. Real nvm starts around 40
 small programs for the same job, plus `node` in some cases.
 
 On the test machine, `cargo xtask bench` measured the extra time a new shell
