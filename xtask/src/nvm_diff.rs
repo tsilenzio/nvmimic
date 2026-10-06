@@ -142,7 +142,7 @@ fn report(repo: &str, old: &str, new: &str) -> Result<String, String> {
         let port = map.anchors.get(name).map_or_else(
             || {
                 if crate::gen_shell::is_verbatim(name) {
-                    "shell/nvm.sh (copied, regenerate)".to_string()
+                    "shell/init.sh (copied, regenerate)".to_string()
                 } else {
                     "not ported".to_string()
                 }

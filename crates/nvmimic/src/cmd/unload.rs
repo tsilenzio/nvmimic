@@ -155,7 +155,7 @@ pub const VARIABLES: &[&str] = &[
 /// nvm: nvm:unload
 pub fn run(nvm: &mut Nvm) -> i32 {
     nvm.quiet(|nvm| deactivate::deactivate(nvm, false));
-    // nvmimic's own function goes with nvm's, see `shell/nvm.sh`.
+    // nvmimic's own function goes with nvm's, see `shell/init.sh`.
     let names = FUNCTIONS
         .iter()
         .chain(&["__nvmimic_handoff"])

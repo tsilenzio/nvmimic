@@ -1,5 +1,6 @@
 //! The `nvmimic` binary. People run it to manage their nvmimic installation.
-//! `$NVM_DIR/nvm.sh` runs it through one internal command to do nvm's work.
+//! `$NVM_DIR/nvm.sh` runs `nvmimic init` to get the shell functions, and the
+//! functions run it through one internal command to do nvm's work.
 
 use nvmimic::Caller;
 use nvmimic::backend::NvmDirBackend;
@@ -9,8 +10,8 @@ use std::env;
 use std::ffi::OsString;
 use std::process::ExitCode;
 
-/// Variables `nvm.sh` hands over because nvm reads them whether or not they
-/// are exported. Keep in step with `shell/nvm.sh`.
+/// Variables the shell functions hand over because nvm reads them whether
+/// or not they are exported. `cargo xtask gen-shell` reads this list.
 const FORWARDED: &[&str] = &[
     "PATH",
     "MANPATH",
@@ -63,7 +64,7 @@ const FORWARDED: &[&str] = &[
     "VERSION",
 ];
 
-/// How `shell/nvm.sh` asks for one of nvm's functions. Internal: it is not
+/// How the shell functions ask for one of nvm's functions. Internal: it is not
 /// in the help, and its name and what it expects can change in any release.
 /// Keep in step with `xtask/src/gen_shell.rs`.
 const HANDOFF: &str = "__internal-shell-handoff";
@@ -131,10 +132,84 @@ fn handoff(function: &str, rest: &[String]) -> ExitCode {
         .ok()
         .and_then(|value| value.parse::<i32>().ok())
     {
-        let _ = write_fd(fd, &shell::render(&outcome.effects));
+        let _ = write_fd(fd, &(refresh() + &shell::render(&outcome.effects)));
     }
     ExitCode::from(outcome.status.rem_euclid(256) as u8)
 }
+
+/// The path the shell functions should run this program by. `nvm.sh` and
+/// the functions say which path they used, and that is the one to keep: a
+/// path a package manager links to the newest version stays right after an
+/// upgrade. Typed as `nvmimic init`, it is wherever the program was found.
+fn program() -> Option<std::path::PathBuf> {
+    let absolute =
+        |path: OsString| Some(std::path::PathBuf::from(path)).filter(|path| path.is_absolute());
+    env::var_os("__NVMIMIC_PROGRAM")
+        .and_then(absolute)
+        .or_else(|| env::args_os().next().and_then(absolute))
+        .or_else(|| env::current_exe().ok())
+}
+
+/// New shell functions for a shell that holds another version's, which
+/// happens when nvmimic was updated while the shell was open. Empty when
+/// the shell is up to date. The shell runs it with the rest of what a call
+/// sends back. The cache folder stays the one the shell started with.
+fn refresh() -> String {
+    let held = env::var("__NVMIMIC_CODE").unwrap_or_default();
+    if held.is_empty() || held == env!("CARGO_PKG_VERSION") {
+        return String::new();
+    }
+    let Some(binary) = program() else {
+        return String::new();
+    };
+    let cache = env::var_os("__NVMIMIC_CACHE")
+        .filter(|dir| !dir.is_empty())
+        .map(std::path::PathBuf::from);
+    nvmimic::install::functions_text(&nvmimic::install::Bound {
+        binary: &binary,
+        cache: cache.as_deref(),
+    })
+}
+
+/// `nvmimic init`: prints the shell code that loads nvmimic.
+fn init() -> ExitCode {
+    let Some(binary) = program() else {
+        eprintln!("nvmimic: could not work out where the nvmimic program is.");
+        return ExitCode::FAILURE;
+    };
+    // An installation remembers where its cache folder is. Without one the
+    // folder comes from the environment, as it would for `self install`.
+    let dirs = nvmimic::dirs::Dirs::from_process();
+    let cache = dirs.as_ref().map(|dirs| {
+        nvmimic::install::Manifest::read(dirs)
+            .and_then(|manifest| manifest.cache)
+            .unwrap_or_else(|| dirs.cache.clone())
+    });
+    print!(
+        "{}",
+        nvmimic::install::init_text(&nvmimic::install::Bound {
+            binary: &binary,
+            cache: cache.as_deref(),
+        })
+    );
+    ExitCode::SUCCESS
+}
+
+const INIT_USAGE: &str = "\
+usage: eval \"$(nvmimic init)\"
+
+Prints the shell code that makes `nvm` work in a shell: nvm's functions, and
+then the lines that switch to your default Node version. A shell has to run
+that code itself, which is what `eval` does.
+
+You don't normally type this. `nvmimic self install` puts an `nvm.sh` into
+your nvm folder that runs it for you, and your startup file loads that
+`nvm.sh` the way it always did. If you'd rather not have that file, put this
+into your startup file instead, after the line that sets NVM_DIR:
+
+  eval \"$(nvmimic init)\"
+
+The same code works in bash, zsh, sh and dash.";
 
 const USAGE: &str = "\
 usage: nvmimic <command>
@@ -148,6 +223,7 @@ commands:
   self update      get the newest nvmimic
   self rollback    go back to the nvmimic from before the last update
   self uninstall   remove nvmimic again
+  init             print the shell code that loads nvmimic, for `eval`
   help             show this text
   --version        print nvmimic's own version
 
@@ -248,6 +324,11 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
         }
         ["--version"] => {
             println!("{}", env!("CARGO_PKG_VERSION"));
+            return ExitCode::SUCCESS;
+        }
+        ["init"] => return init(),
+        ["init", word] if is_help(word) => {
+            println!("{INIT_USAGE}");
             return ExitCode::SUCCESS;
         }
         ["self"] => {

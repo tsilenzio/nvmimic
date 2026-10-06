@@ -5,7 +5,7 @@
 //! a comment. Case files name what they run with `# covers: <names>`, which
 //! `cargo xtask parity covers` measures.
 //! Until coverage is complete this only reports. `--strict` fails when a
-//! unit is neither ported nor copied into `shell/nvm.sh`.
+//! unit is neither ported nor copied into `shell/init.sh`.
 
 use nvmimic_parity::nvmsh::{self, Unit};
 use std::collections::BTreeMap;
@@ -42,7 +42,7 @@ pub fn run(args: &[&str]) -> ExitCode {
             }
             (None, true) => {
                 shell += 1;
-                "shell/nvm.sh (copied)".to_string()
+                "shell/init.sh (copied)".to_string()
             }
             (None, false) => {
                 missing.push(unit);
@@ -64,7 +64,7 @@ pub fn run(args: &[&str]) -> ExitCode {
     }
     println!();
     println!(
-        "{} units: {ported} ported, {shell} copied into shell/nvm.sh, {} not ported",
+        "{} units: {ported} ported, {shell} copied into shell/init.sh, {} not ported",
         map.units.len(),
         missing.len()
     );

@@ -294,17 +294,21 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
             let bin = own.join("bin");
             fs::create_dir_all(&bin).map_err(|e| e.to_string())?;
             fs::create_dir_all(own.join("cache")).map_err(|e| e.to_string())?;
-            if let Ok(template) = fs::read_to_string(shell_dir.join("nvm.sh")) {
-                let bound = nvmimic::install::Bound {
-                    binary: &bin.join("nvmimic"),
-                    cache: Some(&own.join("cache")),
-                };
-                fs::write(
-                    nvm_dir.join("nvm.sh"),
-                    nvmimic::install::bind(&template, &bound),
-                )
-                .map_err(|e| e.to_string())?;
+            // The cache folder sits beside the home folder here, so the
+            // program is told where it is.
+            let quote = nvmimic::shell::quote;
+            let program = quote(&bin.join("nvmimic").display().to_string());
+            let init = format!("__NVMIMIC_PROGRAM={program} command {program} init");
+            let told = format!(
+                "NVMIMIC_CACHE_DIR={} {init}",
+                quote(&own.join("cache").display().to_string())
+            );
+            let script = nvmimic::install::nvm_sh(&bin.join("nvmimic"));
+            if !script.contains(&init) {
+                return Err("nvm.sh no longer runs `init` this way".to_string());
             }
+            fs::write(nvm_dir.join("nvm.sh"), script.replace(&init, &told))
+                .map_err(|e| e.to_string())?;
             let binary = crate::repo_root().join("target/release/nvmimic");
             fs::copy(&binary, bin.join("nvmimic")).map_err(|e| e.to_string())?;
         }
@@ -570,7 +574,8 @@ fn check_budget(rows: &[Row]) -> ExitCode {
         }
         let launches = row.nvmimic_launches.as_ref().unwrap();
         let foreign: Vec<_> = launches.keys().filter(|name| *name != "nvmimic").collect();
-        if !foreign.is_empty() || launches.get("nvmimic").copied().unwrap_or(0) > 1 {
+        // One start prints the functions and one loads the default version.
+        if !foreign.is_empty() || launches.get("nvmimic").copied().unwrap_or(0) > 2 {
             failures.push(format!(
                 "{} {}: launched {}",
                 row.shell,

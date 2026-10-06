@@ -283,7 +283,9 @@ fn everyday_commands_launch_only_nvmimic() {
         ("nvm alias", 1),
         ("nvm unalias dev", 1),
         ("nvm_find_nvmrc", 0),
-        (". \"$NVM_DIR/nvm.sh\"", 1),
+        // One start prints the functions and one loads the default version.
+        (". \"$NVM_DIR/nvm.sh\"", 2),
+        (". \"$NVM_DIR/nvm.sh\" --no-use", 1),
     ];
     for shell in harness::shells() {
         for (step, expected) in steps {

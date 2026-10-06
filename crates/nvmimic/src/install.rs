@@ -16,8 +16,10 @@ use std::process::Command;
 /// `self install` writes the real paths in, see [`bind`].
 pub const BINARY_PLACEHOLDER: &str = "\"@nvmimic-binary@\"";
 const CACHE_PLACEHOLDER: &str = "\"@nvmimic-cache@\"";
+const VERSION_PLACEHOLDER: &str = "\"@nvmimic-version@\"";
 
 const NVM_SH: &str = include_str!("../../../shell/nvm.sh");
+const INIT: &str = include_str!("../../../shell/init.sh");
 const NVM_EXEC: &str = include_str!("../../../shell/nvm-exec");
 const BASH_COMPLETION: &str = include_str!("../../../shell/bash_completion");
 
@@ -27,19 +29,24 @@ const SCRIPTS: &[&str] = &["nvm.sh", "nvm-exec", "bash_completion"];
 /// Text only nvmimic's own `nvm.sh` contains.
 const OWN_MARKER: &str = "as nvmimic provides it";
 
-/// The paths an installed `nvm.sh` names.
+/// The line in the text `nvmimic init` prints where the function
+/// definitions end. What follows runs once, when a shell loads nvmimic.
+pub const LOAD_MARKER: &str =
+    "# The functions end here. The rest runs once, when a shell loads nvmimic.\n";
+
+/// The paths the shell functions name.
 pub struct Bound<'a> {
-    /// The program `nvm.sh` hands its work to.
+    /// The program the functions hand their work to.
     pub binary: &'a Path,
     /// Where answers are remembered. `None` remembers nothing.
     pub cache: Option<&'a Path>,
 }
 
-/// A script from `shell/` with the installation's paths written in, each by
-/// its full path. nvm lets `$NVM_DIR` change after sourcing, and nvmimic's
-/// own files are not in `$NVM_DIR` to begin with, so nothing can be found
-/// from there.
-pub fn bind(script: &str, paths: &Bound) -> String {
+/// Shell text with the installation's paths and nvmimic's version written
+/// in, each path in full. nvm lets `$NVM_DIR` change after sourcing, and
+/// nvmimic's own files are not in `$NVM_DIR` to begin with, so nothing can
+/// be found from there.
+fn bind(script: &str, paths: &Bound) -> String {
     let quoted = |path: &Path| crate::shell::quote(&path.display().to_string());
     script
         .replace(BINARY_PLACEHOLDER, &quoted(paths.binary))
@@ -47,6 +54,33 @@ pub fn bind(script: &str, paths: &Bound) -> String {
             CACHE_PLACEHOLDER,
             &paths.cache.map_or("''".to_string(), quoted),
         )
+        .replace(
+            VERSION_PLACEHOLDER,
+            &crate::shell::quote(env!("CARGO_PKG_VERSION")),
+        )
+}
+
+/// The `nvm.sh` that goes into `$NVM_DIR`: a few lines that run `binary`
+/// with `init` and `eval` what it prints.
+pub fn nvm_sh(binary: &Path) -> String {
+    let paths = Bound {
+        binary,
+        cache: None,
+    };
+    bind(NVM_SH, &paths)
+}
+
+/// What `nvmimic init` prints: the shell functions, then the lines that
+/// load the default version.
+pub fn init_text(paths: &Bound) -> String {
+    bind(INIT, paths)
+}
+
+/// The shell functions alone, for a shell that already loaded nvmimic and
+/// holds an earlier version's.
+pub fn functions_text(paths: &Bound) -> String {
+    let functions = INIT.split_once(LOAD_MARKER).map_or(INIT, |(head, _)| head);
+    bind(functions, paths)
 }
 
 /// What the installer talks to: lines to show, and yes-or-no questions.
@@ -495,11 +529,7 @@ pub fn self_install(
         ui.say(&format!("The nvmimic program is at {}.", target.display()));
     }
 
-    let bound = Bound {
-        binary: plan.path(),
-        cache: Some(&dirs.cache),
-    };
-    write_file(&nvm_dir.join("nvm.sh"), &bind(NVM_SH, &bound), 0o644)?;
+    write_file(&nvm_dir.join("nvm.sh"), &nvm_sh(plan.path()), 0o644)?;
     write_file(&nvm_dir.join("nvm-exec"), NVM_EXEC, 0o755)?;
     write_file(&nvm_dir.join("bash_completion"), BASH_COMPLETION, 0o644)?;
 
@@ -758,9 +788,14 @@ mod tests {
 
     #[test]
     fn every_placeholder_is_in_the_scripts() {
-        for placeholder in [BINARY_PLACEHOLDER, CACHE_PLACEHOLDER] {
-            assert!(NVM_SH.contains(placeholder), "{placeholder}");
+        assert!(NVM_SH.contains(BINARY_PLACEHOLDER));
+        assert!(!NVM_SH.contains(CACHE_PLACEHOLDER));
+        for placeholder in [BINARY_PLACEHOLDER, CACHE_PLACEHOLDER, VERSION_PLACEHOLDER] {
+            assert!(INIT.contains(placeholder), "{placeholder}");
         }
+        let (functions, load) = INIT.split_once(LOAD_MARKER).unwrap();
+        assert!(functions.contains("__nvmimic_handoff() {"));
+        assert!(load.contains("nvm_process_parameters \"$@\""));
     }
 
     #[test]

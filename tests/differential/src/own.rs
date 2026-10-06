@@ -8,7 +8,8 @@
 //! either way.
 
 use crate::harness::{Outcome, copy, link_staged, nvmimic_bin, repo_root, write_script};
-use nvmimic::install::{Bound, bind};
+use nvmimic::install::nvm_sh;
+use nvmimic::shell::quote;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -32,12 +33,20 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
     for dir in [&bin, &cache] {
         fs::create_dir_all(dir).unwrap();
     }
-    let bound = Bound {
-        binary: &bin.join("nvmimic"),
-        cache: Some(&cache),
-    };
-    let template = fs::read_to_string(shell_dir.join("nvm.sh")).unwrap();
-    fs::write(nvm_dir.join("nvm.sh"), bind(&template, &bound)).unwrap();
+    // An installed nvmimic finds its cache folder under the home folder.
+    // Here it is told where, so the home folder stays as nvm leaves it.
+    let program = quote(&bin.join("nvmimic").display().to_string());
+    let init = format!("__NVMIMIC_PROGRAM={program} command {program} init");
+    let script = nvm_sh(&bin.join("nvmimic"));
+    assert!(
+        script.contains(&init),
+        "nvm.sh no longer runs `init` this way"
+    );
+    let told = format!(
+        "NVMIMIC_CACHE_DIR={} {init}",
+        quote(&cache.display().to_string())
+    );
+    fs::write(nvm_dir.join("nvm.sh"), script.replace(&init, &told)).unwrap();
 
     let binary = nvmimic_bin();
     if count_launches {
@@ -54,7 +63,7 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
     }
 }
 
-/// nvmimic's one shell function that nvm does not have, see `shell/nvm.sh`.
+/// nvmimic's one shell function that nvm does not have, see `shell/init.sh`.
 const HANDOFF: &str = "__nvmimic_handoff";
 
 /// Takes nvmimic's own function out of the list of functions a run left

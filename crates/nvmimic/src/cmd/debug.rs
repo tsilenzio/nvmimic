@@ -8,7 +8,7 @@ use crate::nvm::{checksum, local, paths, platform, tools};
 use std::collections::BTreeMap;
 
 /// The programs `nvm debug` reports on. `cargo xtask gen-shell` writes this
-/// list into `shell/nvm.sh`, which looks each one up.
+/// list into `shell/init.sh`, which looks each one up.
 pub const TOOLS: &[&str] = &[
     "awk", "curl", "wget", "git", "grep", "sed", "cut", "basename", "rm", "mkdir", "xargs",
 ];

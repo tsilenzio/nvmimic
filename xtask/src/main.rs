@@ -26,7 +26,7 @@ tasks:
   parity launches                   check everyday commands start only nvmimic
   smoke                             install nvmimic and three real Node releases, then use them
   bench [--check] [--runs=N]        time sourcing nvm.sh for real nvm and nvmimic
-  gen-shell [--check]               write shell/nvm.sh from the pinned nvm.sh
+  gen-shell [--check]               write shell/nvm.sh and shell/init.sh from the pinned nvm.sh
   trace [--strict]                  map nvm.sh's functions to nvmimic's code and cases
   nvm-diff <old> <new> [--repo P]   report what changed in nvm between two revisions
   string-audit                      check nvmimic's messages against the pinned nvm.sh

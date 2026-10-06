@@ -123,9 +123,11 @@ of quietly replacing nvmimic. Use the first option above in that case.
 
 ## How it stays fast
 
-Sourcing nvmimic's `nvm.sh` defines the same functions nvm defines and then
-starts one program, nvmimic itself, which works out what `nvm use default`
-would do and hands the result back to the shell. Real nvm starts around 40
+nvmimic's `nvm.sh` is a few lines long. It starts the nvmimic program
+twice. The first start, `nvmimic init`, prints the same functions nvm
+defines, and the shell takes them in with `eval`. The second works out what
+`nvm use default` would do and hands the result back to the shell. Loading
+with `--no-use` skips the second start. Real nvm starts around 40
 small programs for the same job, plus `node` in some cases.
 
 On the test machine, `cargo xtask bench` measured the extra time a new shell
@@ -196,6 +198,9 @@ Loading nvmimic's `nvm.sh` defines every function nvm defines, plus one of
 its own: `__nvmimic_handoff`. It's how `nvm` and the other functions pass
 their work to the nvmimic program. You can see it in a list of all functions
 (`declare -F` in bash). `nvm unload` removes it along with nvm's.
+
+The functions carry nvmimic's version. If you update nvmimic while a shell
+is open, that shell gets the new functions the next time you run `nvm`.
 
 Nothing extra hides behind the name `nvm` itself. `nvm` accepts exactly the
 commands real nvm accepts and prints nvm's help for anything else.
@@ -321,7 +326,7 @@ don't call them from your own scripts.
 - `cargo xtask smoke` installs nvmimic into a throwaway home folder, installs
   three real Node releases, and switches between them under each shell. It
   takes well under a minute once the downloads are kept.
-- `cargo xtask gen-shell` rebuilds `shell/nvm.sh` from nvm's own `nvm.sh`.
+- `cargo xtask gen-shell` rebuilds `shell/nvm.sh` and `shell/init.sh` from nvm's own `nvm.sh`.
 - `cargo xtask release` builds the macOS program for a release into
   `target/dist/`: one file for both Apple silicon and Intel, signed and
   checked by Apple, packed with the license, plus checksums and a Homebrew

@@ -157,6 +157,41 @@ fn fresh_install_works_and_uninstall_removes_it() {
 }
 
 #[test]
+fn a_shell_holding_another_version_gets_new_functions() {
+    let home = Home::new();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    // The shell's functions are rewritten to say they came from another
+    // version, which is what a shell left open across an update holds.
+    let nvm = home.shell(
+        r#"eval "$(declare -f __nvmimic_handoff | sed "s/__NVMIMIC_CODE='[^']*'/__NVMIMIC_CODE='0.0.0-old'/")"
+declare -f __nvmimic_handoff | grep -c 0.0.0-old
+nvm --version
+declare -f __nvmimic_handoff | grep -c 0.0.0-old
+nvm --version"#,
+    );
+    assert_eq!(
+        text(&nvm.stdout),
+        "1\n0.40.8\n0\n0.40.8\n",
+        "{}",
+        text(&nvm.stderr)
+    );
+}
+
+#[test]
+fn a_missing_program_gets_one_message() {
+    let home = Home::new();
+    let out = home.nvmimic(&["self", "install", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    fs::rename(home.command(), home.root.join("moved-away")).unwrap();
+    let nvm = home.shell("echo \"status $?\"; command -v nvm");
+    assert_eq!(text(&nvm.stdout), "status 127\n");
+    let message = text(&nvm.stderr);
+    assert_eq!(message.lines().count(), 2, "{message}");
+    assert!(message.contains(&home.command().display().to_string()));
+}
+
+#[test]
 fn help_reads_right_with_and_without_an_nvm() {
     let home = Home::new();
     for args in [&[][..], &["help"], &["--help"]] {
