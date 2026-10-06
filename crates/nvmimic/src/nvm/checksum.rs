@@ -1,6 +1,10 @@
 //! Checksums of downloaded archives. nvm computes them with whichever
-//! checksum program it finds, and says which one on stderr, so the same
-//! programs run here.
+//! checksum program it finds, and says which one on stderr. nvmimic looks
+//! for the same programs and names the same one. When that program gives
+//! SHA-256 and the file can be read, nvmimic works the sum out itself,
+//! since every such program prints the same sum. Otherwise the program
+//! runs: for SHA-1, and for a file that cannot be read, where what the
+//! program says about it is part of nvm's output.
 
 use super::paths;
 use super::remote;
@@ -72,6 +76,31 @@ fn field(output: &[u8], last: bool) -> String {
         .collect()
 }
 
+/// The SHA-256 sum of a file in lowercase hex, or `None` when the file
+/// cannot be read.
+fn sha256_of(file: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    use std::io::Read;
+    let mut file = std::fs::File::open(file).ok()?;
+    let mut hasher = Sha256::new();
+    let mut buffer = vec![0u8; 1 << 16];
+    loop {
+        match file.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(n) => hasher.update(&buffer[..n]),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return None,
+        }
+    }
+    Some(
+        hasher
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect(),
+    )
+}
+
 /// What nvm prints on stdout for a file's checksum, and its status.
 ///
 /// nvm: nvm_compute_checksum
@@ -95,6 +124,11 @@ pub fn compute_checksum(nvm: &mut Nvm, file: &str) -> (String, i32) {
         other => (other, vec![file], false),
     };
     nvm.io.err(&text::computing_checksum(shown));
+    if !matches!(program, "sha1sum" | "sha1")
+        && let Some(sum) = sha256_of(file)
+    {
+        return (format!("{sum}\n"), 0);
+    }
     let ran = tools::run(nvm, program, &args);
     match (program, ran) {
         // nvm pipes every program but `sha1` through awk, whose status wins.
@@ -172,4 +206,21 @@ pub fn get_checksum(
         })
         .collect();
     (found, 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sha256_matches_the_published_test_value() {
+        let file = std::env::temp_dir().join(format!("nvmimic-sum-{}", std::process::id()));
+        std::fs::write(&file, "abc").unwrap();
+        assert_eq!(
+            sha256_of(file.to_str().unwrap()).as_deref(),
+            Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        );
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(sha256_of(file.to_str().unwrap()), None);
+    }
 }

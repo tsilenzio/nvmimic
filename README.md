@@ -27,8 +27,12 @@ commands to one fast program, so a new shell barely notices it.
 ## Status
 
 Early work, copying nvm 0.40.8. Every nvm command now runs in nvmimic itself.
-For downloading, checking and unpacking Node, and for npm, it starts the same
-programs nvm starts (curl or wget, a checksum program, tar, npm). Opening a
+For downloading and unpacking Node, and for npm, it starts the same programs
+nvm starts (curl or wget, tar, npm). curl and wget stay on purpose: they
+already know your proxy, your `~/.curlrc` and your system's certificates.
+The checksum of a download is the one job nvmimic took over. It looks for
+the same checksum program nvm would use and names it like nvm does, then
+works out the SHA-256 sum itself. Opening a
 shell and the everyday commands such as `nvm use`, `nvm ls` and `nvm current`
 start no other program at all, with one small exception: the first
 `nvm use` after Node or npm changes asks each of them for its version once
