@@ -86,9 +86,41 @@ If you use the `XDG_STATE_HOME` or `XDG_CACHE_HOME`
 settings, nvmimic follows them too. If something that isn't nvmimic already
 sits at `~/.local/bin/nvmimic`, `self install` stops and leaves it alone.
 
-`nvmimic self uninstall` removes nvmimic. If it took over from an nvm, that
-nvm's scripts come back. Add `--dry-run` to either one to see what it would
-do without changing anything, and `--help` to read what it does.
+Add `--dry-run` to any `self` command to see what it would do without
+changing anything, and `--help` to read what it does.
+
+### Going back, and removing nvmimic
+
+There are three ways out. All of them show what they're about to do and ask
+first. `--force` skips the question. If there's no terminal to ask at, such
+as inside a script, they change nothing unless you pass `--force`.
+
+| Command | nvmimic's scripts | nvm's own scripts | The nvmimic program | Your Node versions and aliases |
+|---|---|---|---|---|
+| `nvmimic self eject` | removed | put back | stays | kept |
+| `nvmimic self uninstall` | removed | put back, if nvmimic replaced any | removed | kept |
+| `nvmimic self uninstall --purge` | removed | not put back | removed | deleted, with the whole nvm folder |
+
+`self eject` hands the nvm folder back to nvm and keeps nvmimic around, so
+`nvmimic self install` can take over again later. It needs an nvm to go back
+to. If there was none before nvmimic, it says so and changes nothing.
+
+`self uninstall` never deletes a Node version, an alias or the nvm folder,
+even if nvmimic made that folder. If there was no nvm before nvmimic, you're
+left with a folder of Node versions and no `nvm` command.
+
+`--purge` is the one that deletes. It shows the folder and how big it is
+before it asks.
+
+If you changed one of nvmimic's scripts by hand, your version isn't thrown
+away. It gets a new name, `nvm.sh.nvmimic-saved` for example, and nvmimic
+tells you where it went.
+
+If Homebrew or cargo installed nvmimic, `self uninstall` leaves the program
+alone and tells you the command that removes it. Run `nvmimic self
+uninstall` before `brew uninstall nvmimic`. Homebrew runs nothing of
+nvmimic's when it removes it, so nvmimic's `nvm.sh` would stay behind and
+print a message about the missing program in every new shell.
 
 ### Updating nvmimic
 
@@ -108,7 +140,7 @@ to update itself. Build the newer version the same way you built this one.
 nvmimic swaps out nvm's scripts, so nvm's own upgrade steps collide with it.
 Pick one of these:
 
-- Run `nvmimic self uninstall`, upgrade nvm the usual way, then run
+- Run `nvmimic self eject`, upgrade nvm the usual way, then run
   `nvmimic self install` again.
 - Or run nvm's install script as usual. It writes nvm's scripts back over
   nvmimic's, so your shells run real nvm again until you run
@@ -172,8 +204,9 @@ inside your shell. So nvmimic doesn't follow these:
   skips a checksum program that is an alias, and `nvm debug` shows what
   each tool is aliased to.
 
-If you need any of these, you need official nvm. `nvmimic self uninstall`
-puts its scripts back.
+If you need any of these, you need official nvm. `nvmimic self eject` puts
+its scripts back and keeps nvmimic for later, and `nvmimic self uninstall`
+puts them back and removes nvmimic.
 
 ### The text of the functions
 

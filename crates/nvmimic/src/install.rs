@@ -7,6 +7,7 @@
 //! [`crate::dirs`].
 
 use crate::dirs::{CACHE_KINDS, Dirs};
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -97,10 +98,14 @@ pub trait Ui {
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// Answer yes to every question.
-    pub yes: bool,
+    /// Don't ask before going ahead.
+    pub force: bool,
     /// Say what would happen and change nothing.
     pub dry_run: bool,
+    /// `self uninstall --purge`: delete all of `$NVM_DIR` as well.
+    pub purge: bool,
+    /// Whether there is a terminal to ask questions at.
+    pub terminal: bool,
 }
 
 /// The parts of the environment the installer looks at.
@@ -183,6 +188,12 @@ pub struct Manifest {
     pub backed_up: Vec<String>,
     /// Scripts nvmimic added where there were none.
     pub created: Vec<String>,
+    /// What each script held when nvmimic wrote it, as a SHA-256 sum. A file
+    /// with another sum was changed by someone since.
+    pub fingerprints: BTreeMap<String, String>,
+    /// `self eject` took nvmimic's scripts out of `$NVM_DIR` and left the
+    /// program installed.
+    pub ejected: bool,
     /// The version of the earlier program `self update` set aside, which
     /// `self rollback` brings back.
     pub previous: Option<String>,
@@ -213,6 +224,12 @@ impl Manifest {
         for name in &self.created {
             text.push_str(&format!("created {name}\n"));
         }
+        for (name, sum) in &self.fingerprints {
+            text.push_str(&format!("fingerprint {name} {sum}\n"));
+        }
+        if self.ejected {
+            text.push_str("ejected scripts\n");
+        }
         if let Some(version) = &self.previous {
             text.push_str(&format!("previous {version}\n"));
         }
@@ -235,6 +252,14 @@ impl Manifest {
                 "placed" => manifest.placed = true,
                 "backup" => manifest.backed_up.push(value.to_string()),
                 "created" => manifest.created.push(value.to_string()),
+                "fingerprint" => {
+                    if let Some((name, sum)) = value.split_once(' ') {
+                        manifest
+                            .fingerprints
+                            .insert(name.to_string(), sum.to_string());
+                    }
+                }
+                "ejected" => manifest.ejected = true,
                 "previous" => manifest.previous = Some(value.to_string()),
                 _ => {}
             }
@@ -309,8 +334,8 @@ fn choices(default: bool) -> &'static str {
 }
 
 pub(crate) fn ask(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
-    if options.yes {
-        ui.say(&format!("{question} {} y (--yes)", choices(default)));
+    if options.force {
+        ui.say(&format!("{question} {} y (--force)", choices(default)));
         true
     } else {
         ui.ask(question, default)
@@ -482,7 +507,12 @@ pub fn self_install(
         ));
     }
 
-    if !existing.is_empty() && reinstall {
+    if !existing.is_empty() && manifest.ejected {
+        ui.say(&format!(
+            "Taking over from the nvm in {} again.",
+            nvm_dir.display()
+        ));
+    } else if !existing.is_empty() && reinstall {
         ui.say(&format!(
             "nvm's own {} came back in {}, most likely from nvm's install script.",
             existing.join(", "),
@@ -534,9 +564,15 @@ pub fn self_install(
         ui.say(&format!("The nvmimic program is at {}.", target.display()));
     }
 
-    write_file(&nvm_dir.join("nvm.sh"), &nvm_sh(plan.path()), 0o644)?;
-    write_file(&nvm_dir.join("nvm-exec"), NVM_EXEC, 0o755)?;
-    write_file(&nvm_dir.join("bash_completion"), BASH_COMPLETION, 0o644)?;
+    for name in SCRIPTS {
+        let text = script_text(name, plan.path());
+        let mode = if *name == "nvm-exec" { 0o755 } else { 0o644 };
+        write_file(&nvm_dir.join(name), &text, mode)?;
+        manifest
+            .fingerprints
+            .insert(name.to_string(), fingerprint(text.as_bytes()));
+    }
+    manifest.ejected = false;
 
     manifest.version = env!("CARGO_PKG_VERSION").to_string();
     manifest.nvm_dir = Some(nvm_dir.clone());
@@ -572,10 +608,150 @@ pub fn self_install(
     Ok(())
 }
 
-/// `nvmimic self uninstall`.
+/// A short name for what a script holds. The manifest keeps one per script,
+/// so a later run can tell whether someone changed the file.
+fn fingerprint(contents: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(contents)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+/// What nvmimic writes as script `name` for the program at `binary`.
+fn script_text(name: &str, binary: &Path) -> String {
+    match name {
+        "nvm.sh" => nvm_sh(binary),
+        "nvm-exec" => NVM_EXEC.to_string(),
+        _ => BASH_COMPLETION.to_string(),
+    }
+}
+
+/// Whether the script at `path` holds something other than what nvmimic
+/// wrote there. Without a fingerprint on record, it is compared with what
+/// this program would write now.
+fn is_edited(path: &Path, name: &str, manifest: &Manifest, binary: &Path) -> bool {
+    let Ok(contents) = fs::read(path) else {
+        return false;
+    };
+    let written = match manifest.fingerprints.get(name) {
+        Some(sum) => sum.clone(),
+        None => fingerprint(script_text(name, binary).as_bytes()),
+    };
+    fingerprint(&contents) != written
+}
+
+/// Where an edited script goes: `<script>.nvmimic-saved`, with a number
+/// after it when an earlier one is still there.
+fn saved_path(script: &Path) -> PathBuf {
+    let name = script
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned();
+    let first = script.with_file_name(format!("{name}.nvmimic-saved"));
+    if !present(&first) {
+        return first;
+    }
+    (2..)
+        .map(|n| script.with_file_name(format!("{name}.nvmimic-saved.{n}")))
+        .find(|path| !present(path))
+        .unwrap()
+}
+
+/// The size of everything in `dir`, in bytes. Links are not followed.
+fn folder_size(dir: &Path) -> u64 {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| match fs::symlink_metadata(entry.path()) {
+            Ok(meta) if meta.is_dir() => folder_size(&entry.path()),
+            Ok(meta) => meta.len(),
+            Err(_) => 0,
+        })
+        .sum()
+}
+
+/// A size the way macOS shows it, in steps of 1000.
+fn human_size(bytes: u64) -> String {
+    let mut size = bytes as f64;
+    for unit in ["bytes", "KB", "MB"] {
+        if size < 1000.0 {
+            return match unit {
+                "bytes" => format!("{bytes} bytes"),
+                _ => format!("{size:.0} {unit}"),
+            };
+        }
+        size /= 1000.0;
+    }
+    format!("{size:.1} GB")
+}
+
+/// `--purge` deletes a whole folder, so a `$NVM_DIR` that is the home
+/// folder, or holds it, is refused.
+fn purge_allowed(nvm_dir: &Path, env: &Env) -> Result<(), String> {
+    let real = fs::canonicalize(nvm_dir).unwrap_or_else(|_| nvm_dir.to_path_buf());
+    let home = fs::canonicalize(&env.home).unwrap_or_else(|_| env.home.clone());
+    if !real.is_absolute() || real.parent().is_none() || home.starts_with(&real) {
+        return Err(format!(
+            "--purge would delete {}, and that isn't a folder nvmimic will delete. Nothing was changed.",
+            nvm_dir.display()
+        ));
+    }
+    Ok(())
+}
+
+/// The three ways nvmimic leaves `$NVM_DIR`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Leaving {
+    /// nvm's scripts go back and the nvmimic program stays.
+    Eject,
+    /// nvm's scripts go back and nvmimic goes.
+    Uninstall,
+    /// nvmimic goes, and all of `$NVM_DIR` with it.
+    Purge,
+}
+
+/// One thing a removal does. `action` is worded to follow "Would" and
+/// "This will".
+struct Step {
+    note: Option<String>,
+    action: String,
+}
+
+impl Step {
+    fn new(action: String) -> Step {
+        Step { note: None, action }
+    }
+
+    fn line(&self, lead: &str) -> String {
+        match &self.note {
+            Some(note) => format!("{note} {lead} {}.", self.action),
+            None => format!("{lead} {}.", self.action),
+        }
+    }
+}
+
+/// `nvmimic self eject`.
+pub fn self_eject(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(), String> {
+    leave(env, options, ui, Leaving::Eject)
+}
+
+/// `nvmimic self uninstall`, with or without `--purge`.
 pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(), String> {
+    let how = if options.purge {
+        Leaving::Purge
+    } else {
+        Leaving::Uninstall
+    };
+    leave(env, options, ui, how)
+}
+
+fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<(), String> {
     let dirs = env.dirs()?;
-    let Some(manifest) = Manifest::read(dirs) else {
+    let Some(mut manifest) = Manifest::read(dirs) else {
         return Err(format!(
             "nvmimic is not installed. There is no record of an install in {}.",
             dirs.state.display()
@@ -583,48 +759,189 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     };
     let nvm_dir = manifest.nvm_dir.clone().unwrap_or_else(|| env.nvm_dir());
     let backup = dirs.backup();
-    let restores = !manifest.backed_up.is_empty();
-    if restores {
-        ui.say(&format!(
-            "This puts nvm's own {} back, so nvm works as it did before nvmimic.",
-            manifest.backed_up.join(", ")
-        ));
-    } else {
-        ui.say(&format!(
-            "There was no nvm in {} before nvmimic, so afterwards there is no `nvm` command.",
-            nvm_dir.display()
-        ));
+    let binary = manifest
+        .binary
+        .clone()
+        .unwrap_or_else(|| dirs.binary.clone());
+    let data = manifest.data.clone().unwrap_or_else(|| dirs.data.clone());
+    let cache = manifest.cache.clone().unwrap_or_else(|| dirs.cache.clone());
+    let placed = manifest.placed.then(|| binary.clone());
+    // A backup someone deleted can't go back.
+    let restore: Vec<String> = manifest
+        .backed_up
+        .iter()
+        .filter(|name| present(&backup.join(name)))
+        .cloned()
+        .collect();
+
+    if how == Leaving::Eject {
+        if manifest.ejected {
+            return Err(format!(
+                "nvmimic's scripts are already out of {}. Nothing was changed.",
+                nvm_dir.display()
+            ));
+        }
+        if restore.is_empty() {
+            return Err(format!(
+                "there is no nvm to go back to. nvmimic found none in {} when it was installed, \
+                 so it has no scripts of nvm's to put back. Nothing was changed.",
+                nvm_dir.display()
+            ));
+        }
     }
-    ui.say("Your Node versions and aliases stay as they are.");
-    if !ask(
-        ui,
-        options,
-        &format!("Remove nvmimic from {}?", nvm_dir.display()),
-        false,
-    ) {
-        return Err("stopped. Nothing was changed.".to_string());
+    if how == Leaving::Purge {
+        purge_allowed(&nvm_dir, env)?;
     }
-    let data = manifest.data.as_ref().unwrap_or(&dirs.data);
-    let cache = manifest.cache.as_ref().unwrap_or(&dirs.cache);
-    let placed = manifest.binary.as_ref().filter(|_| manifest.placed);
-    if options.dry_run {
-        ui.say(&format!(
-            "Would remove nvmimic's files from {}, {}, {} and {}.",
+
+    let mut steps: Vec<Step> = Vec::new();
+    // Scripts someone changed since nvmimic wrote them: name, path, new path.
+    let mut edited: Vec<(&str, PathBuf, PathBuf)> = Vec::new();
+    if how == Leaving::Purge {
+        steps.push(Step::new(format!(
+            "delete {} and everything in it, your Node versions and aliases included ({})",
             nvm_dir.display(),
-            data.display(),
+            human_size(folder_size(&nvm_dir))
+        )));
+        if !restore.is_empty() {
+            steps.push(Step::new(format!(
+                "delete the backup of nvm's own {} in {}",
+                restore.join(", "),
+                backup.display()
+            )));
+        }
+    } else if !manifest.ejected {
+        for name in SCRIPTS {
+            let path = nvm_dir.join(name);
+            if is_edited(&path, name, &manifest, &binary) {
+                let saved = saved_path(&path);
+                steps.push(Step {
+                    note: Some(format!("{name} was edited after nvmimic installed it.")),
+                    action: format!("rename {} to {}", path.display(), saved.display()),
+                });
+                edited.push((name, path, saved));
+            }
+        }
+        steps.push(Step::new(format!(
+            "remove nvmimic's scripts from {}",
+            nvm_dir.display()
+        )));
+        if !restore.is_empty() {
+            steps.push(Step::new(format!(
+                "put nvm's own {} back in {}",
+                restore.join(", "),
+                nvm_dir.display()
+            )));
+        }
+    }
+    if how != Leaving::Eject {
+        steps.push(Step::new(format!(
+            "remove nvmimic's own files from {} and {}",
             dirs.state.display(),
             cache.display()
-        ));
-        if let Some(binary) = placed {
-            ui.say(&format!("Would remove {}.", binary.display()));
+        )));
+        if let Some(binary) = &placed {
+            steps.push(Step::new(format!(
+                "remove the nvmimic program at {}",
+                binary.display()
+            )));
+        }
+    }
+
+    match how {
+        Leaving::Purge => {}
+        _ if manifest.ejected => ui.say(&format!(
+            "nvmimic's scripts are already out of {}.",
+            nvm_dir.display()
+        )),
+        Leaving::Eject => ui.say(&format!(
+            "This puts nvm's own {} back and keeps the nvmimic program, so `nvmimic self install` can take over again.",
+            restore.join(", ")
+        )),
+        _ if !restore.is_empty() => ui.say(&format!(
+            "This puts nvm's own {} back, so nvm works as it did before nvmimic.",
+            restore.join(", ")
+        )),
+        _ => ui.say(&format!(
+            "There was no nvm in {} before nvmimic, so afterwards there is no `nvm` command.",
+            nvm_dir.display()
+        )),
+    }
+    if how != Leaving::Purge {
+        ui.say("Your Node versions and aliases stay as they are.");
+    }
+
+    if options.dry_run {
+        for step in &steps {
+            ui.say(&step.line("Would"));
         }
         return Ok(());
     }
-    for name in &manifest.backed_up {
-        move_file(&backup.join(name), &nvm_dir.join(name))?;
+    if !options.force {
+        if !options.terminal {
+            for step in &steps {
+                ui.say(&step.line("Would"));
+            }
+            return Err(
+                "nothing was changed. This asks before it goes ahead, and there is no terminal \
+                 to ask at. Run it again with --force."
+                    .to_string(),
+            );
+        }
+        for step in &steps {
+            ui.say(&step.line("This will"));
+        }
+        let question = match how {
+            Leaving::Eject => format!("Put nvm back in {}?", nvm_dir.display()),
+            Leaving::Uninstall => format!("Remove nvmimic from {}?", nvm_dir.display()),
+            Leaving::Purge => format!("Delete {} for good?", nvm_dir.display()),
+        };
+        if !ui.ask(&question, false) {
+            return Err("stopped. Nothing was changed.".to_string());
+        }
     }
-    for name in &manifest.created {
-        let _ = fs::remove_file(nvm_dir.join(name));
+
+    if how == Leaving::Purge {
+        match fs::remove_dir_all(&nvm_dir) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                return Err(format!("{}: {error}", nvm_dir.display()));
+            }
+            _ => {}
+        }
+        for name in &manifest.backed_up {
+            let _ = fs::remove_file(backup.join(name));
+        }
+    } else if !manifest.ejected {
+        for (name, path, saved) in &edited {
+            fs::rename(path, saved).map_err(|e| format!("{}: {e}", path.display()))?;
+            ui.say(&format!(
+                "{name} was edited after nvmimic installed it. Renamed {} to {}.",
+                path.display(),
+                saved.display()
+            ));
+        }
+        for name in SCRIPTS {
+            if !edited.iter().any(|(edited, _, _)| edited == name) {
+                let _ = fs::remove_file(nvm_dir.join(name));
+            }
+        }
+        for name in &restore {
+            move_file(&backup.join(name), &nvm_dir.join(name))?;
+        }
+    }
+
+    if how == Leaving::Eject {
+        manifest.backed_up.clear();
+        manifest.created.clear();
+        manifest.fingerprints.clear();
+        manifest.ejected = true;
+        write_file(&dirs.manifest(), &manifest.render(), 0o644)?;
+        let _ = fs::remove_dir(&backup);
+        ui.say(&format!(
+            "Done. nvm is back in {}, and the nvmimic program stays at {}.",
+            nvm_dir.display(),
+            binary.display()
+        ));
+        return Ok(());
     }
 
     // Only what nvmimic put into its folders is removed, file by file. A
@@ -633,12 +950,12 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     for file in ["nvm-functions.sh", "nvmimic-functions.sh"] {
         let _ = fs::remove_file(data.join(file));
     }
-    let _ = fs::remove_dir(data);
+    let _ = fs::remove_dir(&data);
     for kind in CACHE_KINDS {
         let _ = fs::remove_dir_all(cache.join(kind));
     }
-    let _ = fs::remove_dir(cache);
-    if let Some(binary) = placed {
+    let _ = fs::remove_dir(&cache);
+    if let Some(binary) = &placed {
         let _ = fs::remove_file(binary);
     }
     let _ = fs::remove_file(dirs.manifest());
@@ -649,16 +966,30 @@ pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(
     let _ = fs::remove_dir(&backup);
     let _ = fs::remove_dir(&dirs.state);
 
-    ui.say(if restores {
-        "Done. nvmimic is gone and nvm is back."
-    } else {
-        "Done. nvmimic is gone."
+    ui.say(match how {
+        Leaving::Purge => "Done. nvmimic and the nvm folder are gone.",
+        _ if !restore.is_empty() || manifest.ejected => "Done. nvmimic is gone and nvm is back.",
+        _ => "Done. nvmimic is gone.",
     });
-    if let Some(binary) = manifest.binary.as_ref().filter(|_| !manifest.placed) {
-        ui.say(&format!(
-            "The nvmimic program stays at {}, because `nvmimic self install` didn't put it there.",
-            binary.display()
-        ));
+    if placed.is_none() {
+        let remove = match managed_by(&binary, env) {
+            Some(Managed::Homebrew) => Some(("Homebrew", "brew uninstall nvmimic")),
+            Some(Managed::Cargo) => Some(("cargo", "cargo uninstall nvmimic-cli")),
+            None => None,
+        };
+        match remove {
+            Some((manager, command)) => {
+                ui.say(&format!(
+                    "The nvmimic program stays at {}, because {manager} installed it. To remove it, run:",
+                    binary.display()
+                ));
+                ui.say(&format!("  {command}"));
+            }
+            None => ui.say(&format!(
+                "The nvmimic program stays at {}, because `nvmimic self install` didn't put it there.",
+                binary.display()
+            )),
+        }
     }
     Ok(())
 }
@@ -814,9 +1145,114 @@ mod tests {
             cache: Some("/h/.cache/nvmimic".into()),
             backed_up: vec!["nvm.sh".into()],
             created: vec!["bash_completion".into()],
+            fingerprints: [("nvm.sh".to_string(), "ab12".to_string())].into(),
+            ejected: true,
             previous: Some("0.0.9".into()),
         };
         assert_eq!(Manifest::parse(&manifest.render()), manifest);
+    }
+
+    /// A `Ui` that keeps what it was told and gives one answer.
+    struct Recorded {
+        said: Vec<String>,
+        asked: Vec<String>,
+        answer: bool,
+    }
+
+    impl Ui for Recorded {
+        fn say(&mut self, line: &str) {
+            self.said.push(line.to_string());
+        }
+
+        fn ask(&mut self, question: &str, _default: bool) -> bool {
+            self.asked.push(question.to_string());
+            self.answer
+        }
+    }
+
+    #[test]
+    fn a_purge_at_a_terminal_shows_the_folder_and_its_size_before_it_asks() {
+        let root = std::env::temp_dir().join(format!("nvmimic-purge-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.to_string_lossy().into_owned();
+        let env = Env {
+            home: root.clone(),
+            nvm_dir: None,
+            xdg_config_home: None,
+            homebrew_prefix: Some(format!("{home}/no-homebrew")),
+            cargo_home: None,
+            path: None,
+            dirs: Dirs::resolve(|name| (name == "HOME").then(|| home.clone())),
+            install_path_given: false,
+        };
+        let dirs = env.dirs().unwrap();
+        let nvm_dir = root.join(".nvm");
+        fs::create_dir_all(nvm_dir.join("versions/node/v20.1.0")).unwrap();
+        fs::write(nvm_dir.join("versions/node/v20.1.0/node"), vec![0; 3000]).unwrap();
+        let manifest = Manifest {
+            nvm_dir: Some(nvm_dir.clone()),
+            binary: Some(root.join("elsewhere/nvmimic")),
+            ..Manifest::default()
+        };
+        fs::create_dir_all(&dirs.state).unwrap();
+        fs::write(dirs.manifest(), manifest.render()).unwrap();
+        let options = Options {
+            purge: true,
+            terminal: true,
+            ..Options::default()
+        };
+
+        let mut ui = Recorded {
+            said: Vec::new(),
+            asked: Vec::new(),
+            answer: false,
+        };
+        let stopped = self_uninstall(&env, &options, &mut ui);
+        assert_eq!(stopped, Err("stopped. Nothing was changed.".to_string()));
+        assert_eq!(
+            ui.said[0],
+            format!(
+                "This will delete {} and everything in it, your Node versions and aliases included (3 KB).",
+                nvm_dir.display()
+            )
+        );
+        assert_eq!(
+            ui.asked,
+            [format!("Delete {} for good?", nvm_dir.display())]
+        );
+        assert!(nvm_dir.join("versions/node/v20.1.0/node").is_file());
+
+        ui.answer = true;
+        self_uninstall(&env, &options, &mut ui).unwrap();
+        assert!(!nvm_dir.exists());
+        assert!(!dirs.manifest().exists());
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_purge_never_takes_the_home_folder() {
+        let env = Env {
+            home: PathBuf::from("/nowhere/home/me"),
+            nvm_dir: None,
+            xdg_config_home: None,
+            homebrew_prefix: None,
+            cargo_home: None,
+            path: None,
+            dirs: None,
+            install_path_given: false,
+        };
+        for dir in ["/", "/nowhere/home", "/nowhere/home/me", "relative/.nvm"] {
+            assert!(purge_allowed(Path::new(dir), &env).is_err(), "{dir}");
+        }
+        assert!(purge_allowed(Path::new("/nowhere/home/me/.nvm"), &env).is_ok());
+    }
+
+    #[test]
+    fn sizes_read_the_way_people_say_them() {
+        assert_eq!(human_size(512), "512 bytes");
+        assert_eq!(human_size(3_000), "3 KB");
+        assert_eq!(human_size(48_400_000), "48 MB");
+        assert_eq!(human_size(1_260_000_000), "1.3 GB");
     }
 
     #[test]

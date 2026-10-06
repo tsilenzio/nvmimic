@@ -117,7 +117,7 @@ fn write_scripts(binary: &Path, manifest: &Manifest) -> bool {
     let mut command = Command::new(binary);
     // The program stays where it is, whatever the environment says now.
     command
-        .args(["self", "install", "--yes"])
+        .args(["self", "install", "--force"])
         .env("NVMIMIC_INSTALL_PATH", binary);
     if let Some(nvm_dir) = &manifest.nvm_dir {
         command.env("NVM_DIR", nvm_dir);

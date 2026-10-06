@@ -258,6 +258,7 @@ commands:
   self install     set nvmimic up for your nvm folder ($NVM_DIR, usually ~/.nvm)
   self update      get the newest nvmimic
   self rollback    go back to the nvmimic from before the last update
+  self eject       put nvm's own scripts back and keep nvmimic for later
   self uninstall   remove nvmimic again
   init             print the shell code that loads nvmimic, for `eval`
   help             show this text
@@ -266,7 +267,7 @@ commands:
 Add --help to any `self` command to read what it does, step by step.";
 
 const INSTALL_USAGE: &str = "\
-usage: nvmimic self install [--yes] [--dry-run]
+usage: nvmimic self install [--force] [--dry-run]
 
 Sets nvmimic up, so that `nvm` in your shell is nvmimic.
 
@@ -283,7 +284,7 @@ Either way, the nvmimic program is copied to ~/.local/bin/nvmimic, so you
 can run it again later. Run this again any time to repair the setup, for
 example after nvm's own install script was run over it.
 
-  --yes       answer yes to every question
+  --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing
 
 Settings, as environment variables:
@@ -292,20 +293,47 @@ Settings, as environment variables:
   NVMIMIC_STATE_DIR, NVMIMIC_CACHE_DIR
                          where nvmimic keeps its other files";
 
-const UNINSTALL_USAGE: &str = "\
-usage: nvmimic self uninstall [--yes] [--dry-run]
+const EJECT_USAGE: &str = "\
+usage: nvmimic self eject [--force] [--dry-run]
 
-Removes nvmimic. Your Node versions, aliases and settings stay as they are.
+Hands your nvm folder back to nvm. nvmimic's three scripts leave the folder
+and nvm's own come back, so `nvm` in a new shell is nvm again. The nvmimic
+program stays installed, and `nvmimic self install` takes over again
+whenever you like.
+
+This only works if nvmimic took over from an nvm, because that's when it
+kept nvm's scripts. If there was no nvm before nvmimic, it says so and
+changes nothing.
+
+It shows what it's about to do and asks first.
+
+  --force     don't ask, go ahead
+  --dry-run   show what would happen and change nothing";
+
+const UNINSTALL_USAGE: &str = "\
+usage: nvmimic self uninstall [--purge] [--force] [--dry-run]
+
+Removes nvmimic. Your Node versions, aliases and settings stay as they are,
+and so does the nvm folder itself.
 
 If nvmimic took over from an nvm, that nvm's scripts come back and it works
 as it did before. If there was no nvm before nvmimic, the nvm folder keeps
 your Node versions but has no `nvm` command any more.
 
-  --yes       answer yes to every question
+If you changed one of nvmimic's scripts by hand, your version isn't thrown
+away. It's renamed, for example nvm.sh becomes nvm.sh.nvmimic-saved.
+
+It shows what it's about to do and asks first. Where there's no terminal to
+ask at, it changes nothing unless you pass --force.
+
+  --purge     also delete the whole nvm folder: every Node version, every
+              alias, and nvmimic's backup of nvm's scripts. nvm is not put
+              back. The folder and its size are shown before you're asked
+  --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
 
 const UPDATE_USAGE: &str = "\
-usage: nvmimic self update [--yes] [--dry-run]
+usage: nvmimic self update [--force] [--dry-run]
 
 Gets the newest nvmimic and swaps it in. This updates nvmimic only. It has
 nothing to do with which nvm version nvmimic copies, or with your Node
@@ -318,27 +346,30 @@ kept, and `nvmimic self rollback` brings it back.
 If Homebrew or cargo installed nvmimic, this tells you the command to use
 instead.
 
-  --yes       answer yes to every question
+  --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
 
 const ROLLBACK_USAGE: &str = "\
-usage: nvmimic self rollback [--yes] [--dry-run]
+usage: nvmimic self rollback [--force] [--dry-run]
 
 Goes back to the nvmimic you had before the last `nvmimic self update`. The
 one you leave is kept in its place, so running this twice gets you back
 where you started.
 
-  --yes       answer yes to every question
+  --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
 
 /// The help for `nvmimic self <action>`, or for `self` alone.
 fn self_usage(action: Option<&str>) -> String {
     match action {
         Some("install") => INSTALL_USAGE.to_string(),
+        Some("eject") => EJECT_USAGE.to_string(),
         Some("uninstall") => UNINSTALL_USAGE.to_string(),
         Some("update") => UPDATE_USAGE.to_string(),
         Some("rollback") => ROLLBACK_USAGE.to_string(),
-        _ => format!("{INSTALL_USAGE}\n\n{UPDATE_USAGE}\n\n{ROLLBACK_USAGE}\n\n{UNINSTALL_USAGE}"),
+        _ => format!(
+            "{INSTALL_USAGE}\n\n{UPDATE_USAGE}\n\n{ROLLBACK_USAGE}\n\n{EJECT_USAGE}\n\n{UNINSTALL_USAGE}"
+        ),
     }
 }
 
@@ -377,7 +408,7 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
         }
         [
             "self",
-            action @ ("install" | "uninstall" | "update" | "rollback"),
+            action @ ("install" | "eject" | "uninstall" | "update" | "rollback"),
             flags @ ..,
         ] => (*action, flags),
         _ => {
@@ -392,10 +423,10 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
         println!("{}", self_usage(Some(action)));
         return ExitCode::SUCCESS;
     }
-    if let Some(unknown) = flags
-        .iter()
-        .find(|flag| !matches!(**flag, "--yes" | "--dry-run"))
-    {
+    if let Some(unknown) = flags.iter().find(|flag| {
+        !matches!(**flag, "--force" | "--dry-run")
+            && !(action == "uninstall" && **flag == "--purge")
+    }) {
         eprintln!(
             "nvmimic: `self {action}` has no option `{unknown}`.\n\n{}",
             self_usage(Some(action))
@@ -403,12 +434,17 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     let options = nvmimic::install::Options {
-        yes: flags.contains(&"--yes"),
+        force: flags.contains(&"--force"),
         dry_run: flags.contains(&"--dry-run"),
+        purge: flags.contains(&"--purge"),
+        terminal: is_tty(0),
     };
-    if !options.yes && !options.dry_run && !is_tty(0) {
+    // `self eject` and `self uninstall` say what they would have done
+    // before they refuse, so they handle a missing terminal themselves.
+    let leaving = matches!(action, "eject" | "uninstall");
+    if !leaving && !options.force && !options.dry_run && !options.terminal {
         eprintln!(
-            "nvmimic: this asks questions, and there is no terminal to answer them. Run it again with --yes."
+            "nvmimic: this asks questions, and there is no terminal to answer them. Run it again with --force."
         );
         return ExitCode::from(2);
     }
@@ -424,6 +460,7 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
             nvmimic::update::self_update(&env, &source, &options, &mut ui)
         }
         "rollback" => nvmimic::update::self_rollback(&env, &options, &mut ui),
+        "eject" => nvmimic::install::self_eject(&env, &options, &mut ui),
         _ => nvmimic::install::self_uninstall(&env, &options, &mut ui),
     };
     match result {

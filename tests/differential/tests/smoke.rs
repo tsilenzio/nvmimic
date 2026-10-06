@@ -136,7 +136,7 @@ fn real_node_smoke() {
         &home,
         &vars,
         &harness::nvmimic_bin(),
-        &["self", "install", "--yes"],
+        &["self", "install", "--force"],
     );
     assert!(
         installed.status.success(),
@@ -159,7 +159,7 @@ fn real_node_smoke() {
         &home,
         &vars,
         &harness::nvmimic_bin(),
-        &["self", "uninstall", "--yes"],
+        &["self", "uninstall", "--force"],
     );
     assert!(
         uninstalled.status.success(),
