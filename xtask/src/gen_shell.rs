@@ -204,6 +204,15 @@ const COMPLETE: &str = r#"__nvm() {
 '
   # shellcheck disable=SC2207
   COMPREPLY=($(__nvmimic_handoff __nvm_complete bash "${COMP_CWORD}" "${COMP_WORDS[@]}"))
+
+  # A flag that ends in `=` wants its value right behind it, with no space
+  # in between. bash 4 and later can switch the space off for one answer.
+  # bash 3.2 has no way to, so there the space stays.
+  if [ "${#COMPREPLY[@]}" -eq 1 ]; then
+    case "${COMPREPLY[0]-}" in
+      *=) type compopt > /dev/null 2>&1 && compopt -o nospace ;;
+    esac
+  fi
   return 0
 }"#;
 
@@ -219,7 +228,12 @@ if [[ -n ${ZSH_NAME-} ]] && command -v compdef > /dev/null; then
     suggestions=("${(@f)$(__nvmimic_handoff __nvm_complete zsh "$((CURRENT - 1))" "${words[@]}")}")
     suggestions=(${suggestions:#})
     (( $#suggestions )) || return 1
-    _describe -V suggestion suggestions
+    # A flag that ends in `=` wants its value right behind it, so those
+    # are added with nothing after them.
+    local -a open
+    open=(${(M)suggestions:#*=(|:*)})
+    suggestions=(${suggestions:|open})
+    _describe -V suggestion suggestions -- open -S ""
   }'
   compdef _nvmimic_complete nvm nvmimic
 fi

@@ -312,7 +312,10 @@ nvm's `bash_completion` suggests commands, and versions and aliases after
 some of them. nvmimic's does that and adds to it, on purpose:
 
 - **Flags.** Type a dash and press TAB, as in `nvm install --`, and you get
-  the flags that command takes.
+  the flags that command takes. A flag that wants a value, such as
+  `--alias=`, is filled in with no space after it, so you can type the
+  value straight away. macOS's own bash 3.2 can't leave that space out, so
+  there you delete it yourself.
 - **Arguments in the right place.** `nvm use --silent ` still suggests
   versions, and `nvm cache ` suggests `dir` and `clear`. nvm suggests its
   command names in spots like `nvm install `, where one can't go. nvmimic
