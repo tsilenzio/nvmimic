@@ -164,31 +164,14 @@ fn skip_reason<'a>(skipped: &'a [(String, String)], path: &str) -> Option<&'a st
 
 /// Reasons that keep a test out of every run but a network pass, where it
 /// installs real Node releases.
-const NETWORK: &[&str] = &[
-    "real-node",
-    "real-node-mock",
-    "real-node-hook",
-    "real-node-npm",
-];
-
-/// Reasons that keep a test from running under dash only. dash cannot show
-/// what a function contains, so nvmimic cannot tell there that a test
-/// replaced one of nvm's functions.
-const NOT_DASH: &[&str] = &[
-    "mock-internal",
-    "mock-tool",
-    "real-node-mock",
-    "real-node-hook",
-];
+const NETWORK: &[&str] = &["real-node", "real-node-npm"];
 
 /// Whether a test belongs in this run.
 fn runs_now(skipped: &[(String, String)], path: &str) -> bool {
     let reason = skip_reason(skipped, path);
     match crate::mirror::network_pass() {
         true => reason.is_some_and(|reason| NETWORK.contains(&reason)),
-        false => {
-            reason.is_none_or(|reason| NOT_DASH.contains(&reason) && !NETWORK.contains(&reason))
-        }
+        false => reason.is_none(),
     }
 }
 
@@ -241,11 +224,9 @@ pub fn cases() -> Vec<Case> {
                 && !text.starts_with("#!/bin/sh")
                 && !text.starts_with("#!/usr/bin/env sh");
             let reason = skip_reason(&skipped, &path);
-            let not_dash = reason.is_some_and(|r| NOT_DASH.contains(&r));
             let quiet = traces || reason == Some("real-node-npm");
             let shells: Vec<_> = harness::shells()
                 .into_iter()
-                .filter(|shell| !(not_dash && shell.kind() == "dash"))
                 .take(if own_interpreter { 1 } else { usize::MAX })
                 .collect();
             let file_name = path.rsplit('/').next().unwrap_or("");

@@ -151,8 +151,6 @@ const COUNTED_TOOLS: &[&str] = &[
 const VOLATILE_VARS: &[&str] = &[
     "_",
     "__diff_rc",
-    // nvmimic's copy of nvm's functions, which real nvm has no use for.
-    "__nvmimic_functions",
     "BASHPID",
     "BASH_ARGC",
     "BASH_ARGV",
@@ -430,6 +428,11 @@ impl World {
                 format!("{}:/usr/bin:/bin:/usr/sbin:/sbin", bin.display()),
             )
             .env("TERM", "dumb")
+            // A login session exports SHELL. Without it bash sets the
+            // variable for itself and doesn't export it, and nvmimic then
+            // needs a second start to load, so its one-start way of
+            // loading would never run here under bash or sh.
+            .env("SHELL", &shell.path)
             .env("NVM_NODEJS_ORG_MIRROR", &mirror)
             .env("NVM_IOJS_ORG_MIRROR", &iojs_mirror)
             .env("DIFF_STATE", &state_file)

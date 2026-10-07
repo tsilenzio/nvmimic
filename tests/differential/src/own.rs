@@ -42,8 +42,16 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
         script.contains(&init),
         "nvm.sh no longer runs `init` this way"
     );
+    // `init` prints the switch to the default version behind a check of
+    // what it saw. With `NVMIMIC_PARITY_SECOND_START` set it is shown a
+    // variable the shell doesn't hold, so the check fails in every shell
+    // and loading takes its other way, a second start of the program.
+    let second_start = match std::env::var_os("NVMIMIC_PARITY_SECOND_START") {
+        Some(_) => "CC=nvmimic-parity-second-start ",
+        None => "",
+    };
     let told = format!(
-        "NVMIMIC_CACHE_DIR={} {init}",
+        "NVMIMIC_CACHE_DIR={} {second_start}{init}",
         quote(&cache.display().to_string())
     );
     fs::write(nvm_dir.join("nvm.sh"), script.replace(&init, &told)).unwrap();
