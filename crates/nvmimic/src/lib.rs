@@ -6,6 +6,7 @@
 
 pub mod backend;
 pub mod cmd;
+pub mod complete;
 pub mod context;
 pub mod dirs;
 pub mod functions;

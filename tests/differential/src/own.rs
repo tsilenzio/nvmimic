@@ -63,16 +63,18 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
     }
 }
 
-/// nvmimic's one shell function that nvm does not have, see `shell/init.sh`.
-const HANDOFF: &str = "__nvmimic_handoff";
+/// nvmimic's shell functions that nvm does not have: the hand-off, see
+/// `shell/init.sh`, and under zsh the completion function that
+/// `shell/bash_completion` registers.
+const OWN_FUNCTIONS: [&str; 2] = ["__nvmimic_handoff", "_nvmimic_complete"];
 
-/// Takes nvmimic's own function out of the list of functions a run left
+/// Takes nvmimic's own functions out of the list of functions a run left
 /// behind. Every other name in that list is compared with real nvm's.
 pub fn hide_own_function(outcome: &mut Outcome) {
     if let Some(functions) = outcome.state.get_mut("functions") {
         *functions = functions
             .split(' ')
-            .filter(|name| *name != HANDOFF)
+            .filter(|name| !OWN_FUNCTIONS.contains(name))
             .collect::<Vec<_>>()
             .join(" ");
     }

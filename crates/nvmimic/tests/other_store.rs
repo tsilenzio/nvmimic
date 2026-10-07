@@ -33,6 +33,11 @@ impl Shelf {
 }
 
 impl Backend for Shelf {
+    // The shelf installs versions itself and never builds one.
+    fn offers(&self, needs: nvmimic::complete::Needs) -> bool {
+        needs != nvmimic::complete::Needs::Source
+    }
+
     fn root(&self, vars: &Vars) -> String {
         vars.get("NVM_DIR").to_string()
     }
@@ -386,4 +391,25 @@ fn install_goes_through_the_shelf() {
         "{}",
         ran.err
     );
+}
+
+#[test]
+fn completion_leaves_out_what_the_shelf_cannot_do() {
+    let world = World::new();
+    world.with(&["v20.11.1", "v22.3.0"]);
+
+    // The shelf never builds from source, so `-s` isn't offered.
+    let ran = world.call("__nvm_complete", &["bash", "2", "nvm", "install", "-"]);
+    let flags: Vec<&str> = ran.out.lines().collect();
+    assert!(!flags.contains(&"-s"), "{flags:?}");
+    assert!(flags.contains(&"-b"), "{flags:?}");
+    assert!(flags.contains(&"--lts"), "{flags:?}");
+
+    // Versions come from the shelf, not from `$NVM_DIR/versions`.
+    let ran = world.call("__nvm_complete", &["bash", "2", "nvm", "use", "v2"]);
+    assert_eq!(ran.out, "v20.11.1\nv22.3.0\n");
+
+    // zsh gets a few words about each entry.
+    let ran = world.call("__nvm_complete", &["zsh", "1", "nvm", "unl"]);
+    assert_eq!(ran.out, "unload:remove nvm from this shell\n");
 }

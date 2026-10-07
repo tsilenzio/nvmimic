@@ -102,6 +102,12 @@ pub trait Backend {
     /// into [`Backend::version_path`] itself. What the backend wants shown
     /// goes through `nvm.io`. After a status of 0, nvm checks the install
     /// and switches to it as it does after its own.
+    /// Whether this backend can do what a command or flag needs. Tab
+    /// completion leaves out the entries it can't, see [`crate::complete`].
+    fn offers(&self, _needs: crate::complete::Needs) -> bool {
+        true
+    }
+
     fn install(&self, _nvm: &mut Nvm, _request: &InstallRequest) -> Option<i32> {
         None
     }

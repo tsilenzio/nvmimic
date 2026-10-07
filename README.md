@@ -252,6 +252,28 @@ is open, that shell gets the new functions the next time you run `nvm`.
 Nothing extra hides behind the name `nvm` itself. `nvm` accepts exactly the
 commands real nvm accepts and prints nvm's help for anything else.
 
+### Tab completion suggests more
+
+nvm's `bash_completion` suggests commands, and versions and aliases after
+some of them. nvmimic's does that and adds to it, on purpose:
+
+- **Flags.** Type a dash and press TAB, as in `nvm install --`, and you get
+  the flags that command takes.
+- **Arguments in the right place.** `nvm use --silent ` still suggests
+  versions, and `nvm cache ` suggests `dir` and `clear`. nvm suggests its
+  command names in spots like `nvm install `, where one can't go. nvmimic
+  doesn't.
+- **One more command.** `set-colors` is in the list.
+- **The `nvmimic` command.** `nvmimic self ` and its flags complete too.
+- **A few words about each entry under zsh**, when zsh's own completion
+  system is running.
+
+It never goes to the network, so `nvm install ` doesn't list the versions
+you could install. Each TAB starts the nvmimic program once.
+
+In zsh, `complete -p nvm` prints nothing for nvmimic, because nvm is
+registered with zsh's completion system directly.
+
 ### Node's and npm's versions are remembered
 
 nvm finds out which Node is active by running `node --version`, and prints

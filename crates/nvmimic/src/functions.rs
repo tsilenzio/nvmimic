@@ -480,7 +480,14 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
             }
         }
         "__nvm_aliases" => {
-            completion_aliases(nvm);
+            let names = alias_files(nvm);
+            if !names.is_empty() {
+                nvm.io.echo(&names.join("\n"));
+            }
+            0
+        }
+        "__nvm_complete" => {
+            complete(nvm, args);
             0
         }
         // Every function nvm.sh defines is listed above. Anything else is
@@ -490,11 +497,62 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
     }
 }
 
+/// Answers one TAB: `mode` (`bash` or `zsh`), the index of the word being
+/// typed, then every word on the line. Prints one suggestion per line. In
+/// `zsh` mode a suggestion that has a description is `word:description`,
+/// the form zsh's `_describe` reads.
+///
+/// nvm: bash_completion __nvm
+fn complete(nvm: &mut Nvm, args: &[String]) {
+    use crate::complete::{NVM, NVMIMIC, Takes, suggest};
+    let describe = args.first().is_some_and(|mode| mode == "zsh");
+    let current: usize = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(0);
+    let words = args.get(2..).unwrap_or_default();
+    let root = match words.first().map(String::as_str) {
+        Some("nvmimic") => &NVMIMIC,
+        _ => &NVM,
+    };
+    let backend = nvm.backend;
+    // The same words, in the same order, as nvm's own completion builds
+    // from `nvm_ls` and its `__nvm_aliases`.
+    let always = ["node", "stable", "unstable", "iojs"].map(str::to_string);
+    let mut list = |takes: Takes| -> Vec<String> {
+        let mut found = Vec::new();
+        if takes == Takes::Version {
+            let (installed, _) = local::ls(nvm, "");
+            found.extend(installed.split_whitespace().map(str::to_string));
+        }
+        if matches!(takes, Takes::Version | Takes::Alias) {
+            found.extend(alias_files(nvm));
+        }
+        found.extend(always.iter().cloned());
+        found
+    };
+    let found = suggest(
+        root,
+        words,
+        current,
+        &|needs| backend.offers(needs),
+        &mut list,
+    );
+    let lines: Vec<String> = found
+        .into_iter()
+        .map(|suggestion| match (describe, suggestion.about) {
+            (false, _) => suggestion.word,
+            (true, "") => suggestion.word.replace(':', "\\:"),
+            (true, about) => format!("{}:{about}", suggestion.word.replace(':', "\\:")),
+        })
+        .collect();
+    if !lines.is_empty() {
+        nvm.io.echo(&lines.join("\n"));
+    }
+}
+
 /// The alias files under `$NVM_DIR/alias`, relative to it, in the order
-/// `find "${PWD}" -type f` walks them, one per line, for bash completion.
+/// `find "${PWD}" -type f` walks them.
 ///
 /// nvm: bash_completion __nvm_aliases
-fn completion_aliases(nvm: &mut Nvm) {
+fn alias_files(nvm: &Nvm) -> Vec<String> {
     fn walk(dir: &std::path::Path, prefix: &str, out: &mut Vec<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
@@ -517,9 +575,7 @@ fn completion_aliases(nvm: &mut Nvm) {
         "",
         &mut names,
     );
-    if !names.is_empty() {
-        nvm.io.echo(&names.join("\n"));
-    }
+    names
 }
 
 /// What sourcing `nvm.sh` does after defining everything: switch to the

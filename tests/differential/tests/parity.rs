@@ -285,7 +285,10 @@ fn everyday_commands_launch_only_nvmimic() {
         ("nvm_find_nvmrc", 0),
         // bash sets SHELL for itself when nothing handed it one, and a
         // variable that is set and not exported costs a second start.
-        ("export SHELL\n. \"$NVM_DIR/nvm.sh\"", 1),
+        (
+            "export SHELL=\"${SHELL-/bin/sh}\"\n. \"$NVM_DIR/nvm.sh\"",
+            1,
+        ),
         (". \"$NVM_DIR/nvm.sh\" --no-use", 1),
     ];
     for shell in harness::shells() {
@@ -342,22 +345,20 @@ fn everyday_commands_launch_only_nvmimic() {
             outcome.launches
         );
 
-        // After the caller replaced one of nvm's functions, the call runs
-        // nvm's own code in the shell and nvmimic's program is not started.
-        // dash cannot tell that a function was replaced.
-        if shell.kind() != "dash" {
+        // One TAB starts nvmimic once and nothing else.
+        if shell.name == "bash" {
             let outcome = world.run_with(
                 Impl::Nvmimic,
                 &shell,
                 "",
                 "nvm install 24.15.0",
-                "nvm_echo() { command printf '%s\\n' \"$*\"; }\nnvm current",
+                ". \"$NVM_DIR/bash_completion\"\nCOMP_WORDS=(nvm use \"\")\nCOMP_CWORD=2\n__nvm",
             );
-            assert!(
-                !outcome.launches.iter().any(|l| l == "nvmimic"),
-                "{}: a call after a replaced function started nvmimic: {:?}",
-                shell.name,
-                outcome.launches
+            assert_eq!(
+                outcome.launches,
+                ["nvmimic"],
+                "{}: one TAB should start nvmimic once",
+                shell.name
             );
         }
     }
