@@ -447,7 +447,8 @@ pub fn suggest(
     } else {
         match command.takes.get(arguments) {
             Some(Takes::Anything) | None => Vec::new(),
-            Some(Takes::Alias) => list(Takes::Alias).into_iter().map(about("alias")).collect(),
+            // No note beside these: zsh puts every entry with the same
+            // note on one row, which made a single row of all the names.
             Some(takes) => list(*takes).into_iter().map(about("")).collect(),
         }
     };
