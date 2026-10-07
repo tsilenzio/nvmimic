@@ -2,6 +2,7 @@
 # A placeholder `nvm` and `node` that load nvm.sh on first use, from inside a function, the way lazy-loading setups do.
 # shells: bash zsh
 # setup: nvm install 24.15.0
+# covers: nvm nvm:deactivate nvm:unload nvm_echo nvm_hash_reset nvm_strip_path
 nvm unload
 lazy() {
   nvm() { unset -f nvm node; . "$NVM_DIR/nvm.sh"; nvm "$@"; }
