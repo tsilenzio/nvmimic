@@ -70,7 +70,8 @@ pub fn system_build() -> Option<String> {
         let bytes: Vec<u8> = field
             .iter()
             .take_while(|&&c| c != 0)
-            .map(|&c| c as u8)
+            // `c_char` is `i8` on some systems and `u8` on others.
+            .map(|&c| c.to_ne_bytes()[0])
             .collect();
         String::from_utf8_lossy(&bytes).into_owned()
     }
