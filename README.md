@@ -69,6 +69,48 @@ That way you can type `nvmimic self install` again later without hunting for
 the file you downloaded. nvmimic never puts a program named `nvm` on your
 `PATH`, because real nvm is a shell function and scripts check for that.
 
+### Loading nvm in your shell
+
+A shell gets the `nvm` command from a line in its startup file, such as
+`~/.zshrc` or `~/.bashrc`. Two lines work.
+
+The first is the line official nvm uses. If nvm was on the machine before,
+it's already in your startup file and you change nothing:
+
+```sh
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # This loads nvm
+```
+
+Other tools look for `$NVM_DIR/nvm.sh` as well, and this line keeps working
+when you go back to official nvm. Use it unless you have a reason not to.
+
+The second asks the nvmimic program directly. Give it the name of the shell
+the startup file belongs to: `bash`, `zsh`, `sh` or `dash`.
+
+```sh
+eval "$(nvmimic init zsh)"
+```
+
+Both lines load the same functions and switch to your default Node version.
+A few things to know about the second one:
+
+- `nvmimic` has to be on your `PATH` before that line runs.
+- A wrong shell name does no harm. The code checks which shell is really
+  running it. In any other shell it starts nvmimic a second time and ends
+  up in the same place, without a warning.
+- If your shell has no `NVM_DIR`, the nvm folder is the one `self install`
+  set up. If there was no `self install`, it's `~/.nvm`.
+- It loads nvmimic even after `nvmimic self eject`, and it fails once
+  nvmimic is removed. Take the line out when you go back to official nvm.
+
+Neither line loads tab completion. That has its own line, the same one as
+with official nvm:
+
+```sh
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+```
+
 ### Where nvmimic keeps its files
 
 In `$NVM_DIR`, nvmimic only swaps nvm's three scripts (`nvm.sh`, `nvm-exec`

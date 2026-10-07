@@ -4,10 +4,12 @@
 
 use nvmimic::Caller;
 use nvmimic::backend::NvmDirBackend;
+use nvmimic::init::Named;
 use nvmimic::shell::{self, Dialect, Vars};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Variables the shell functions hand over because nvm reads them whether
@@ -171,8 +173,8 @@ fn refresh() -> String {
     })
 }
 
-/// `nvmimic init`: prints the shell code that loads nvmimic.
-fn init() -> ExitCode {
+/// `nvmimic init [shell]`: prints the shell code that loads nvmimic.
+fn init(named: Option<Named>) -> ExitCode {
     let Some(binary) = program() else {
         eprintln!("nvmimic: could not work out where the nvmimic program is.");
         return ExitCode::FAILURE;
@@ -180,13 +182,37 @@ fn init() -> ExitCode {
     // An installation remembers where its cache folder is. Without one the
     // folder comes from the environment, as it would for `self install`.
     let dirs = nvmimic::dirs::Dirs::from_process();
+    let manifest = dirs.as_ref().and_then(nvmimic::install::Manifest::read);
     let cache = dirs.as_ref().map(|dirs| {
-        nvmimic::install::Manifest::read(dirs)
-            .and_then(|manifest| manifest.cache)
+        manifest
+            .as_ref()
+            .and_then(|manifest| manifest.cache.clone())
             .unwrap_or_else(|| dirs.cache.clone())
     });
-    let load = init_shell(cache.clone())
-        .and_then(|shell| nvmimic::init::load(FORWARDED, shell, &NvmDirBackend));
+    // `nvm.sh` describes the shell it runs `init` for. Typed directly,
+    // nothing does, and there is no `nvm.sh` whose folder could be the nvm
+    // folder either. That folder is then the one nvmimic was set up for,
+    // or `~/.nvm`.
+    let described = init_shell(cache.clone());
+    let nvm_dir = match described {
+        Some(_) => None,
+        None => manifest
+            .and_then(|manifest| manifest.nvm_dir)
+            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".nvm"))),
+    };
+    let load = match (described, named) {
+        (Some(shell), _) => nvmimic::init::load(FORWARDED, shell, &NvmDirBackend),
+        (None, Some(named)) => {
+            let mut seen = exported();
+            if let Some(nvm_dir) = &nvm_dir
+                && seen.get("NVM_DIR").is_none_or(String::is_empty)
+            {
+                seen.insert("NVM_DIR".to_string(), nvm_dir.display().to_string());
+            }
+            nvmimic::init::load_named(FORWARDED, named, &seen, cache.as_deref(), &NvmDirBackend)
+        }
+        (None, None) => None,
+    };
     print!(
         "{}",
         nvmimic::install::init_text(
@@ -194,14 +220,24 @@ fn init() -> ExitCode {
                 binary: &binary,
                 cache: cache.as_deref(),
             },
+            nvm_dir.as_deref(),
             load.as_deref(),
         )
     );
     ExitCode::SUCCESS
 }
 
+/// The exported variables, without the ones `nvm.sh` and the shell
+/// functions pass for one start of the program.
+fn exported() -> BTreeMap<String, String> {
+    env::vars_os()
+        .map(|(name, value)| (lossy(name), lossy(value)))
+        .filter(|(name, _)| !name.starts_with("__NVMIMIC_"))
+        .collect()
+}
+
 /// The shell `nvm.sh` says it is running `init` for. `None` when `init` was
-/// typed directly, where nothing says which shell will read the output.
+/// typed directly.
 fn init_shell(cache_dir: Option<std::path::PathBuf>) -> Option<nvmimic::init::Shell> {
     let hint = |name: &str| env::var(name).unwrap_or_default();
     env::var_os("__NVMIMIC_OPTS")?;
@@ -216,10 +252,7 @@ fn init_shell(cache_dir: Option<std::path::PathBuf>) -> Option<nvmimic::init::Sh
         Dialect::Bash
     };
     Some(nvmimic::init::Shell {
-        env: env::vars_os()
-            .map(|(name, value)| (lossy(name), lossy(value)))
-            .filter(|(name, _)| !name.starts_with("__NVMIMIC_"))
-            .collect(),
+        env: exported(),
         dialect,
         caller: nvmimic::context::CallerShell {
             arg0: hint("__NVMIMIC_ARG0"),
@@ -232,17 +265,28 @@ fn init_shell(cache_dir: Option<std::path::PathBuf>) -> Option<nvmimic::init::Sh
 }
 
 const INIT_USAGE: &str = "\
-usage: nvmimic init
+usage: nvmimic init [bash|zsh|sh|dash]
 
 Prints the shell code that makes `nvm` work in a shell: nvm's functions, and
 then the lines that switch to your default Node version. A shell has to run
 that code itself, with `eval`.
 
-You don't type this. `nvmimic self install` puts an `nvm.sh` into your nvm
-folder that runs it for you, and your startup file loads that `nvm.sh` the
-way it always did.
+Most people never type this. `nvmimic self install` puts an `nvm.sh` into
+your nvm folder that runs it for you, and your startup file loads that
+`nvm.sh` the way it always did.
 
-The same code works in bash, zsh, sh and dash.";
+You can also write the line into your startup file yourself, with the name
+of the shell that file belongs to:
+
+  eval \"$(nvmimic init zsh)\"
+
+The name lets nvmimic do everything in one start of the program. A wrong
+name does no harm. The code checks which shell is really running it, and in
+any other shell it starts nvmimic a second time and gets the same result.
+Without a name it always takes that second start.
+
+Loaded this way, the nvm folder is $NVM_DIR if your shell has one, then the
+folder `nvmimic self install` set up, then ~/.nvm.";
 
 const USAGE: &str = "\
 usage: nvmimic <command>
@@ -257,7 +301,7 @@ commands:
   self rollback    go back to the nvmimic from before the last update
   self eject       put nvm's own scripts back and keep nvmimic for later
   self uninstall   remove nvmimic again
-  init             print the shell code that loads nvmimic, for `eval`
+  init [shell]     print the shell code that loads nvmimic, for `eval`
   help             show this text
   --version        print nvmimic's own version
 
@@ -390,10 +434,22 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
             println!("{}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        ["init"] => return init(),
+        ["init"] => return init(None),
         ["init", word] if is_help(word) => {
             println!("{INIT_USAGE}");
             return ExitCode::SUCCESS;
+        }
+        ["init", shell] => {
+            return match Named::parse(shell) {
+                Some(named) => init(Some(named)),
+                None => {
+                    eprintln!(
+                        "nvmimic: `init` doesn't know the shell `{shell}`. It knows {}.",
+                        Named::NAMES.join(", ")
+                    );
+                    ExitCode::from(2)
+                }
+            };
         }
         ["self"] => {
             println!("{}", self_usage(None));

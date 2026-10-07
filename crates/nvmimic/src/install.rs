@@ -73,11 +73,30 @@ pub fn nvm_sh(binary: &Path) -> String {
     bind(NVM_SH, &paths)
 }
 
+/// Where nvm's own lines for a missing `NVM_DIR` start and end in what
+/// `nvmimic init` prints. They take the folder `nvm.sh` was sourced from.
+const FOLDER_START: &str = "  # shellcheck disable=SC2128\n";
+const FOLDER_END: &str = "  export NVM_DIR\n";
+
 /// What `nvmimic init` prints: the shell functions, then the lines that
 /// load the default version. `load` takes the place of the last of those
 /// lines, see [`crate::init::load`].
-pub fn init_text(paths: &Bound, load: Option<&str>) -> String {
-    let text = bind(INIT, paths);
+///
+/// `nvm_dir` is for `init` typed directly, as in `eval "$(nvmimic init)"`.
+/// No `nvm.sh` was sourced then, and the file being read is a startup file
+/// in some other folder. So a shell without `NVM_DIR` is given `nvm_dir`
+/// in place of the folder nvm would work out.
+pub fn init_text(paths: &Bound, nvm_dir: Option<&Path>, load: Option<&str>) -> String {
+    let mut text = bind(INIT, paths);
+    if let Some(nvm_dir) = nvm_dir
+        && let Some(marker) = text.find(LOAD_MARKER)
+        && let Some(start) = text[marker..].find(FOLDER_START)
+        && let Some(end) = text[marker + start..].find(FOLDER_END)
+    {
+        let start = marker + start;
+        let folder = crate::shell::quote(&nvm_dir.display().to_string());
+        text.replace_range(start..start + end, &format!("  NVM_DIR={folder}\n"));
+    }
     match (load, text.strip_suffix(crate::init::SECOND_START)) {
         (Some(load), Some(head)) => format!("{head}{load}"),
         _ => text,
@@ -1209,6 +1228,25 @@ mod tests {
         let (functions, load) = INIT.split_once(LOAD_MARKER).unwrap();
         assert!(functions.contains("__nvmimic_handoff() {"));
         assert!(load.ends_with(crate::init::SECOND_START));
+    }
+
+    #[test]
+    fn a_direct_init_names_the_folder_in_place_of_nvms_own_search() {
+        let bound = Bound {
+            binary: Path::new("/bin/nvmimic"),
+            cache: None,
+        };
+        let sourced = init_text(&bound, None, None);
+        assert!(sourced.contains("$(dirname \"${NVM_SCRIPT_SOURCE:-$0}\")"));
+
+        let direct = init_text(&bound, Some(Path::new("/h/my nvm")), None);
+        assert!(!direct.contains("NVM_SCRIPT_SOURCE:-$0"), "{direct}");
+        assert!(
+            direct.contains(
+                "if [ -z \"${NVM_DIR-}\" ]; then\n  NVM_DIR='/h/my nvm'\n  export NVM_DIR\nelse\n"
+            ),
+            "{direct}"
+        );
     }
 
     #[test]

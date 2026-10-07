@@ -376,13 +376,20 @@ pub static NVMIMIC: Command = Command {
                 ),
             ],
         },
-        command(
-            "init",
-            "print the shell code that loads nvmimic",
-            Needs::Nothing,
-            &[],
-            &[],
-        ),
+        Command {
+            name: "init",
+            about: "print the shell code that loads nvmimic",
+            needs: Needs::Nothing,
+            flags: &[flag("--help", "what init is for")],
+            takes: &[],
+            // Keep in step with `crate::init::Named`.
+            commands: &[
+                command("bash", "for bash", Needs::Nothing, &[], &[]),
+                command("zsh", "for zsh", Needs::Nothing, &[], &[]),
+                command("sh", "for sh", Needs::Nothing, &[], &[]),
+                command("dash", "for dash", Needs::Nothing, &[], &[]),
+            ],
+        },
         command("help", "show nvmimic's help", Needs::Nothing, &[], &[]),
     ],
 };

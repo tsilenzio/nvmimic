@@ -13,6 +13,12 @@
 //! before and starts the program again, this time handing every variable
 //! over. `init` prints only that second way whenever it can't be sure of
 //! the first.
+//!
+//! `nvm.sh` tells `init` which shell is reading. Someone who writes
+//! `eval "$(nvmimic init zsh)"` into a startup file names the shell
+//! instead, and [`load_named`] puts one more test in front: is this really
+//! that shell. A wrong name is not an error. The shell starts the program
+//! a second time and ends up in the same place.
 
 use crate::backend::Backend;
 use crate::context::CallerShell;
@@ -34,11 +40,123 @@ pub struct Shell {
     pub cache_dir: Option<PathBuf>,
 }
 
+/// A shell named on the command line, as in `nvmimic init zsh`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Named {
+    Bash,
+    Zsh,
+    Sh,
+    Dash,
+}
+
+/// Tests a shell runs to say which shell it is. They read what the shell
+/// itself sets and never `$SHELL`, which names the login shell and says
+/// nothing about the one reading the text.
+const IS_ZSH: &str = "[ -n \"${ZSH_VERSION-}\" ]";
+const IS_BASH: &str = "[ -z \"${ZSH_VERSION-}\" ] && [ -n \"${BASH_VERSION-}\" ] &&
+  { case \":${SHELLOPTS-}:\" in *:posix:*) false ;; esac; }";
+const IS_BASH_POSIX: &str = "[ -z \"${ZSH_VERSION-}\" ] && [ -n \"${BASH_VERSION-}\" ] &&
+  { case \":${SHELLOPTS-}:\" in *:posix:*) ;; *) false ;; esac; }";
+const IS_PLAIN: &str = "[ -z \"${ZSH_VERSION-}${BASH_VERSION-}\" ]";
+
+impl Named {
+    /// The names `nvmimic init` takes.
+    pub const NAMES: &'static [&'static str] = &["bash", "zsh", "sh", "dash"];
+
+    pub fn parse(name: &str) -> Option<Named> {
+        match name {
+            "bash" => Some(Named::Bash),
+            "zsh" => Some(Named::Zsh),
+            "sh" => Some(Named::Sh),
+            "dash" => Some(Named::Dash),
+            _ => None,
+        }
+    }
+
+    /// The shells the name can mean, each with the test that tells it
+    /// apart. `sh` is bash in POSIX mode on macOS and dash on most Linux
+    /// systems, so it gets both.
+    fn shells(self) -> &'static [(Dialect, &'static str)] {
+        match self {
+            Named::Bash => &[(Dialect::Bash, IS_BASH)],
+            Named::Zsh => &[(Dialect::Zsh, IS_ZSH)],
+            Named::Sh => &[
+                (Dialect::BashPosix, IS_BASH_POSIX),
+                (Dialect::Posix, IS_PLAIN),
+            ],
+            Named::Dash => &[(Dialect::Posix, IS_PLAIN)],
+        }
+    }
+}
+
 /// The lines that switch to the default version, behind the test described
 /// above. `forwarded` is the list of variables the shell functions hand
 /// over on every call, and the test covers exactly those. `None` when the
 /// second start is the only safe way.
 pub fn load(forwarded: &[&str], shell: Shell, backend: &dyn Backend) -> Option<String> {
+    let Switch { test, changes } = switch(forwarded, shell, backend)?;
+    Some(format!(
+        "if {test}; then\n{changes}:\nelse\n{SECOND_START}fi\n"
+    ))
+}
+
+/// [`load`] for a shell that was named and not described. `env` is what
+/// the program can see: the exported variables. The switch for each shell
+/// the name can mean is printed behind a test for that shell, and any
+/// other shell takes the second start.
+pub fn load_named(
+    forwarded: &[&str],
+    named: Named,
+    env: &BTreeMap<String, String>,
+    cache_dir: Option<&std::path::Path>,
+    backend: &dyn Backend,
+) -> Option<String> {
+    let mut text = String::new();
+    for (dialect, is_shell) in named.shells() {
+        // Nothing says which bash this is, and bash 3 reads an alias file
+        // with a stray NUL byte in it differently from later ones. When
+        // the two would not end up the same, neither is printed.
+        let majors: &[u32] = if dialect.is_bash() { &[3, 4] } else { &[0] };
+        let mut switches = majors.iter().map(|&bash| {
+            let shell = Shell {
+                env: env.clone(),
+                dialect: *dialect,
+                caller: CallerShell {
+                    bash,
+                    ..CallerShell::default()
+                },
+                cache_dir: cache_dir.map(PathBuf::from),
+            };
+            switch(forwarded, shell, backend)
+        });
+        let Some(Some(first)) = switches.next() else {
+            continue;
+        };
+        if switches.any(|other| other.as_ref() != Some(&first)) {
+            continue;
+        }
+        let Switch { test, changes } = first;
+        let keyword = if text.is_empty() { "if" } else { "elif" };
+        text.push_str(&format!(
+            "{keyword} {is_shell} &&\n  {test}; then\n{changes}:\n"
+        ));
+    }
+    if text.is_empty() {
+        return None;
+    }
+    Some(format!("{text}else\n{SECOND_START}fi\n"))
+}
+
+/// The switch to the default version for one shell.
+#[derive(PartialEq, Eq)]
+struct Switch {
+    /// True in a shell whose variables hold what `init` saw.
+    test: String,
+    /// What the switch changes in the shell, as shell code.
+    changes: String,
+}
+
+fn switch(forwarded: &[&str], shell: Shell, backend: &dyn Backend) -> Option<Switch> {
     let Shell {
         mut env,
         dialect,
@@ -128,10 +246,10 @@ pub fn load(forwarded: &[&str], shell: Shell, backend: &dyn Backend) -> Option<S
             ));
         }
     }
-    Some(format!(
-        "if {test}; then\n{}:\nelse\n{SECOND_START}fi\n",
-        render(&outcome.effects)
-    ))
+    Some(Switch {
+        test,
+        changes: render(&outcome.effects),
+    })
 }
 
 #[cfg(test)]
@@ -193,5 +311,43 @@ mod tests {
             text.ends_with(&format!(":\nelse\n{SECOND_START}fi\n")),
             "{text}"
         );
+    }
+
+    #[test]
+    fn a_named_shell_is_tested_for_before_its_switch_is_used() {
+        let forwarded = ["NVM_DIR", "PATH"];
+        let env: BTreeMap<String, String> = [("NVM_DIR", "/nowhere/.nvm"), ("PATH", "/usr/bin")]
+            .into_iter()
+            .map(|(name, value)| (name.to_string(), value.to_string()))
+            .collect();
+        let text = |named| load_named(&forwarded, named, &env, None, &NvmDirBackend).unwrap();
+
+        let zsh = text(Named::Zsh);
+        assert!(
+            zsh.starts_with(&format!("if {IS_ZSH} &&\n  [ \"$#\" -eq 0 ]")),
+            "{zsh}"
+        );
+        assert!(!zsh.contains("elif"), "{zsh}");
+        assert!(text(Named::Bash).starts_with(&format!("if {IS_BASH} &&\n")));
+        assert!(text(Named::Dash).starts_with(&format!("if {IS_PLAIN} &&\n")));
+
+        // `sh` is one of two shells, and each gets its own switch.
+        let sh = text(Named::Sh);
+        assert!(sh.starts_with(&format!("if {IS_BASH_POSIX} &&\n")), "{sh}");
+        assert!(sh.contains(&format!(":\nelif {IS_PLAIN} &&\n")), "{sh}");
+        for text in [zsh, sh] {
+            assert!(text.ends_with(&format!(":\nelse\n{SECOND_START}fi\n")));
+            assert!(!text.contains("$SHELL") && !text.contains("${SHELL-}"));
+        }
+    }
+
+    #[test]
+    fn a_named_shell_gets_the_second_start_alone_where_load_would() {
+        let env: BTreeMap<String, String> = [("NVM_DIR".to_string(), String::new())].into();
+        for name in Named::NAMES {
+            let named = Named::parse(name).unwrap();
+            assert!(load_named(&["NVM_DIR"], named, &env, None, &NvmDirBackend).is_none());
+        }
+        assert_eq!(Named::parse("fish"), None);
     }
 }
