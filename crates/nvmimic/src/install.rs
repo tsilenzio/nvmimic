@@ -967,6 +967,13 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
         purge_allowed(&nvm_dir, env)?;
     }
 
+    // A package manager that put the program there, and its command to
+    // take the program away again.
+    let keeper = match managed_by(&binary, env) {
+        Some(Managed::Homebrew) => Some(("Homebrew", "brew uninstall nvmimic")),
+        Some(Managed::Cargo) => Some(("cargo", "cargo uninstall nvmimic-cli")),
+        None => None,
+    };
     let mut steps: Vec<Step> = Vec::new();
     // Scripts someone changed since nvmimic wrote them: name, path, new path.
     let mut edited: Vec<(&str, PathBuf, PathBuf)> = Vec::new();
@@ -1041,12 +1048,17 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             dirs.state.display(),
             cache.display()
         )));
-        if let Some(binary) = &placed {
-            steps.push(Step::new(format!(
-                "remove the nvmimic program at {}",
+        steps.push(Step::new(match (&placed, keeper) {
+            (Some(binary), _) => format!("remove the nvmimic program at {}", binary.display()),
+            (None, Some((manager, _))) => format!(
+                "leave the nvmimic program at {}, because {manager} installed it",
                 binary.display()
-            )));
-        }
+            ),
+            (None, None) => format!(
+                "leave the nvmimic program at {}, because `nvmimic self install` didn't put it there",
+                binary.display()
+            ),
+        }));
     }
 
     match how {
@@ -1215,20 +1227,18 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
     let _ = fs::remove_dir(&backup);
     let _ = fs::remove_dir(&dirs.state);
 
-    ui.say(match how {
-        Leaving::Purge => "Done. nvmimic and the nvm folder are gone.",
-        _ if !restore.is_empty() || manifest.ejected || !not_ours.is_empty() => {
-            "Done. nvmimic is gone and nvm is back."
-        }
-        _ => "Done. nvmimic is gone.",
+    // "nvmimic is gone" would be wrong while its program is still there.
+    let back = !restore.is_empty() || manifest.ejected || !not_ours.is_empty();
+    ui.say(match (how, placed.is_some()) {
+        (Leaving::Purge, true) => "Done. nvmimic and the nvm folder are gone.",
+        (Leaving::Purge, false) => "Done. The nvm folder is gone, and nvmimic's own files with it.",
+        (_, true) if back => "Done. nvmimic is gone and nvm is back.",
+        (_, true) => "Done. nvmimic is gone.",
+        (_, false) if back => "Done. nvmimic is out of the nvm folder and nvm is back.",
+        (_, false) => "Done. nvmimic is out of the nvm folder.",
     });
     if placed.is_none() {
-        let remove = match managed_by(&binary, env) {
-            Some(Managed::Homebrew) => Some(("Homebrew", "brew uninstall nvmimic")),
-            Some(Managed::Cargo) => Some(("cargo", "cargo uninstall nvmimic-cli")),
-            None => None,
-        };
-        match remove {
+        match keeper {
             Some((manager, command)) => {
                 ui.say(&format!(
                     "The nvmimic program stays at {}, because {manager} installed it. To remove it, run:",

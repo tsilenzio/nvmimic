@@ -1380,3 +1380,44 @@ fn a_link_that_was_dead_before_the_install_is_never_put_back() {
         }
     }
 }
+
+#[test]
+fn a_program_a_package_manager_installed_is_said_to_stay_before_and_after() {
+    let home = Home::new();
+    // Homebrew keeps each version of a program under `Cellar`.
+    let cellar = home.root.join("brew/Cellar/nvmimic/0.1.0/bin");
+    fs::create_dir_all(&cellar).unwrap();
+    let program = cellar.join("nvmimic");
+    fs::copy(env!("CARGO_BIN_EXE_nvmimic"), &program).unwrap();
+    let run = |args: &[&str]| {
+        Command::new(&program)
+            .args(args)
+            .env_clear()
+            .env("HOME", &home.root)
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOMEBREW_PREFIX", home.root.join("no-homebrew"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let out = run(&["self", "install", "--force"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+
+    let stays = format!(
+        "leave the nvmimic program at {}, because Homebrew installed it.",
+        program.display()
+    );
+    let dry = text(&run(&["self", "uninstall", "--dry-run"]).stdout);
+    assert!(dry.contains(&format!("Would {stays}")), "{dry}");
+
+    let out = run(&["self", "uninstall", "--force"]);
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(
+        said.contains("Done. nvmimic is out of the nvm folder."),
+        "{said}"
+    );
+    assert!(!said.contains("nvmimic is gone"), "{said}");
+    assert!(said.contains("brew uninstall nvmimic"), "{said}");
+    assert!(program.is_file());
+}
