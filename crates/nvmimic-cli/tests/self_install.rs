@@ -1246,3 +1246,137 @@ fn a_download_that_fails_its_checks_changes_nothing() {
     let out = home.nvmimic(&["self", "rollback", "--force"]);
     assert!(text(&out.stderr).contains("no earlier nvmimic"));
 }
+
+/// Homebrew's nvm the way it sets itself up: its scripts under the prefix,
+/// links to two of them in `$NVM_DIR`, and a `brew` whose `uninstall nvm`
+/// takes the scripts away. Returns the prefix.
+fn homebrew_nvm(home: &Home) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let prefix = home.root.join("brew");
+    let libexec = prefix.join("opt/nvm/libexec");
+    fs::create_dir_all(&libexec).unwrap();
+    fs::create_dir_all(prefix.join("bin")).unwrap();
+    fs::create_dir_all(home.nvm_dir()).unwrap();
+    for file in ["nvm.sh", "nvm-exec"] {
+        fs::copy(reference().join(file), libexec.join(file)).unwrap();
+        std::os::unix::fs::symlink(libexec.join(file), home.nvm_dir().join(file)).unwrap();
+    }
+    let brew = prefix.join("bin/brew");
+    fs::write(
+        &brew,
+        format!(
+            "#!/bin/sh\n[ \"$1 $2\" = 'uninstall nvm' ] && mv '{}' '{}'\n",
+            prefix.join("opt/nvm").display(),
+            prefix.join("opt/nvm-uninstalled").display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+    prefix
+}
+
+fn is_link(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
+}
+
+#[test]
+fn links_into_homebrew_come_back_as_files_and_never_as_dead_links() {
+    for leaving in ["eject", "uninstall"] {
+        let home = Home::new();
+        let prefix = homebrew_nvm(&home);
+        let brew: &[(&str, &Path)] = &[("HOMEBREW_PREFIX", &prefix)];
+        let out = home.nvmimic_with(&["self", "install", "--force"], brew);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert!(
+            !prefix.join("opt/nvm").exists(),
+            "brew uninstall did not run"
+        );
+
+        let out = home.nvmimic_with(&["self", leaving, "--force"], brew);
+        assert!(out.status.success(), "{leaving}: {}", text(&out.stderr));
+        for file in ["nvm.sh", "nvm-exec"] {
+            let path = home.nvm_dir().join(file);
+            assert!(!is_link(&path), "{leaving}: {file} came back as a link");
+            assert_eq!(
+                fs::read(&path).unwrap(),
+                fs::read(reference().join(file)).unwrap(),
+                "{leaving}: {file}"
+            );
+        }
+        let nvm = home.shell("nvm --version");
+        assert_eq!(text(&nvm.stdout), "0.40.8\n", "{}", text(&nvm.stderr));
+    }
+}
+
+#[test]
+fn a_link_that_still_points_somewhere_comes_back_as_that_link() {
+    let home = Home::new();
+    let kept = home.root.join("dotfiles");
+    fs::create_dir_all(&kept).unwrap();
+    fs::create_dir_all(home.nvm_dir()).unwrap();
+    for file in SCRIPTS {
+        fs::copy(reference().join(file), kept.join(file)).unwrap();
+        std::os::unix::fs::symlink(kept.join(file), home.nvm_dir().join(file)).unwrap();
+    }
+    let out = home.nvmimic(&["self", "install", "--force"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    for file in SCRIPTS {
+        // Writing nvmimic's script must not go through the link.
+        assert!(!is_link(&home.nvm_dir().join(file)), "{file}");
+        assert_eq!(
+            fs::read(kept.join(file)).unwrap(),
+            fs::read(reference().join(file)).unwrap(),
+            "{file}"
+        );
+    }
+
+    let out = home.nvmimic(&["self", "uninstall", "--force"]);
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    for file in SCRIPTS {
+        assert_eq!(
+            fs::read_link(home.nvm_dir().join(file)).unwrap(),
+            kept.join(file),
+            "{file}"
+        );
+    }
+}
+
+#[test]
+fn a_link_that_was_dead_before_the_install_is_never_put_back() {
+    for leaving in ["eject", "uninstall"] {
+        let home = Home::new();
+        fs::create_dir_all(home.nvm_dir()).unwrap();
+        let gone = home.root.join("gone/nvm.sh");
+        std::os::unix::fs::symlink(&gone, home.nvm_dir().join("nvm.sh")).unwrap();
+        let out = home.nvmimic(&["self", "install", "--force"]);
+        assert!(out.status.success(), "{}", text(&out.stderr));
+
+        let out = home.nvmimic(&["self", leaving, "--force"]);
+        let said = format!("{}{}", text(&out.stdout), text(&out.stderr));
+        assert!(
+            said.contains(&format!(
+                "nvm.sh was a link to {}, and nothing was there",
+                gone.display()
+            )),
+            "{leaving}: {said}"
+        );
+        match leaving {
+            // With nothing to put back, an eject would leave no `nvm` at all.
+            "eject" => {
+                assert_eq!(out.status.code(), Some(1), "{said}");
+                assert!(
+                    fs::read_to_string(home.nvm_dir().join("nvm.sh"))
+                        .unwrap()
+                        .contains("as nvmimic provides it")
+                );
+            }
+            _ => {
+                assert!(out.status.success(), "{said}");
+                assert!(
+                    fs::symlink_metadata(home.nvm_dir().join("nvm.sh")).is_err(),
+                    "a dead link came back"
+                );
+            }
+        }
+    }
+}

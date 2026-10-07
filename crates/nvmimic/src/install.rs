@@ -205,8 +205,11 @@ pub struct Manifest {
     pub placed: bool,
     pub data: Option<PathBuf>,
     pub cache: Option<PathBuf>,
-    /// Scripts that were nvm's and now wait in the backup folder.
+    /// Scripts that were nvm's, with a copy of each in the backup folder.
     pub backed_up: Vec<String>,
+    /// Scripts that were links when nvmimic took over, and where each one
+    /// pointed. A link goes back only while its target is still there.
+    pub links: BTreeMap<String, PathBuf>,
     /// Scripts nvmimic added where there were none.
     pub created: Vec<String>,
     /// What each script held when nvmimic wrote it, as a SHA-256 sum. A file
@@ -242,6 +245,9 @@ impl Manifest {
         for name in &self.backed_up {
             text.push_str(&format!("backup {name}\n"));
         }
+        for (name, target) in &self.links {
+            text.push_str(&format!("link {name} {}\n", target.display()));
+        }
         for name in &self.created {
             text.push_str(&format!("created {name}\n"));
         }
@@ -272,6 +278,11 @@ impl Manifest {
                 "cache" => manifest.cache = path(),
                 "placed" => manifest.placed = true,
                 "backup" => manifest.backed_up.push(value.to_string()),
+                "link" => {
+                    if let Some((name, target)) = value.split_once(' ') {
+                        manifest.links.insert(name.to_string(), target.into());
+                    }
+                }
                 "created" => manifest.created.push(value.to_string()),
                 "fingerprint" => {
                     if let Some((name, sum)) = value.split_once(' ') {
@@ -342,6 +353,26 @@ fn present(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok()
 }
 
+/// Whether `path` is a link whose target is gone.
+fn dead_link(path: &Path) -> bool {
+    present(path) && fs::metadata(path).is_err()
+}
+
+/// The name a file is written under before it is renamed into place.
+fn unfinished(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    path.with_file_name(format!(".{name}.nvmimic-new"))
+}
+
+/// Copies what `from` holds to `to`. A link is followed, so the copy is a
+/// file of its own. `to` is complete or not there at all, never half
+/// written.
+fn keep_copy(from: &Path, to: &Path) -> Result<(), String> {
+    let temporary = unfinished(to);
+    fs::copy(from, &temporary).map_err(|e| format!("{}: {e}", from.display()))?;
+    fs::rename(&temporary, to).map_err(|e| format!("{}: {e}", to.display()))
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
@@ -405,6 +436,28 @@ fn plan_binary(
     Ok(BinaryPlan::Copy(target))
 }
 
+#[cfg(test)]
+thread_local! {
+    /// The step of an install to stop before, and the steps taken so far.
+    static STOP_BEFORE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
+    static STEPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Called before each change `self install` makes on disk. A test can make
+/// one of these calls fail, which leaves the disk the way a crash or a
+/// power cut at that moment would.
+fn checkpoint() -> Result<(), String> {
+    #[cfg(test)]
+    {
+        let step = STEPS.get();
+        STEPS.set(step + 1);
+        if STOP_BEFORE.get() == Some(step) {
+            return Err("interrupted".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// `nvmimic self install`. `running` is the program being run.
 pub fn self_install(
     env: &Env,
@@ -430,7 +483,8 @@ pub fn self_install(
     }
     let plan = plan_binary(env, dirs, running, &manifest)?;
 
-    if let Some(prefix) = env.homebrew_nvm() {
+    let homebrew = env.homebrew_nvm();
+    if let Some(prefix) = &homebrew {
         ui.say(&format!(
             "Homebrew's nvm is installed at {}.",
             prefix.join("opt/nvm").display()
@@ -450,19 +504,6 @@ pub fn self_install(
         }
         if options.dry_run {
             ui.say("Would run `brew uninstall nvm`.");
-        } else {
-            let brew = prefix.join("bin/brew");
-            let brew = if brew.is_file() {
-                brew
-            } else {
-                PathBuf::from("brew")
-            };
-            let status = Command::new(&brew).args(["uninstall", "nvm"]).status();
-            if !status.is_ok_and(|status| status.success()) {
-                return Err(
-                    "`brew uninstall nvm` did not finish, so nothing was changed.".to_string(),
-                );
-            }
         }
     }
 
@@ -546,9 +587,9 @@ pub fn self_install(
         ui.say(&format!("Would install nvmimic for {}.", nvm_dir.display()));
         for name in &existing {
             ui.say(&format!(
-                "Would move {} to {}.",
+                "Would keep a copy of {} in {}.",
                 nvm_dir.join(name).display(),
-                backup.join(name).display()
+                backup.display()
             ));
         }
         match &plan {
@@ -562,15 +603,33 @@ pub fn self_install(
         return Ok(());
     }
 
+    // From here on the order is what keeps a stop at any moment harmless,
+    // whether it is a crash, a power cut or Ctrl-C. nvm's scripts are copied
+    // first, and the manifest that names the copies is written before
+    // anything of nvm's is replaced or uninstalled. So each of nvm's scripts
+    // is always in `$NVM_DIR` or in a backup the manifest knows about, and
+    // `self install` and `self uninstall` both work on whatever a stop left.
     for dir in [&nvm_dir, &dirs.data, &backup, &dirs.cache] {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
+    let mut copied: Vec<&str> = Vec::new();
     for name in SCRIPTS {
         let path = nvm_dir.join(name);
         if existing.contains(name) {
-            move_file(&path, &backup.join(name))?;
-            if !manifest.backed_up.iter().any(|n| n == name) {
-                manifest.backed_up.push(name.to_string());
+            // Homebrew's nvm puts links into `$NVM_DIR` that point into its
+            // own folder, and `brew uninstall nvm` deletes what they point
+            // to. The copy holds the script itself, taken before that.
+            match fs::read_link(&path) {
+                Ok(target) => manifest.links.insert(name.to_string(), target),
+                Err(_) => manifest.links.remove(*name),
+            };
+            if !dead_link(&path) {
+                checkpoint()?;
+                keep_copy(&path, &backup.join(name))?;
+                copied.push(name);
+                if !manifest.backed_up.iter().any(|n| n == name) {
+                    manifest.backed_up.push(name.to_string());
+                }
             }
             // A script nvm has since put there is nvm's to keep on uninstall.
             manifest.created.retain(|n| n != name);
@@ -579,22 +638,16 @@ pub fn self_install(
         }
     }
 
-    ui.say(&format!("Installing nvmimic for {}.", nvm_dir.display()));
-    if let BinaryPlan::Copy(target) = &plan {
-        install_binary(running, target)?;
-        ui.say(&format!("The nvmimic program is at {}.", target.display()));
-    }
-
-    for name in SCRIPTS {
-        let text = script_text(name, plan.path());
-        let mode = if *name == "nvm-exec" { 0o755 } else { 0o644 };
-        write_file(&nvm_dir.join(name), &text, mode)?;
+    let scripts: Vec<(&str, String)> = SCRIPTS
+        .iter()
+        .map(|name| (*name, script_text(name, plan.path())))
+        .collect();
+    for (name, text) in &scripts {
         manifest
             .fingerprints
             .insert(name.to_string(), fingerprint(text.as_bytes()));
     }
     manifest.ejected = false;
-
     manifest.version = env!("CARGO_PKG_VERSION").to_string();
     manifest.nvm_dir = Some(nvm_dir.clone());
     manifest.placed = match &plan {
@@ -605,7 +658,41 @@ pub fn self_install(
     manifest.binary = Some(plan.path().to_path_buf());
     manifest.data = Some(dirs.data.clone());
     manifest.cache = Some(dirs.cache.clone());
+    checkpoint()?;
     write_file(&dirs.manifest(), &manifest.render(), 0o644)?;
+
+    if let Some(prefix) = &homebrew {
+        let brew = prefix.join("bin/brew");
+        let brew = if brew.is_file() {
+            brew
+        } else {
+            PathBuf::from("brew")
+        };
+        let status = Command::new(&brew).args(["uninstall", "nvm"]).status();
+        if !status.is_ok_and(|status| status.success()) {
+            // Nothing of nvm's was touched yet. A first install leaves no
+            // record behind either.
+            if !reinstall {
+                for name in copied {
+                    let _ = fs::remove_file(backup.join(name));
+                }
+                let _ = fs::remove_file(dirs.manifest());
+            }
+            return Err("`brew uninstall nvm` did not finish, so nothing was changed.".to_string());
+        }
+    }
+
+    ui.say(&format!("Installing nvmimic for {}.", nvm_dir.display()));
+    if let BinaryPlan::Copy(target) = &plan {
+        checkpoint()?;
+        install_binary(running, target)?;
+        ui.say(&format!("The nvmimic program is at {}.", target.display()));
+    }
+    for (name, text) in &scripts {
+        let mode = if *name == "nvm-exec" { 0o755 } else { 0o644 };
+        checkpoint()?;
+        write_file(&nvm_dir.join(name), text, mode)?;
+    }
 
     ui.say("Done.");
     if let Some(bin_dir) = plan.path().parent()
@@ -786,6 +873,15 @@ impl Step {
     }
 }
 
+/// What eject and uninstall say about a script that was a link with nothing
+/// behind it: a dead link is never put back.
+fn nothing_behind(name: &str, target: &Path) -> String {
+    format!(
+        "{name} was a link to {}, and nothing was there to keep a copy of, so there is nothing to put back for it.",
+        target.display()
+    )
+}
+
 /// `nvmimic self eject`.
 pub fn self_eject(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(), String> {
     leave(env, options, ui, Leaving::Eject)
@@ -818,12 +914,28 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
     let data = manifest.data.clone().unwrap_or_else(|| dirs.data.clone());
     let cache = manifest.cache.clone().unwrap_or_else(|| dirs.cache.clone());
     let placed = manifest.placed.then(|| binary.clone());
-    // A backup someone deleted can't go back.
+    // A backup someone deleted can't go back, and neither can one that is
+    // a link to nothing, which is what an earlier nvmimic kept of a link
+    // into Homebrew.
     let mut restore: Vec<String> = manifest
         .backed_up
         .iter()
-        .filter(|name| present(&backup.join(name)))
+        .filter(|name| fs::metadata(backup.join(name)).is_ok())
         .cloned()
+        .collect();
+    // Scripts that were links with nothing behind them, and where each
+    // pointed. There is nothing of nvm's to put back for these.
+    let mut dead: Vec<(&str, PathBuf)> = SCRIPTS
+        .iter()
+        .filter(|name| !restore.iter().any(|kept| kept == *name))
+        .filter_map(|name| {
+            let kept = backup.join(name);
+            match dead_link(&kept) {
+                true => fs::read_link(&kept).ok(),
+                false => manifest.links.get(*name).cloned(),
+            }
+            .map(|target| (*name, target))
+        })
         .collect();
 
     if how == Leaving::Eject {
@@ -831,6 +943,16 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             return Err(format!(
                 "nvmimic's scripts are already out of {}. Nothing was changed.",
                 nvm_dir.display()
+            ));
+        }
+        if restore.is_empty() && !dead.is_empty() {
+            let links: Vec<String> = dead
+                .iter()
+                .map(|(name, target)| nothing_behind(name, target))
+                .collect();
+            return Err(format!(
+                "there is no nvm to go back to. {} Nothing was changed.",
+                links.join(" ")
             ));
         }
         if restore.is_empty() {
@@ -898,6 +1020,7 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             }
         }
         restore.retain(|name| !not_ours.contains(&name.as_str()));
+        dead.retain(|(name, _)| !not_ours.contains(name));
         if not_ours.len() < SCRIPTS.len() {
             steps.push(Step::new(format!(
                 "remove nvmimic's scripts from {}",
@@ -950,6 +1073,9 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
         )),
     }
     if how != Leaving::Purge {
+        for (name, target) in &dead {
+            ui.say(&nothing_behind(name, target));
+        }
         ui.say("Your Node versions and aliases stay as they are.");
     }
 
@@ -1019,12 +1145,40 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             }
         }
         for name in &restore {
-            move_file(&backup.join(name), &nvm_dir.join(name))?;
+            let kept = backup.join(name);
+            let path = nvm_dir.join(name);
+            match manifest.links.get(name) {
+                // A link goes back as the link it was while its target is
+                // still there. `join` leaves a full path as it is.
+                Some(target) if fs::metadata(nvm_dir.join(target)).is_ok() => {
+                    std::os::unix::fs::symlink(target, &path)
+                        .map_err(|e| format!("{}: {e}", path.display()))?;
+                    let _ = fs::remove_file(&kept);
+                }
+                Some(target) => {
+                    move_file(&kept, &path)?;
+                    ui.say(&format!(
+                        "{name} was a link to {}, which is gone. It comes back as a file with what the link pointed to.",
+                        target.display()
+                    ));
+                }
+                None => move_file(&kept, &path)?,
+            }
+        }
+        for name in SCRIPTS {
+            let kept = backup.join(name);
+            if dead_link(&kept) {
+                let _ = fs::remove_file(&kept);
+            }
+            // What a stopped install can leave half written.
+            let _ = fs::remove_file(unfinished(&kept));
+            let _ = fs::remove_file(unfinished(&nvm_dir.join(name)));
         }
     }
 
     if how == Leaving::Eject {
         manifest.backed_up.clear();
+        manifest.links.clear();
         manifest.created.clear();
         manifest.fingerprints.clear();
         manifest.ejected = true;
@@ -1053,6 +1207,7 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
         let _ = fs::remove_file(binary);
     }
     let _ = fs::remove_file(dirs.manifest());
+    let _ = fs::remove_file(unfinished(&dirs.manifest()));
     if let Some(version) = &manifest.previous {
         let _ = fs::remove_file(crate::update::previous_path(dirs, version));
     }
@@ -1121,9 +1276,14 @@ fn on_path(env: &Env, dir: &Path) -> bool {
         .is_some_and(|path| std::env::split_paths(path).any(|entry| entry == dir))
 }
 
+/// Writes a file beside `path` and renames it into place. Whatever stops
+/// the program, `path` holds the old contents or the new, never part of
+/// each. A link at `path` is replaced, not written through.
 pub(crate) fn write_file(path: &Path, text: &str, mode: u32) -> Result<(), String> {
-    fs::write(path, text).map_err(|e| format!("{}: {e}", path.display()))?;
-    set_mode(path, mode)
+    let temporary = unfinished(path);
+    fs::write(&temporary, text).map_err(|e| format!("{}: {e}", temporary.display()))?;
+    set_mode(&temporary, mode)?;
+    fs::rename(&temporary, path).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 pub(crate) fn set_mode(path: &Path, mode: u32) -> Result<(), String> {
@@ -1259,6 +1419,11 @@ mod tests {
             data: Some("/h/.local/share/nvmimic".into()),
             cache: Some("/h/.cache/nvmimic".into()),
             backed_up: vec!["nvm.sh".into()],
+            links: [(
+                "nvm.sh".to_string(),
+                PathBuf::from("/brew/opt/my nvm/nvm.sh"),
+            )]
+            .into(),
             created: vec!["bash_completion".into()],
             fingerprints: [("nvm.sh".to_string(), "ab12".to_string())].into(),
             ejected: true,
@@ -1283,6 +1448,96 @@ mod tests {
             self.asked.push(question.to_string());
             self.answer
         }
+    }
+
+    /// A throwaway home with nvm's three scripts in `~/.nvm`, each holding
+    /// its own name.
+    fn home_with_nvm(label: &str) -> Env {
+        let root = std::env::temp_dir().join(format!("nvmimic-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join(".nvm")).unwrap();
+        for name in SCRIPTS {
+            fs::write(root.join(".nvm").join(name), format!("nvm's own {name}\n")).unwrap();
+        }
+        fs::write(root.join("program"), "a stand-in for the nvmimic program\n").unwrap();
+        let home = root.to_string_lossy().into_owned();
+        Env {
+            home: root.clone(),
+            nvm_dir: None,
+            xdg_config_home: None,
+            homebrew_prefix: Some(format!("{home}/no-homebrew")),
+            cargo_home: None,
+            path: None,
+            dirs: Dirs::resolve(|name| (name == "HOME").then(|| home.clone())),
+            install_path_given: false,
+        }
+    }
+
+    fn quiet() -> Recorded {
+        Recorded {
+            said: Vec::new(),
+            asked: Vec::new(),
+            answer: true,
+        }
+    }
+
+    /// Whether `$NVM_DIR` holds nvm's own three scripts again.
+    fn nvm_is_back(env: &Env) -> bool {
+        SCRIPTS.iter().all(|name| {
+            fs::read_to_string(env.nvm_dir().join(name))
+                .is_ok_and(|text| text == format!("nvm's own {name}\n"))
+        })
+    }
+
+    #[test]
+    fn an_install_stopped_at_any_step_loses_none_of_nvms_scripts() {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let mut stopped_at = 0;
+        loop {
+            // Stop the install before step `stopped_at`, then do what
+            // someone would do next: remove nvmimic, or install it again
+            // and remove it later.
+            let mut finished = false;
+            for install_again in [false, true] {
+                let env = home_with_nvm("stopped");
+                let program = env.home.join("program");
+                STEPS.set(0);
+                STOP_BEFORE.set(Some(stopped_at));
+                let result = self_install(&env, &program, &force, &mut quiet());
+                STOP_BEFORE.set(None);
+                finished = result.is_ok();
+                if finished {
+                    break;
+                }
+                assert_eq!(result, Err("interrupted".to_string()));
+
+                if install_again {
+                    self_install(&env, &program, &force, &mut quiet())
+                        .unwrap_or_else(|e| panic!("step {stopped_at}, second install: {e}"));
+                }
+                let installed = Manifest::read(env.dirs().unwrap()).is_some();
+                assert!(installed || !install_again);
+                if installed {
+                    self_uninstall(&env, &force, &mut quiet())
+                        .unwrap_or_else(|e| panic!("step {stopped_at}, uninstall: {e}"));
+                }
+                assert!(
+                    nvm_is_back(&env),
+                    "stopped before step {stopped_at} (install again: {install_again}): nvm's \
+                     scripts did not come back"
+                );
+            }
+            if finished {
+                break;
+            }
+            stopped_at += 1;
+        }
+        // Three scripts to keep, a manifest, a program and three scripts
+        // to write: an install has at least that many steps.
+        assert!(stopped_at >= 8, "only {stopped_at} steps");
     }
 
     #[test]

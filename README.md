@@ -59,10 +59,15 @@ cargo build --release
 `self install` sets nvmimic up for `$NVM_DIR` (usually `~/.nvm`). You don't
 need nvm first. With no nvm on the machine, nvmimic makes that folder and
 you start from scratch. If nvm is already there, nvmimic takes it over: it keeps your Node versions, aliases and
-settings, moves nvm's own scripts into a backup folder, and offers to copy
+settings, keeps a copy of nvm's own scripts in a backup folder, and offers to copy
 the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
 load Homebrew's copy would keep running the real nvm.
+
+You can stop `self install` at any moment, and a crash or a power cut can
+too. It copies nvm's scripts and writes down where the copies are before it
+replaces anything, so nvm's scripts are never lost. Run `nvmimic self
+install` again to finish, or `nvmimic self uninstall` to go back.
 
 `self install` also copies the nvmimic program to `~/.local/bin/nvmimic`.
 That way you can type `nvmimic self install` again later without hunting for
@@ -162,6 +167,13 @@ If you ran nvm's own install script after nvmimic took over, the scripts in
 the nvm folder are nvm's again, and likely newer than the ones nvmimic kept.
 `self eject` and `self uninstall` leave those where they are and tell you
 so. They don't put the older copies back over them.
+
+Homebrew's nvm puts links into the nvm folder that point into Homebrew's
+own folder, and `brew uninstall nvm` deletes what they point to. nvmimic
+copies the scripts themselves before that happens, so `self eject` and
+`self uninstall` give you working files back. A link whose target is still
+there goes back as a link. A link that pointed at nothing before nvmimic
+came along is never put back, and both commands tell you about it.
 
 If Homebrew or cargo installed nvmimic, `self uninstall` leaves the program
 alone and tells you the command that removes it. Run `nvmimic self
