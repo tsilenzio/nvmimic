@@ -166,12 +166,24 @@ fn skip_reason<'a>(skipped: &'a [(String, String)], path: &str) -> Option<&'a st
 /// installs real Node releases.
 const NETWORK: &[&str] = &["real-node", "real-node-npm"];
 
+/// The reason of a test that runs only on a system with a `manpath`
+/// program, see the skip list.
+const NEEDS_MANPATH: &str = "needs-manpath";
+
+/// Whether one of the folders every sandbox has on its `PATH` holds a
+/// `manpath` program.
+fn has_manpath() -> bool {
+    ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
+        .iter()
+        .any(|dir| Path::new(dir).join("manpath").is_file())
+}
+
 /// Whether a test belongs in this run.
 fn runs_now(skipped: &[(String, String)], path: &str) -> bool {
     let reason = skip_reason(skipped, path);
     match crate::mirror::network_pass() {
         true => reason.is_some_and(|reason| NETWORK.contains(&reason)),
-        false => reason.is_none(),
+        false => reason.is_none_or(|reason| reason == NEEDS_MANPATH && has_manpath()),
     }
 }
 

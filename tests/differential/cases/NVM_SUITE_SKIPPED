@@ -27,6 +27,11 @@
 #                  registry at once. npm prints them in whatever order they
 #                  arrive, so in the network pass only the exit status and
 #                  the files are compared
+#   needs-manpath  defines a shell function named `manpath` and expects nvm to
+#                  call it. nvm finds a function of that name, and nvmimic's
+#                  program finds only a `manpath` program. Where the system
+#                  has that program, as macOS does, both end up the same and
+#                  the test runs. Where it has none, the test is left out
 #
 # A line that names one test wins over a line that names its directory.
 installer: install_script/
@@ -98,3 +103,4 @@ function-hook: installation_node/install hook
 function-as-tool: fast/Unit tests/nvm_clang_version
 copied-lines: fast/Unit tests/nvm_command_info
 network: fast/Unit tests/nvm_download
+needs-manpath: fast/Running 'nvm use' should not clobber the default MANPATH
