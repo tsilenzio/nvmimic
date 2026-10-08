@@ -30,6 +30,8 @@ fn shells() -> impl Iterator<Item = (&'static str, &'static str)> {
 
 struct Home {
     root: PathBuf,
+    /// `XDG_CONFIG_HOME` for the shells this home starts, if any.
+    config: Option<PathBuf>,
 }
 
 impl Home {
@@ -42,7 +44,7 @@ impl Home {
         // A link and not a copy: macOS scans every new program it runs.
         std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_nvmimic"), root.join("bin/nvmimic"))
             .unwrap();
-        Home { root }
+        Home { root, config: None }
     }
 
     /// The nvmimic program as the startup line names it.
@@ -92,6 +94,9 @@ impl Home {
             .current_dir(&self.root);
         if let Some(nvm_dir) = nvm_dir {
             command.env("NVM_DIR", nvm_dir);
+        }
+        if let Some(config) = &self.config {
+            command.env("XDG_CONFIG_HOME", config);
         }
         let output = command.output().unwrap();
         if !keep {
@@ -220,6 +225,25 @@ fn without_nvm_dir_the_folder_is_home_nvm() {
     for (shell, name) in shells() {
         let home = Home::new();
         let nvm_dir = home.nvm_dir(".nvm", "v22.1.0");
+        let loaded = home.load(shell, &format!("init {name}"), None, false);
+        assert_eq!(loaded.nvm_dir, nvm_dir.display().to_string(), "{shell}");
+        assert!(
+            loaded.uses(&nvm_dir, "v22.1.0"),
+            "{shell}: {}",
+            loaded.stderr
+        );
+    }
+}
+
+#[test]
+fn without_nvm_dir_the_folder_is_the_one_nvms_installer_would_pick() {
+    // nvm's installer uses `$XDG_CONFIG_HOME/nvm` when that variable is
+    // set, and `~/.nvm` only when it isn't.
+    for (shell, name) in shells() {
+        let mut home = Home::new();
+        home.nvm_dir(".nvm", "v20.3.0");
+        let nvm_dir = home.nvm_dir("config/nvm", "v22.1.0");
+        home.config = Some(home.root.join("config"));
         let loaded = home.load(shell, &format!("init {name}"), None, false);
         assert_eq!(loaded.nvm_dir, nvm_dir.display().to_string(), "{shell}");
         assert!(

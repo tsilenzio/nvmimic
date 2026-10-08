@@ -9,7 +9,6 @@ use nvmimic::shell::{self, Dialect, Vars};
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::ffi::OsString;
-use std::path::PathBuf;
 use std::process::ExitCode;
 
 /// Variables the shell functions hand over because nvm reads them whether
@@ -192,13 +191,16 @@ fn init(named: Option<Named>) -> ExitCode {
     // `nvm.sh` describes the shell it runs `init` for. Typed directly,
     // nothing does, and there is no `nvm.sh` whose folder could be the nvm
     // folder either. That folder is then the one nvmimic was set up for,
-    // or `~/.nvm`.
+    // or the one nvm's installer would pick: `$XDG_CONFIG_HOME/nvm` when
+    // that variable is set, and `~/.nvm` when it isn't.
     let described = init_shell(cache.clone());
     let nvm_dir = match described {
         Some(_) => None,
-        None => manifest
-            .and_then(|manifest| manifest.nvm_dir)
-            .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".nvm"))),
+        None => manifest.and_then(|manifest| manifest.nvm_dir).or_else(|| {
+            let env = nvmimic::install::Env::from_process();
+            let known = env.xdg_config_home.is_some() || !env.home.as_os_str().is_empty();
+            known.then(|| env.nvm_dir())
+        }),
     };
     let load = match (described, named) {
         (Some(shell), _) => nvmimic::init::load(FORWARDED, shell, &NvmDirBackend),
@@ -286,7 +288,9 @@ any other shell it starts nvmimic a second time and gets the same result.
 Without a name it always takes that second start.
 
 Loaded this way, the nvm folder is $NVM_DIR if your shell has one, then the
-folder `nvmimic self install` set up, then ~/.nvm.";
+folder `nvmimic self install` set up. With neither, it's the folder nvm's
+own installer picks: $XDG_CONFIG_HOME/nvm if that variable is set, and
+~/.nvm if it isn't.";
 
 const USAGE: &str = "\
 usage: nvmimic <command>

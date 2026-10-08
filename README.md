@@ -105,7 +105,9 @@ A few things to know about the second one:
   running it. In any other shell it starts nvmimic a second time and ends
   up in the same place, without a warning.
 - If your shell has no `NVM_DIR`, the nvm folder is the one `self install`
-  set up. If there was no `self install`, it's `~/.nvm`.
+  set up. If there was no `self install`, it's the folder nvm's own
+  installer picks: `$XDG_CONFIG_HOME/nvm` when `XDG_CONFIG_HOME` is set,
+  and `~/.nvm` when it isn't.
 - It loads nvmimic even after `nvmimic self eject`, and it fails once
   nvmimic is removed. Take the line out when you go back to official nvm.
 
