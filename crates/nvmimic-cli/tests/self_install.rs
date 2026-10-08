@@ -1389,7 +1389,15 @@ fn a_program_a_package_manager_installed_is_said_to_stay_before_and_after() {
     let cellar = home.root.join("brew/Cellar/nvmimic/0.1.0/bin");
     fs::create_dir_all(&cellar).unwrap();
     let program = cellar.join("nvmimic");
-    fs::copy(env!("CARGO_BIN_EXE_nvmimic"), &program).unwrap();
+    // `cp` and not `fs::copy`: Linux refuses to start a program that any
+    // process still has open for writing, and another test forking at the
+    // wrong moment would hold this one open.
+    let copied = Command::new("cp")
+        .arg(env!("CARGO_BIN_EXE_nvmimic"))
+        .arg(&program)
+        .status()
+        .unwrap();
+    assert!(copied.success());
     let run = |args: &[&str]| {
         Command::new(&program)
             .args(args)
