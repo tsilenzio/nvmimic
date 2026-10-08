@@ -269,88 +269,63 @@ fn init_shell(cache_dir: Option<std::path::PathBuf>) -> Option<nvmimic::init::Sh
 const INIT_USAGE: &str = "\
 usage: nvmimic init [bash|zsh|sh|dash]
 
-Prints the shell code that makes `nvm` work in a shell: nvm's functions, and
-then the lines that switch to your default Node version. A shell has to run
-that code itself, with `eval`.
-
-Most people never type this. `nvmimic self install` puts an `nvm.sh` into
-your nvm folder that runs it for you, and your startup file loads that
-`nvm.sh` the way it always did.
-
-You can also write the line into your startup file yourself, with the name
-of the shell that file belongs to:
+Prints the shell code that makes `nvm` work, for a shell to run with `eval`.
+The nvm.sh that `nvmimic self install` writes does that for you. To do it
+yourself, put this line in your startup file, with the name of your shell:
 
   eval \"$(nvmimic init zsh)\"
 
-The name lets nvmimic do everything in one start of the program. A wrong
-name does no harm. The code checks which shell is really running it, and in
-any other shell it starts nvmimic a second time and gets the same result.
-Without a name it always takes that second start.
-
-Loaded this way, the nvm folder is $NVM_DIR if your shell has one, then the
-folder `nvmimic self install` set up. With neither, it's the folder nvm's
-own installer picks: $XDG_CONFIG_HOME/nvm if that variable is set, and
-~/.nvm if it isn't.";
+The README says what the name is for and which nvm folder gets used.";
 
 const USAGE: &str = "\
 usage: nvmimic <command>
 
 nvmimic does nvm's job, only faster. In your shell you keep typing `nvm`.
-The `nvmimic` command sets nvmimic up, keeps it up to date and removes it
-again.
+This command sets nvmimic up, keeps it up to date and removes it again.
 
-commands:
   self install     set nvmimic up for your nvm folder ($NVM_DIR, usually ~/.nvm)
+  self eject       put official nvm's scripts back and keep nvmimic for later
+  self uninstall   remove nvmimic again
   self update      get the newest nvmimic
   self rollback    go back to the nvmimic from before the last update
-  self eject       put nvm's own scripts back and keep nvmimic for later
-  self uninstall   remove nvmimic again
   init [shell]     print the shell code that loads nvmimic, for `eval`
-  help             show this text
   --version        print nvmimic's own version
 
-Add --help to any `self` command to read what it does, step by step.";
+Run nvmimic <command> --help for details.";
 
-const INSTALL_USAGE: &str = "\
-usage: nvmimic self install [--force] [--dry-run]
+const SELF_USAGE: &str = "\
+usage: nvmimic self <command> [--force] [--dry-run]
 
-Sets nvmimic up, so that `nvm` in your shell is nvmimic.
-
-If you have no nvm yet, this makes the nvm folder and puts nvmimic's nvm.sh,
-nvm-exec and bash_completion into it. Then it shows the two lines to add to
-your shell's startup file.
-
-If nvm is already there, nvmimic takes over from it. Your Node versions,
-aliases and settings stay as they are. Only nvm's own three scripts are
-swapped. They are kept as a backup, and `nvmimic self uninstall` puts them
-back.
-
-Either way, the nvmimic program is copied to ~/.local/bin/nvmimic, so you
-can run it again later. Run this again any time to repair the setup, for
-example after nvm's own install script was run over it.
+  install     set nvmimic up for your nvm folder ($NVM_DIR, usually ~/.nvm)
+  eject       put official nvm's scripts back and keep nvmimic for later
+  uninstall   remove nvmimic again
+  update      get the newest nvmimic
+  rollback    go back to the nvmimic from before the last update
 
   --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing
 
-Settings, as environment variables:
-  NVM_DIR                the nvm folder, if it isn't ~/.nvm
-  NVMIMIC_INSTALL_PATH   where the nvmimic program goes
-  NVMIMIC_STATE_DIR, NVMIMIC_CACHE_DIR
-                         where nvmimic keeps its other files";
+Run nvmimic self <command> --help for details.";
+
+const INSTALL_USAGE: &str = "\
+usage: nvmimic self install [--force] [--dry-run]
+
+Sets nvmimic up, so that `nvm` in your shell is nvmimic. If official nvm is
+already in your nvm folder, its Node versions and aliases stay, and its three
+scripts are kept so that `nvmimic self uninstall` can put them back.
+
+  --force     don't ask, go ahead
+  --dry-run   show what would happen and change nothing
+
+NVM_DIR names the nvm folder if it isn't ~/.nvm. The README lists the
+settings that move nvmimic's own files.";
 
 const EJECT_USAGE: &str = "\
 usage: nvmimic self eject [--force] [--dry-run]
 
-Hands your nvm folder back to nvm. nvmimic's three scripts leave the folder
-and nvm's own come back, so `nvm` in a new shell is nvm again. The nvmimic
-program stays installed, and `nvmimic self install` takes over again
-whenever you like.
-
-This only works if nvmimic took over from an nvm, because that's when it
-kept nvm's scripts. If there was no nvm before nvmimic, it says so and
-changes nothing.
-
-It shows what it's about to do and asks first.
+Hands your nvm folder back to official nvm and keeps the nvmimic program, so
+`nvmimic self install` can take over again later. It needs an official nvm
+to go back to, which is one that was there before nvmimic.
 
   --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
@@ -358,38 +333,19 @@ It shows what it's about to do and asks first.
 const UNINSTALL_USAGE: &str = "\
 usage: nvmimic self uninstall [--purge] [--force] [--dry-run]
 
-Removes nvmimic. Your Node versions, aliases and settings stay as they are,
-and so does the nvm folder itself.
+Removes nvmimic and puts official nvm's scripts back if nvmimic replaced
+any. Your Node versions, aliases and the nvm folder itself stay.
 
-If nvmimic took over from an nvm, that nvm's scripts come back and it works
-as it did before. If there was no nvm before nvmimic, the nvm folder keeps
-your Node versions but has no `nvm` command any more.
-
-If you changed one of nvmimic's scripts by hand, your version isn't thrown
-away. It's renamed, for example nvm.sh becomes nvm.sh.nvmimic-saved.
-
-It shows what it's about to do and asks first. Where there's no terminal to
-ask at, it changes nothing unless you pass --force.
-
-  --purge     also delete the whole nvm folder: every Node version, every
-              alias, and nvmimic's backup of nvm's scripts. nvm is not put
-              back. The folder and its size are shown before you're asked
+  --purge     also delete the whole nvm folder, every Node version and
+              alias in it. Official nvm is not put back
   --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
 
 const UPDATE_USAGE: &str = "\
 usage: nvmimic self update [--force] [--dry-run]
 
-Gets the newest nvmimic and swaps it in. This updates nvmimic only. It has
-nothing to do with which nvm version nvmimic copies, or with your Node
-versions.
-
-The download is checked before anything changes: its checksum, that
-nvmimic's developer signed it, and that it runs. The nvmimic you have now is
-kept, and `nvmimic self rollback` brings it back.
-
-If Homebrew or cargo installed nvmimic, this tells you the command to use
-instead.
+Gets the newest nvmimic, checks the download and swaps it in. The nvmimic
+you have now is kept, and `nvmimic self rollback` brings it back.
 
   --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
@@ -397,24 +353,22 @@ instead.
 const ROLLBACK_USAGE: &str = "\
 usage: nvmimic self rollback [--force] [--dry-run]
 
-Goes back to the nvmimic you had before the last `nvmimic self update`. The
-one you leave is kept in its place, so running this twice gets you back
-where you started.
+Goes back to the nvmimic you had before the last `nvmimic self update`.
+Running it twice gets you back where you started.
 
   --force     don't ask, go ahead
   --dry-run   show what would happen and change nothing";
 
-/// The help for `nvmimic self <action>`, or for `self` alone.
-fn self_usage(action: Option<&str>) -> String {
+/// The help for `nvmimic self <action>`, or the list of them for `self`
+/// alone.
+fn self_usage(action: Option<&str>) -> &'static str {
     match action {
-        Some("install") => INSTALL_USAGE.to_string(),
-        Some("eject") => EJECT_USAGE.to_string(),
-        Some("uninstall") => UNINSTALL_USAGE.to_string(),
-        Some("update") => UPDATE_USAGE.to_string(),
-        Some("rollback") => ROLLBACK_USAGE.to_string(),
-        _ => format!(
-            "{INSTALL_USAGE}\n\n{UPDATE_USAGE}\n\n{ROLLBACK_USAGE}\n\n{EJECT_USAGE}\n\n{UNINSTALL_USAGE}"
-        ),
+        Some("install") => INSTALL_USAGE,
+        Some("eject") => EJECT_USAGE,
+        Some("uninstall") => UNINSTALL_USAGE,
+        Some("update") => UPDATE_USAGE,
+        Some("rollback") => ROLLBACK_USAGE,
+        _ => SELF_USAGE,
     }
 }
 
@@ -448,7 +402,7 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
                 Some(named) => init(Some(named)),
                 None => {
                     eprintln!(
-                        "nvmimic: `init` doesn't know the shell `{shell}`. It knows {}.",
+                        "nvmimic: init doesn't know the shell {shell}. It knows {}. Run nvmimic init --help.",
                         Named::NAMES.join(", ")
                     );
                     ExitCode::from(2)
@@ -469,8 +423,13 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
             flags @ ..,
         ] => (*action, flags),
         _ => {
+            // Only `self` has commands of its own to point at.
+            let help = match words.first() {
+                Some(&"self") => "nvmimic self --help",
+                _ => "nvmimic --help",
+            };
             eprintln!(
-                "nvmimic: there is no command `{}`.\n\n{USAGE}",
+                "nvmimic: there is no command {}. Run {help}.",
                 words.join(" ")
             );
             return ExitCode::from(2);
@@ -485,8 +444,7 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
             && !(action == "uninstall" && **flag == "--purge")
     }) {
         eprintln!(
-            "nvmimic: `self {action}` has no option `{unknown}`.\n\n{}",
-            self_usage(Some(action))
+            "nvmimic: self {action} has no option {unknown}. Run nvmimic self {action} --help."
         );
         return ExitCode::from(2);
     }

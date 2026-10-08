@@ -449,22 +449,81 @@ fn help_reads_right_with_and_without_an_nvm() {
     let out = home.nvmimic(&["self", "install", "--help"]);
     let help = text(&out.stdout);
     assert!(out.status.success());
-    assert!(help.contains("If you have no nvm yet"), "{help}");
-    assert!(help.contains("If nvm is already there"), "{help}");
+    assert!(help.starts_with("usage: nvmimic self install"), "{help}");
     assert!(!home.has_own_files(), "asking for help installs nothing");
-    let out = home.nvmimic(&["self", "uninstall", "--help"]);
-    assert!(text(&out.stdout).contains("If there was no nvm before nvmimic"));
-
-    let out = home.nvmimic(&["self", "install", "--nope"]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(text(&out.stderr).contains("has no option `--nope`"));
-    let out = home.nvmimic(&["frobnicate"]);
-    assert_eq!(out.status.code(), Some(2));
     // The internal entry point stays out of every help text.
     for args in [&["help"][..], &["self", "--help"]] {
         assert!(!text(&home.nvmimic(args).stdout).contains("__internal"));
     }
 }
+
+#[test]
+fn every_help_screen_of_ours_is_short() {
+    let home = Home::new();
+    let mut screens: Vec<Vec<&str>> = vec![vec!["--help"], vec!["self"], vec!["init", "--help"]];
+    for command in SELF_COMMANDS {
+        screens.push(vec!["self", command, "--help"]);
+    }
+    for args in &screens {
+        let out = home.nvmimic(args);
+        let help = text(&out.stdout);
+        assert!(out.status.success(), "{args:?}");
+        assert!(help.starts_with("usage: nvmimic"), "{args:?}: {help}");
+        assert!(help.lines().count() <= 14, "{args:?} is long:\n{help}");
+    }
+}
+
+#[test]
+fn self_alone_lists_its_commands_in_order() {
+    let home = Home::new();
+    let index = text(&home.nvmimic(&["self", "--help"]).stdout);
+    assert_eq!(index, text(&home.nvmimic(&["self"]).stdout));
+    let commands: Vec<&str> = index
+        .lines()
+        .filter_map(|line| line.strip_prefix("  ")?.split_whitespace().next())
+        .filter(|word| !word.starts_with('-'))
+        .collect();
+    assert_eq!(commands, SELF_COMMANDS);
+    for flag in ["--force", "--dry-run"] {
+        assert!(index.contains(flag), "{index}");
+    }
+    assert!(index.ends_with("Run nvmimic self <command> --help for details.\n"));
+}
+
+#[test]
+fn a_mistake_gets_one_line_that_says_where_to_look() {
+    let home = Home::new();
+    let mistakes: [(&[&str], &str); 5] = [
+        (
+            &["self", "install", "--bogus"],
+            "nvmimic: self install has no option --bogus. Run nvmimic self install --help.\n",
+        ),
+        (
+            &["self", "eject", "--purge"],
+            "nvmimic: self eject has no option --purge. Run nvmimic self eject --help.\n",
+        ),
+        (
+            &["frobnicate"],
+            "nvmimic: there is no command frobnicate. Run nvmimic --help.\n",
+        ),
+        (
+            &["self", "frobnicate"],
+            "nvmimic: there is no command self frobnicate. Run nvmimic self --help.\n",
+        ),
+        (
+            &["init", "fish"],
+            "nvmimic: init doesn't know the shell fish. It knows bash, zsh, sh, dash. Run nvmimic init --help.\n",
+        ),
+    ];
+    for (args, message) in mistakes {
+        let out = home.nvmimic(args);
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert_eq!(text(&out.stderr), message);
+        assert_eq!(text(&out.stdout), "");
+    }
+}
+
+const SELF_COMMANDS: [&str; 5] = ["install", "eject", "uninstall", "update", "rollback"];
 
 #[test]
 fn messages_say_which_situation_this_is() {

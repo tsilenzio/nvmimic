@@ -69,6 +69,10 @@ too. It copies nvm's scripts and writes down where the copies are before it
 replaces anything, so nvm's scripts are never lost. Run `nvmimic self
 install` again to finish, or `nvmimic self uninstall` to go back.
 
+Running `nvmimic self install` again is also how you repair the setup, for
+example after nvm's own install script wrote its scripts back over
+nvmimic's.
+
 `self install` also copies the nvmimic program to `~/.local/bin/nvmimic`.
 That way you can type `nvmimic self install` again later without hunting for
 the file you downloaded. nvmimic never puts a program named `nvm` on your
@@ -136,7 +140,9 @@ settings, nvmimic follows them too. If something that isn't nvmimic already
 sits at `~/.local/bin/nvmimic`, `self install` stops and leaves it alone.
 
 Add `--dry-run` to any `self` command to see what it would do without
-changing anything, and `--help` to read what it does.
+changing anything. A dry run never asks a question. `--help` on a command
+prints a short reminder of what it does and the flags it takes, and
+`nvmimic self --help` lists the commands.
 
 ### Going back, and removing nvmimic
 
