@@ -873,6 +873,12 @@ impl Step {
     }
 }
 
+/// What `self eject` and `self uninstall` answer when they would have to
+/// ask and there is no terminal. The command line program exits with 2 on
+/// it, as every `self` command does without a terminal.
+pub const NO_TERMINAL: &str = "nothing was changed. This asks before it goes ahead, and there is \
+                               no terminal to ask at. Run it again with --force.";
+
 /// What eject and uninstall say about a script that was a link with nothing
 /// behind it: a dead link is never put back.
 fn nothing_behind(name: &str, target: &Path) -> String {
@@ -1102,11 +1108,7 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             for step in &steps {
                 ui.say(&step.line("Would"));
             }
-            return Err(
-                "nothing was changed. This asks before it goes ahead, and there is no terminal \
-                 to ask at. Run it again with --force."
-                    .to_string(),
-            );
+            return Err(NO_TERMINAL.to_string());
         }
         for step in &steps {
             ui.say(&step.line("This will"));

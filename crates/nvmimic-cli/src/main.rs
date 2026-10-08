@@ -520,7 +520,10 @@ fn nvmimic_command(args: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(message) => {
             eprintln!("nvmimic: {message}");
-            ExitCode::FAILURE
+            match message == nvmimic::install::NO_TERMINAL {
+                true => ExitCode::from(2),
+                false => ExitCode::FAILURE,
+            }
         }
     }
 }

@@ -237,7 +237,8 @@ fn without_a_terminal_or_force_nothing_changes_and_the_plan_is_shown() {
         ),
     ] {
         let out = home.nvmimic(args);
-        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        // The same answer every `self` command gives without a terminal.
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
         assert!(text(&out.stdout).contains(&plan), "{}", text(&out.stdout));
         assert!(
             text(&out.stderr).contains("--force"),
