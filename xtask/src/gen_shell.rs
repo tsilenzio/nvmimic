@@ -283,22 +283,11 @@ fn completion() -> Result<String, String> {
     ))
 }
 
-/// The variables the binary reads from the shell, from the CLI's list.
+/// The variables the binary reads from the shell, from the library's list.
 fn forwarded() -> Result<Vec<String>, String> {
-    let main = fs::read_to_string(crate::repo_root().join("crates/nvmimic-cli/src/main.rs"))
-        .map_err(|e| e.to_string())?;
-    let start = main
-        .find("const FORWARDED")
-        .ok_or("no FORWARDED list in the CLI")?;
-    let end = start
-        + main[start..]
-            .find("];")
-            .ok_or("FORWARDED list is not closed")?;
-    Ok(main[start..end]
-        .split('"')
-        .skip(1)
-        .step_by(2)
-        .map(str::to_string)
+    Ok(nvmimic::host::FORWARDED
+        .iter()
+        .map(|name| name.to_string())
         .collect())
 }
 

@@ -22,6 +22,7 @@
 
 use crate::backend::Backend;
 use crate::context::CallerShell;
+use crate::identity::Identity;
 use crate::shell::{Dialect, Vars, quote, render};
 use crate::{Caller, run};
 use std::collections::{BTreeMap, BTreeSet};
@@ -38,6 +39,8 @@ pub struct Shell {
     pub dialect: Dialect,
     pub caller: CallerShell,
     pub cache_dir: Option<PathBuf>,
+    /// The program `init` is printing for.
+    pub identity: &'static Identity,
 }
 
 /// A shell named on the command line, as in `nvmimic init zsh`.
@@ -109,6 +112,7 @@ pub fn load_named(
     named: Named,
     env: &BTreeMap<String, String>,
     cache_dir: Option<&std::path::Path>,
+    identity: &'static Identity,
     backend: &dyn Backend,
 ) -> Option<String> {
     let mut text = String::new();
@@ -126,6 +130,7 @@ pub fn load_named(
                     ..CallerShell::default()
                 },
                 cache_dir: cache_dir.map(PathBuf::from),
+                identity,
             };
             switch(forwarded, shell, backend)
         });
@@ -162,6 +167,7 @@ fn switch(forwarded: &[&str], shell: Shell, backend: &dyn Backend) -> Option<Swi
         dialect,
         caller,
         cache_dir,
+        identity,
     } = shell;
 
     // Loading works `NVM_DIR` out when it's missing and repairs it when it
@@ -209,6 +215,7 @@ fn switch(forwarded: &[&str], shell: Shell, backend: &dyn Backend) -> Option<Swi
             shell: caller,
             direct_output: false,
             cache_dir,
+            identity,
         },
         backend,
         "nvm_auto",
@@ -266,6 +273,7 @@ mod tests {
             dialect: Dialect::Bash,
             caller: CallerShell::default(),
             cache_dir: None,
+            identity: &Identity::NVMIMIC,
         }
     }
 
@@ -320,7 +328,17 @@ mod tests {
             .into_iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
             .collect();
-        let text = |named| load_named(&forwarded, named, &env, None, &NvmDirBackend).unwrap();
+        let text = |named| {
+            load_named(
+                &forwarded,
+                named,
+                &env,
+                None,
+                &Identity::NVMIMIC,
+                &NvmDirBackend,
+            )
+            .unwrap()
+        };
 
         let zsh = text(Named::Zsh);
         assert!(
@@ -346,7 +364,17 @@ mod tests {
         let env: BTreeMap<String, String> = [("NVM_DIR".to_string(), String::new())].into();
         for name in Named::NAMES {
             let named = Named::parse(name).unwrap();
-            assert!(load_named(&["NVM_DIR"], named, &env, None, &NvmDirBackend).is_none());
+            assert!(
+                load_named(
+                    &["NVM_DIR"],
+                    named,
+                    &env,
+                    None,
+                    &Identity::NVMIMIC,
+                    &NvmDirBackend
+                )
+                .is_none()
+            );
         }
         assert_eq!(Named::parse("fish"), None);
     }

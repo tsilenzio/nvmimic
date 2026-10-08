@@ -74,7 +74,8 @@ pub struct Suggestion {
     pub about: &'static str,
 }
 
-const fn flag(name: &'static str, about: &'static str) -> Flag {
+/// A flag that works with any store.
+pub const fn flag(name: &'static str, about: &'static str) -> Flag {
     Flag {
         name,
         about,
@@ -82,7 +83,8 @@ const fn flag(name: &'static str, about: &'static str) -> Flag {
     }
 }
 
-const fn command(
+/// A command with no commands of its own after it.
+pub const fn command(
     name: &'static str,
     about: &'static str,
     needs: Needs,

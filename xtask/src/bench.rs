@@ -307,7 +307,10 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
                 "NVMIMIC_CACHE_DIR={} {init}",
                 quote(&own.join("cache").display().to_string())
             );
-            let script = nvmimic::install::nvm_sh(&bin.join("nvmimic"));
+            let script = nvmimic::install::nvm_sh(
+                &nvmimic::identity::Identity::NVMIMIC,
+                &bin.join("nvmimic"),
+            );
             if !script.contains(&init) {
                 return Err("nvm.sh no longer runs `init` this way".to_string());
             }

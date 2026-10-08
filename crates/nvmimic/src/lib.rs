@@ -10,6 +10,8 @@ pub mod complete;
 pub mod context;
 pub mod dirs;
 pub mod functions;
+pub mod host;
+pub mod identity;
 pub mod init;
 pub mod install;
 pub mod nvm;
@@ -43,6 +45,9 @@ pub struct Caller {
     /// remembered, see [`nvm::remembered`]. `None` remembers nothing, and
     /// both programs are then asked every time, as nvm asks them.
     pub cache_dir: Option<std::path::PathBuf>,
+    /// The program the shell functions belong to. `&Identity::NVMIMIC` for
+    /// nvmimic itself.
+    pub identity: &'static identity::Identity,
 }
 
 /// What one call left behind.
@@ -76,6 +81,7 @@ pub fn run(
         command_info: std::rc::Rc::new(caller.command_info),
         caller_shell: std::rc::Rc::new(caller.shell),
         cache_dir: caller.cache_dir.map(std::rc::Rc::new),
+        identity: caller.identity,
     };
     let status = functions::call(&mut nvm, function, args, fd3);
     nvm.io.flush();

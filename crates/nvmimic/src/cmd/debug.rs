@@ -13,8 +13,11 @@ pub const TOOLS: &[&str] = &[
     "awk", "curl", "wget", "git", "grep", "sed", "cut", "basename", "rm", "mkdir", "xargs",
 ];
 
-/// The line that ends each program's entry in what the shell side sends.
-const END: &str = "__nvmimic_end";
+/// The line that ends each program's entry in what the shell side sends:
+/// `__nvmimic_end` for nvmimic.
+fn end_line(identity: &crate::identity::Identity) -> String {
+    format!("__{}_end", identity.name)
+}
 
 /// What nvm's `nvm_command_info` says about each program the calling shell
 /// can find. A shell knows things about a name that a program started from
@@ -22,11 +25,11 @@ const END: &str = "__nvmimic_end";
 /// `nvm_command_info`, asks it, and passes the answers along, one entry per
 /// program: its name, the answer, and an end line. Programs the shell
 /// cannot find are left out.
-fn command_infos(listing: &str) -> BTreeMap<String, String> {
+fn command_infos(listing: &str, end: &str) -> BTreeMap<String, String> {
     let mut infos = BTreeMap::new();
     let mut lines = listing.lines();
     while let Some(name) = lines.next() {
-        let info: Vec<&str> = lines.by_ref().take_while(|line| *line != END).collect();
+        let info: Vec<&str> = lines.by_ref().take_while(|line| *line != end).collect();
         infos.insert(name.to_string(), info.join("\n"));
     }
     infos
@@ -43,7 +46,7 @@ fn first_line(output: &[u8]) -> String {
 
 /// nvm: nvm:debug
 pub fn run(nvm: &mut Nvm, command_info: &str) -> i32 {
-    let infos = command_infos(command_info);
+    let infos = command_infos(command_info, &end_line(nvm.identity));
     let var = |nvm: &Nvm, name: &str| nvm.vars.get(name).to_string();
     let shown = |nvm: &Nvm, path: &str| {
         paths::sanitize(path, nvm.vars.get("NVM_DIR"), nvm.vars.get("HOME"))
@@ -262,7 +265,7 @@ mod tests {
     #[test]
     fn entries_end_at_the_end_line() {
         let listing = "awk\n/usr/bin/awk\n__nvmimic_end\nls\n/bin/ls (ls -G)\n__nvmimic_end\n";
-        let infos = command_infos(listing);
+        let infos = command_infos(listing, "__nvmimic_end");
         assert_eq!(infos["awk"], "/usr/bin/awk");
         assert_eq!(infos["ls"], "/bin/ls (ls -G)");
         assert_eq!(infos.len(), 2);

@@ -142,6 +142,8 @@ pub struct Nvm<'a> {
     pub caller_shell: std::rc::Rc<CallerShell>,
     /// Where answers are remembered between calls, see `nvm::remembered`.
     pub cache_dir: Option<std::rc::Rc<std::path::PathBuf>>,
+    /// The program whose shell functions made this call.
+    pub identity: &'static crate::identity::Identity,
 }
 
 /// What the calling shell goes by when it reports an error of its own. See
@@ -288,6 +290,7 @@ impl<'a> Nvm<'a> {
                 command_info,
                 caller_shell,
                 cache_dir,
+                identity: self.identity,
             };
             body(&mut inner);
         }

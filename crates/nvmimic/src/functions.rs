@@ -504,12 +504,12 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
 ///
 /// nvm: bash_completion __nvm
 fn complete(nvm: &mut Nvm, args: &[String]) {
-    use crate::complete::{NVM, NVMIMIC, Takes, suggest};
+    use crate::complete::{NVM, Takes, suggest};
     let describe = args.first().is_some_and(|mode| mode == "zsh");
     let current: usize = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(0);
     let words = args.get(2..).unwrap_or_default();
     let root = match words.first().map(String::as_str) {
-        Some("nvmimic") => &NVMIMIC,
+        Some(word) if word == nvm.identity.name => nvm.identity.completion,
         _ => &NVM,
     };
     let backend = nvm.backend;

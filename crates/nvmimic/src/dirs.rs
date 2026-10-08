@@ -11,7 +11,11 @@
 //! | files that belong to the installation | `NVMIMIC_DATA_DIR` | `$XDG_DATA_HOME/nvmimic`, `~/.local/share/nvmimic` |
 //! | the record of what an install changed | `NVMIMIC_STATE_DIR` | `$XDG_STATE_HOME/nvmimic`, `~/.local/state/nvmimic` |
 //! | remembered answers, safe to delete | `NVMIMIC_CACHE_DIR` | `$XDG_CACHE_HOME/nvmimic`, `~/Library/Caches/nvmimic` on macOS, `~/.cache/nvmimic` elsewhere |
+//!
+//! Another program built on this library has the same layout under its own
+//! name, see [`Dirs::resolve_for`].
 
+use crate::identity::Identity;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,10 +31,17 @@ pub struct Dirs {
 }
 
 impl Dirs {
-    /// Works the locations out from the environment. `var` returns the value
-    /// of a variable. `None` when a location has no variable set and there
-    /// is no home folder to fall back to.
+    /// Works nvmimic's locations out from the environment. `var` returns
+    /// the value of a variable. `None` when a location has no variable set
+    /// and there is no home folder to fall back to.
     pub fn resolve(var: impl Fn(&str) -> Option<String>) -> Option<Dirs> {
+        Dirs::resolve_for(&Identity::NVMIMIC, var)
+    }
+
+    /// [`Dirs::resolve`] for another program built on this library. Its
+    /// name takes nvmimic's place in every folder and variable name.
+    pub fn resolve_for(identity: &Identity, var: impl Fn(&str) -> Option<String>) -> Option<Dirs> {
+        let name = identity.name;
         // A relative path means something else in every folder, so it
         // counts as not set.
         let absolute = |name: &str| {
@@ -40,31 +51,34 @@ impl Dirs {
         };
         let home = absolute("HOME");
         let pick = |own: &str, xdg: &str, fallback: &str| {
-            absolute(own)
-                .or_else(|| absolute(xdg).map(|base| base.join("nvmimic")))
-                .or_else(|| home.as_ref().map(|home| home.join(fallback)))
+            absolute(&identity.setting(own))
+                .or_else(|| absolute(xdg).map(|base| base.join(name)))
+                .or_else(|| home.as_ref().map(|home| home.join(fallback).join(name)))
         };
         let cache = if cfg!(target_os = "macos") {
-            "Library/Caches/nvmimic"
+            "Library/Caches"
         } else {
-            ".cache/nvmimic"
+            ".cache"
         };
         Some(Dirs {
-            binary: absolute("NVMIMIC_INSTALL_PATH")
-                .or_else(|| home.as_ref().map(|home| home.join(".local/bin/nvmimic")))?,
-            data: pick("NVMIMIC_DATA_DIR", "XDG_DATA_HOME", ".local/share/nvmimic")?,
-            state: pick(
-                "NVMIMIC_STATE_DIR",
-                "XDG_STATE_HOME",
-                ".local/state/nvmimic",
-            )?,
-            cache: pick("NVMIMIC_CACHE_DIR", "XDG_CACHE_HOME", cache)?,
+            binary: absolute(&identity.setting("INSTALL_PATH"))
+                .or_else(|| home.as_ref().map(|home| home.join(".local/bin").join(name)))?,
+            data: pick("DATA_DIR", "XDG_DATA_HOME", ".local/share")?,
+            state: pick("STATE_DIR", "XDG_STATE_HOME", ".local/state")?,
+            cache: pick("CACHE_DIR", "XDG_CACHE_HOME", cache)?,
         })
     }
 
-    /// The locations for this process's environment.
+    /// nvmimic's locations for this process's environment.
     pub fn from_process() -> Option<Dirs> {
-        Dirs::resolve(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+        Dirs::from_process_for(&Identity::NVMIMIC)
+    }
+
+    /// [`Dirs::from_process`] for another program built on this library.
+    pub fn from_process_for(identity: &Identity) -> Option<Dirs> {
+        Dirs::resolve_for(identity, |name| {
+            std::env::var(name).ok().filter(|value| !value.is_empty())
+        })
     }
 
     pub fn manifest(&self) -> PathBuf {

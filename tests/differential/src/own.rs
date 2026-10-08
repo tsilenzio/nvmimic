@@ -8,6 +8,7 @@
 //! either way.
 
 use crate::harness::{Outcome, copy, link_staged, nvmimic_bin, repo_root, write_script};
+use nvmimic::identity::Identity;
 use nvmimic::install::nvm_sh;
 use nvmimic::shell::quote;
 use std::fs;
@@ -37,7 +38,7 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
     // Here it is told where, so the home folder stays as nvm leaves it.
     let program = quote(&bin.join("nvmimic").display().to_string());
     let init = format!("__NVMIMIC_PROGRAM={program} command {program} init");
-    let script = nvm_sh(&bin.join("nvmimic"));
+    let script = nvm_sh(&Identity::NVMIMIC, &bin.join("nvmimic"));
     assert!(
         script.contains(&init),
         "nvm.sh no longer runs `init` this way"

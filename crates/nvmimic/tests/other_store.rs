@@ -1,104 +1,25 @@
-//! A second backend, to show that the library does not need nvm's own
-//! folder layout. `Shelf` keeps every version in one folder outside
-//! `$NVM_DIR`, names the folders without the leading `v`, keeps its aliases
-//! in a folder of its own, and installs versions itself. Each test runs
-//! nvm's commands through [`nvmimic::run`], the way another program would.
+//! A second backend under a second identity, to show that the library needs
+//! neither nvm's own folder layout nor nvmimic's own name. `Shelf` (in
+//! `common/shelf.rs`) keeps every version in one folder outside `$NVM_DIR`,
+//! names the folders without the leading `v`, keeps its aliases in a folder
+//! of its own, and installs versions itself. `shelfy` is the program built
+//! on it, in `examples/shelfy.rs`. The tests here run nvm's commands
+//! through [`nvmimic::run`], the installer through `nvmimic::install`, and
+//! real shells through the `shelfy` program, the way another program would.
 
-use nvmimic::backend::{self, Backend, Flavor, Flavors, InstallRequest, Installed};
-use nvmimic::context::{CallerShell, Nvm};
-use nvmimic::nvm::paths;
+#[path = "common/shelf.rs"]
+mod shelf;
+
+use nvmimic::context::CallerShell;
 use nvmimic::shell::{Dialect, Effect, Vars};
 use nvmimic::{Caller, Outcome};
+use shelf::{SHELFY, Shelf, fake_node};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-
-struct Shelf {
-    store: PathBuf,
-    aliases: PathBuf,
-}
-
-impl Shelf {
-    fn folder(&self, version: &str) -> PathBuf {
-        self.store.join(version.trim_start_matches('v'))
-    }
-
-    fn store(&self) -> String {
-        self.store.display().to_string()
-    }
-}
-
-impl Backend for Shelf {
-    // The shelf installs versions itself and never builds one.
-    fn offers(&self, needs: nvmimic::complete::Needs) -> bool {
-        needs != nvmimic::complete::Needs::Source
-    }
-
-    fn root(&self, vars: &Vars) -> String {
-        vars.get("NVM_DIR").to_string()
-    }
-
-    fn installed(&self, _vars: &Vars, flavors: Flavors) -> Vec<Installed> {
-        if flavors == Flavors::Iojs {
-            return Vec::new();
-        }
-        backend::dir_entries(&self.store())
-            .into_iter()
-            .filter(|entry| entry.is_dir)
-            .map(|entry| Installed {
-                flavor: Flavor::Node,
-                name: format!("v{}", entry.name),
-            })
-            .collect()
-    }
-
-    fn version_path(&self, _vars: &Vars, version: &str) -> String {
-        self.folder(version).display().to_string()
-    }
-
-    fn owner_of(&self, _vars: &Vars, path: &str) -> Option<Flavor> {
-        (paths::tree_contains_path(&self.store(), path) == Some(true)).then_some(Flavor::Node)
-    }
-
-    fn remove(&self, vars: &Vars, version: &str) -> std::io::Result<()> {
-        backend::remove_tree(&self.version_path(vars, version))
-    }
-
-    fn install(&self, nvm: &mut Nvm, request: &InstallRequest) -> Option<i32> {
-        nvm.io
-            .echo(&format!("shelf: putting {} in place", request.version));
-        fake_node(&self.folder(request.version), request.version);
-        Some(0)
-    }
-
-    fn strip_path(&self, _vars: &Vars, list: &str, suffix: &str) -> String {
-        paths::strip_path(list, &self.store(), suffix)
-    }
-
-    fn change_path(&self, _vars: &Vars, list: &str, suffix: &str, version_path: &str) -> String {
-        paths::change_path(list, suffix, version_path, &self.store())
-    }
-
-    fn alias_dir(&self, _vars: &Vars) -> String {
-        self.aliases.display().to_string()
-    }
-}
-
-/// A stand-in for an installed Node: a `node` and an `npm` that only know
-/// their versions. Without an `npm`, `nvm install` goes and fetches one.
-fn fake_node(folder: &Path, version: &str) {
-    let bin = folder.join("bin");
-    fs::create_dir_all(&bin).unwrap();
-    for (name, answer) in [("node", version), ("npm", "10.7.0")] {
-        let program = bin.join(name);
-        fs::write(&program, format!("#!/bin/sh\necho {answer}\n")).unwrap();
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
-    }
-}
 
 /// A throwaway home with an empty `$NVM_DIR` and a shelf beside it.
 struct World {
@@ -126,10 +47,7 @@ impl World {
         let root = std::env::temp_dir()
             .join(format!("nvmimic-shelf-{}-{id}", std::process::id()))
             .canonicalize_after_create();
-        let shelf = Shelf {
-            store: root.join("shelf"),
-            aliases: root.join("shelf-aliases"),
-        };
+        let shelf = Shelf::at(&root);
         // An empty folder as `PATH`, so a Node installed on this machine
         // cannot show up as nvm's `system`.
         let empty = root.join("empty");
@@ -169,6 +87,7 @@ impl World {
             shell: CallerShell::default(),
             direct_output: false,
             cache_dir: None,
+            identity: &SHELFY,
         };
         let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
         let (mut out, mut err) = (Vec::new(), Vec::new());
@@ -412,4 +331,422 @@ fn completion_leaves_out_what_the_shelf_cannot_do() {
     // zsh gets a few words about each entry.
     let ran = world.call("__nvm_complete", &["zsh", "1", "nvm", "unl"]);
     assert_eq!(ran.out, "unload:remove nvm from this shell\n");
+}
+
+// From here on: the second identity. `shelfy` is installed, loaded and
+// removed the way nvmimic is, and nothing it leaves carries nvmimic's name.
+
+use nvmimic::dirs::Dirs;
+use nvmimic::identity::Identity;
+use nvmimic::install::{self, Env, Manifest, Options, Ui};
+
+/// A `Ui` that keeps what it was told and says yes.
+#[derive(Default)]
+struct Said(Vec<String>);
+
+impl Ui for Said {
+    fn say(&mut self, line: &str) {
+        self.0.push(line.to_string());
+    }
+
+    fn ask(&mut self, _question: &str, _default: bool) -> bool {
+        true
+    }
+}
+
+const SCRIPTS: [&str; 3] = ["nvm.sh", "nvm-exec", "bash_completion"];
+
+/// A throwaway home for an installer run. It is left behind and swept by a
+/// later run, because the tests that start programs copied into it must
+/// not delete them while macOS may still be scanning them.
+fn home(label: &str) -> PathBuf {
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    sweep_stale();
+    let id = COUNTER.fetch_add(1, Ordering::SeqCst);
+    let root = std::env::temp_dir().join(format!(
+        "nvmimic-shelfy-{label}-{}-{id}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&root);
+    root.canonicalize_after_create()
+}
+
+/// Removes homes that earlier runs left behind, once they are half an hour old.
+fn sweep_stale() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let Ok(entries) = fs::read_dir(std::env::temp_dir()) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let ours = entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("nvmimic-shelfy-");
+            let old = entry
+                .metadata()
+                .and_then(|meta| meta.modified())
+                .ok()
+                .and_then(|time| time.elapsed().ok())
+                .is_some_and(|age| age.as_secs() > 1800);
+            if ours && old {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
+    });
+}
+
+/// Official nvm's three scripts in `~/.nvm`, each holding its own name.
+fn official_nvm(home: &Path) {
+    fs::create_dir_all(home.join(".nvm")).unwrap();
+    for name in SCRIPTS {
+        fs::write(home.join(".nvm").join(name), format!("official {name}\n")).unwrap();
+    }
+}
+
+/// What the installer sees for a program with this identity in `home`.
+fn env_for(identity: &'static Identity, home: &Path) -> Env {
+    let at_home = home.display().to_string();
+    Env {
+        home: home.to_path_buf(),
+        nvm_dir: None,
+        xdg_config_home: None,
+        homebrew_prefix: Some(format!("{at_home}/no-homebrew")),
+        cargo_home: None,
+        path: None,
+        dirs: Dirs::resolve_for(identity, |name| (name == "HOME").then(|| at_home.clone())),
+        install_path_given: false,
+        identity,
+    }
+}
+
+fn force() -> Options {
+    Options {
+        force: true,
+        ..Options::default()
+    }
+}
+
+/// A stand-in for the program file that `self install` copies.
+fn program_file(home: &Path) -> PathBuf {
+    let program = home.join("downloaded-program");
+    fs::write(&program, "a stand-in for the program\n").unwrap();
+    program
+}
+
+#[test]
+fn a_second_program_keeps_its_files_under_its_own_name() {
+    let dirs = Dirs::resolve_for(&SHELFY, |name| match name {
+        "HOME" => Some("/h".to_string()),
+        "SHELFY_STATE_DIR" => Some("/elsewhere/state".to_string()),
+        // nvmimic's settings mean nothing to shelfy.
+        "NVMIMIC_CACHE_DIR" | "NVMIMIC_INSTALL_PATH" => Some("/not/used".to_string()),
+        _ => None,
+    })
+    .unwrap();
+    assert_eq!(dirs.binary, Path::new("/h/.local/bin/shelfy"));
+    assert_eq!(dirs.data, Path::new("/h/.local/share/shelfy"));
+    assert_eq!(dirs.state, Path::new("/elsewhere/state"));
+    assert!(dirs.cache.ends_with("shelfy"), "{:?}", dirs.cache);
+}
+
+#[test]
+fn a_second_program_installs_and_leaves_under_its_own_name() {
+    let home = home("names");
+    official_nvm(&home);
+    let env = env_for(&SHELFY, &home);
+    let mut ui = Said::default();
+    install::self_install(&env, &program_file(&home), &force(), &mut ui).unwrap();
+
+    let state = home.join(".local/state/shelfy");
+    let manifest = fs::read_to_string(state.join("manifest")).unwrap();
+    assert!(
+        manifest.starts_with("# What `shelfy self install` changed."),
+        "{manifest}"
+    );
+    assert!(manifest.contains("version 3.1.4\n"), "{manifest}");
+    assert!(home.join(".local/bin/shelfy").is_file());
+    assert!(!home.join(".local/state/nvmimic").exists());
+    assert!(!home.join(".local/bin/nvmimic").exists());
+
+    // The scripts name shelfy wherever nvmimic's name nvmimic, except on
+    // the line that says whose code this is.
+    let nvm_sh = fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap();
+    assert!(nvm_sh.starts_with("# Node Version Manager, as shelfy provides it.\n"));
+    assert!(nvm_sh.contains("__SHELFY_PROGRAM="), "{nvm_sh}");
+    assert!(nvm_sh.contains("the shelfy program is not at"), "{nvm_sh}");
+    let completion = fs::read_to_string(home.join(".nvm/bash_completion")).unwrap();
+    assert!(completion.contains("__shelfy_handoff __nvm_complete"));
+    assert!(completion.contains("complete -o default -F __nvm shelfy"));
+    let bound = install::Bound {
+        binary: Path::new("/bin/shelfy"),
+        cache: None,
+    };
+    let init = install::init_text(&SHELFY, &bound, None, None, "");
+    assert!(init.contains("__shelfy_handoff() {"));
+    assert!(
+        init.contains("__SHELFY_CODE='3.1.4'"),
+        "the program's own version"
+    );
+    // The home folder here has `nvmimic` in its name, and a path is never
+    // rewritten.
+    assert!(nvm_sh.contains(&format!("'{}/.local/bin/shelfy'", home.display())));
+    let at_home = home.display().to_string();
+    for text in [&nvm_sh, &completion, &init] {
+        let text = text.replace(&at_home, "HOME");
+        let others: Vec<&str> = text
+            .lines()
+            .filter(|line| line.to_lowercase().contains("nvmimic"))
+            .collect();
+        assert!(
+            others
+                .iter()
+                .all(|line| line.contains("nvmimic is MIT licensed")),
+            "{others:?}"
+        );
+    }
+    assert!(ui.0.iter().any(|line| line.contains("shelfy")));
+    let said = ui.0.join("\n").replace(&at_home, "HOME");
+    assert!(!said.contains("nvmimic"), "{said}");
+
+    // A script someone edited is kept under shelfy's name, and official
+    // nvm's scripts come back.
+    fs::write(home.join(".nvm/nvm.sh"), format!("{nvm_sh}# mine\n")).unwrap();
+    let mut ui = Said::default();
+    install::self_uninstall(&env, &force(), &mut ui).unwrap();
+    assert!(home.join(".nvm/nvm.sh.shelfy-saved").is_file());
+    for name in SCRIPTS {
+        let text = fs::read_to_string(home.join(".nvm").join(name)).unwrap();
+        assert_eq!(text, format!("official {name}\n"));
+    }
+    assert!(!state.exists());
+    assert!(ui.0.contains(&"Done. shelfy is gone and nvm is back.".to_string()));
+}
+
+#[test]
+fn a_manifest_carries_lines_of_the_programs_own() {
+    let home = home("manifest");
+    let env = env_for(&SHELFY, &home);
+    install::self_install(&env, &program_file(&home), &force(), &mut Said::default()).unwrap();
+    let dirs = env.dirs.as_ref().unwrap();
+
+    let mut manifest = Manifest::read(dirs).unwrap();
+    manifest
+        .extra
+        .push(("shelf".to_string(), "/a b/shelf".to_string()));
+    manifest.write(dirs, &SHELFY).unwrap();
+    // Installing again keeps a line the library doesn't know.
+    install::self_install(
+        &env,
+        &home.join(".local/bin/shelfy"),
+        &force(),
+        &mut Said::default(),
+    )
+    .unwrap();
+    let again = Manifest::read(dirs).unwrap();
+    assert_eq!(again.extra("shelf").collect::<Vec<_>>(), ["/a b/shelf"]);
+}
+
+#[test]
+fn two_programs_never_share_an_nvm_folder() {
+    for (first, second) in [(&SHELFY, &Identity::NVMIMIC), (&Identity::NVMIMIC, &SHELFY)] {
+        let home = home("shared");
+        official_nvm(&home);
+        let program = program_file(&home);
+        install::self_install(
+            &env_for(first, &home),
+            &program,
+            &force(),
+            &mut Said::default(),
+        )
+        .unwrap();
+        let before = fs::read(home.join(".nvm/nvm.sh")).unwrap();
+
+        let mut ui = Said::default();
+        let refused = install::self_install(&env_for(second, &home), &program, &force(), &mut ui);
+        let (one, other) = (first.name, second.name);
+        assert_eq!(
+            refused,
+            Err(format!(
+                "{one}'s scripts are in {}, and {other} and {one} can't share an nvm folder. Run \
+                 `{one} self eject` or `{one} self uninstall` first. Nothing was changed.",
+                home.join(".nvm").display()
+            ))
+        );
+        assert_eq!(fs::read(home.join(".nvm/nvm.sh")).unwrap(), before);
+        assert!(!home.join(".local/state").join(other).exists());
+        assert!(!home.join(".local/bin").join(other).exists());
+        assert!(ui.0.is_empty(), "{:?}", ui.0);
+        // A dry run is refused the same way.
+        let dry = Options {
+            dry_run: true,
+            ..Options::default()
+        };
+        assert!(
+            install::self_install(
+                &env_for(second, &home),
+                &program,
+                &dry,
+                &mut Said::default()
+            )
+            .is_err()
+        );
+
+        // Once the first program is out, the second one takes over from
+        // official nvm like any other install.
+        install::self_eject(&env_for(first, &home), &force(), &mut Said::default()).unwrap();
+        install::self_install(
+            &env_for(second, &home),
+            &program,
+            &force(),
+            &mut Said::default(),
+        )
+        .unwrap();
+        let nvm_sh = fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap();
+        assert_eq!(nvmimic::identity::program_of(&nvm_sh), Some(other));
+        // And now the first is the one that is refused.
+        assert!(
+            install::self_install(
+                &env_for(first, &home),
+                &program,
+                &force(),
+                &mut Said::default()
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
+fn unload_and_completion_go_by_the_programs_name() {
+    let world = World::new();
+    let ran = world.nvm(&["unload"]);
+    let unset: Vec<&String> = ran
+        .outcome
+        .effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::UnsetFunctions(names) => Some(names),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(unset.iter().any(|name| *name == "__shelfy_handoff"));
+    assert!(unset.iter().all(|name| !name.contains("nvmimic")));
+
+    let ran = world.call("__nvm_complete", &["bash", "1", "shelfy", ""]);
+    assert_eq!(ran.out, "init\nself\n");
+    // nvmimic's own command means nothing to shelfy's shells.
+    let ran = world.call("__nvm_complete", &["bash", "1", "nvmimic", ""]);
+    assert!(ran.out.contains("install"), "nvm's own table: {}", ran.out);
+    assert!(!ran.out.contains("self"), "{}", ran.out);
+}
+
+/// The `shelfy` program: the example in `examples/shelfy.rs`. `cargo test`
+/// builds it beside the tests. A run of this test alone builds it here.
+fn shelfy_program() -> PathBuf {
+    let tests = std::env::current_exe().unwrap();
+    let program = tests
+        .parent()
+        .and_then(Path::parent)
+        .unwrap()
+        .join("examples/shelfy");
+    if !program.is_file() {
+        let mut build = std::process::Command::new(env!("CARGO"));
+        build.args(["build", "--quiet", "-p", "nvmimic", "--example", "shelfy"]);
+        if !cfg!(debug_assertions) {
+            build.arg("--release");
+        }
+        assert!(build.status().unwrap().success(), "building shelfy");
+    }
+    program
+}
+
+fn shell_programs() -> Vec<(&'static str, &'static [&'static str])> {
+    let all: [(&str, &[&str]); 4] = [
+        ("/bin/bash", &[]),
+        ("/bin/zsh", &["-f"]),
+        ("/bin/sh", &[]),
+        ("/bin/dash", &[]),
+    ];
+    all.into_iter()
+        .filter(|(program, _)| Path::new(program).is_file())
+        .collect()
+}
+
+#[test]
+fn real_shells_run_nvm_through_the_second_program() {
+    let home = home("shell");
+    let shelfy = shelfy_program();
+    let run = |args: &[&str]| {
+        std::process::Command::new(&shelfy)
+            .args(args)
+            .env_clear()
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOMEBREW_PREFIX", home.join("no-homebrew"))
+            .stdin(std::process::Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let installed = run(&["self", "install", "--force"]);
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let shelf = Shelf::at(&home);
+    for version in ["v20.1.0", "v22.1.0"] {
+        fake_node(&shelf.folder(version), version);
+    }
+    fs::create_dir_all(&shelf.aliases).unwrap();
+    fs::write(shelf.aliases.join("default"), "20\n").unwrap();
+
+    let script = r#"
+. "$NVM_DIR/nvm.sh" || exit 90
+echo "loaded:${SHELFY_LOADED-} default:$(nvm current)"
+nvm use 22.1.0 || exit 91
+echo "node:$(command -v node)"
+echo "aliases:$(nvm alias default 22 >/dev/null && cat "$HOME/shelf-aliases/default")"
+case "$(command -v __shelfy_handoff)" in __shelfy_handoff) echo own:yes ;; esac
+command -v __nvmimic_handoff >/dev/null 2>&1 && echo "nvmimic's function is here"
+nvm unload
+command -v __shelfy_handoff >/dev/null 2>&1 && echo "still loaded"
+command -v nvm >/dev/null 2>&1 && echo "nvm still loaded"
+echo done
+"#;
+    for (shell, flags) in shell_programs() {
+        fs::write(shelf.aliases.join("default"), "20\n").unwrap();
+        let out = std::process::Command::new(shell)
+            .args(flags)
+            .args(["-c", script])
+            .env_clear()
+            .env("HOME", &home)
+            .env("NVM_DIR", home.join(".nvm"))
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout);
+        let errors = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(
+            said,
+            format!(
+                "loaded:1 default:v20.1.0\nNow using node v22.1.0 (npm v10.7.0)\n\
+                 node:{}/shelf/22.1.0/bin/node\naliases:22\nown:yes\ndone\n",
+                home.display()
+            ),
+            "{shell}: {errors}"
+        );
+        assert_eq!(errors, "", "{shell}");
+    }
+    // Nothing of nvmimic's own appeared, and nothing went into `$NVM_DIR`
+    // but the three scripts.
+    assert!(!home.join(".local/state/nvmimic").exists());
+    let mut in_nvm_dir: Vec<String> = fs::read_dir(home.join(".nvm"))
+        .unwrap()
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    in_nvm_dir.sort();
+    assert_eq!(in_nvm_dir, ["bash_completion", "nvm-exec", "nvm.sh"]);
 }
