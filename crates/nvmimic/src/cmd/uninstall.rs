@@ -94,8 +94,15 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
         &format!("{cache}/bin/{slug_binary}/files"),
         &format!("{cache}/src/{slug_source}/files"),
     ]);
-    if cache_removed && !version_path.is_empty() {
-        let _ = nvm.backend.remove(&nvm.vars, &version);
+    if cache_removed
+        && !version_path.is_empty()
+        && let Err(error) = nvm.backend.remove(&nvm.vars, &version)
+    {
+        // Only a store other than nvm's own gets here, see
+        // `NvmDirBackend::remove`. These words are the library's own.
+        nvm.io
+            .err(&format!("nvm: could not uninstall {version}: {error}"));
+        return 1;
     }
     nvm.io.echo(&success);
 

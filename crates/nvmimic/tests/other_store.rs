@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -157,7 +158,8 @@ impl CanonicalizeAfterCreate for PathBuf {
 /// returns the address to use as nvm's mirror.
 fn serve_index() -> String {
     const INDEX: &str = "version\tdate\tfiles\tnpm\tv8\tuv\tzlib\topenssl\tmodules\tlts\tsecurity\n\
-        v22.1.0\t2024-05-02\tosx-arm64-tar,linux-x64,linux-arm64\t10.7.0\t12.4\t1.48.0\t1.3.0\t3.0.13\t127\t-\t-\n";
+        v22.1.0\t2024-05-02\tosx-arm64-tar,linux-x64,linux-arm64\t10.7.0\t12.4\t1.48.0\t1.3.0\t3.0.13\t127\t-\t-\n\
+        v20.11.1\t2024-02-13\tosx-arm64-tar,linux-x64,linux-arm64\t10.2.4\t11.3\t1.46.0\t1.2.13\t3.0.13\t115\tIron\t-\n";
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let address = format!("http://{}", listener.local_addr().unwrap());
     std::thread::spawn(move || {
@@ -331,6 +333,215 @@ fn completion_leaves_out_what_the_shelf_cannot_do() {
     // zsh gets a few words about each entry.
     let ran = world.call("__nvm_complete", &["zsh", "1", "nvm", "unl"]);
     assert_eq!(ran.out, "unload:remove nvm from this shell\n");
+}
+
+#[test]
+fn the_shelf_hears_about_every_switch() {
+    let mut world = World::new();
+    world.with(&["v20.11.1", "v22.1.0"]);
+
+    let ran = world.nvm(&["use", "22"]);
+    assert!(ran.outcome.effects.contains(&Effect::Set {
+        name: "SHELF_NODE_VERSION".to_string(),
+        value: "22.1.0".to_string(),
+        export: true,
+    }));
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_NODE_VERSION"], "22.1.0");
+
+    let ran = world.nvm(&["deactivate"]);
+    world.apply(&ran);
+    assert!(!world.vars.contains_key("SHELF_NODE_VERSION"));
+
+    let ran = world.nvm(&["use", "20"]);
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_NODE_VERSION"], "20.11.1");
+    let ran = world.nvm(&["unload"]);
+    world.apply(&ran);
+    assert!(!world.vars.contains_key("SHELF_NODE_VERSION"));
+
+    // A new shell that switches to the default version while it loads is
+    // told the same thing, in the text `init` prints.
+    fs::write(world.shelf.aliases.join("default"), "20\n").unwrap();
+    // `nvm unload` took `NVM_DIR` with it.
+    world.vars.insert(
+        "NVM_DIR".to_string(),
+        world.root.join(".nvm").display().to_string(),
+    );
+    world
+        .vars
+        .insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    let shell = nvmimic::init::Shell {
+        env: world.vars.clone(),
+        dialect: Dialect::Bash,
+        caller: CallerShell::default(),
+        cache_dir: None,
+        identity: &SHELFY,
+    };
+    let load = nvmimic::init::load(&["NVM_DIR", "PATH"], shell, &world.shelf).unwrap();
+    assert!(
+        load.contains("export SHELF_NODE_VERSION='20.11.1'\n"),
+        "{load}"
+    );
+}
+
+#[test]
+fn what_the_shelf_does_not_offer_is_turned_down_when_it_is_run() {
+    let mut world = World::new();
+    world.with(&["v22.1.0"]);
+
+    for args in [&["install", "-s", "20"][..], &["i", "--lts", "-s"]] {
+        let ran = world.nvm(args);
+        assert_eq!(ran.outcome.status, 1, "{args:?}");
+        assert_eq!(
+            ran.err,
+            format!("`nvm {} -s` isn't available with this setup.\n", args[0])
+        );
+        assert_eq!(ran.out, "");
+    }
+    assert!(world.shelf.asked.borrow().is_empty());
+
+    // What it does offer runs as always, and so does anything after `--`.
+    let ran = world.nvm(&["use", "22"]);
+    assert_eq!(ran.outcome.status, 0, "{}", ran.err);
+    let ran = world.nvm(&["exec", "22", "--", "node", "-s"]);
+    assert!(!ran.err.contains("isn't available"), "{}", ran.err);
+
+    // `NVM_SYMLINK_CURRENT` asks for a link in `$NVM_DIR`. The shelf has
+    // no such link, so none is made.
+    world
+        .vars
+        .insert("NVM_SYMLINK_CURRENT".to_string(), "true".to_string());
+    let ran = world.nvm(&["use", "22"]);
+    assert_eq!(ran.outcome.status, 0, "{}", ran.err);
+    world.assert_nvm_dir_untouched();
+
+    // `iojs` is not among the names TAB always suggests.
+    let ran = world.call("__nvm_complete", &["bash", "2", "nvm", "use", ""]);
+    let names: Vec<&str> = ran.out.lines().collect();
+    assert!(
+        names.contains(&"stable") && !names.contains(&"iojs"),
+        "{names:?}"
+    );
+}
+
+#[test]
+fn the_cache_and_the_package_list_are_the_shelf_s_own() {
+    let world = World::new();
+    world.with(&["v22.1.0"]);
+    let nvm_cache = world.root.join(".nvm/.cache");
+    fs::create_dir_all(nvm_cache.join("bin")).unwrap();
+    fs::write(nvm_cache.join("bin/kept"), "official nvm's download\n").unwrap();
+    fs::create_dir_all(world.shelf.cache.join("bin")).unwrap();
+    fs::write(world.shelf.cache.join("bin/gone"), "the shelf's download\n").unwrap();
+
+    let ran = world.nvm(&["cache", "dir"]);
+    assert_eq!(ran.out, format!("{}\n", world.shelf.cache.display()));
+
+    let mut with_tools = World::new();
+    with_tools.shelf = Shelf::at(&world.root);
+    with_tools
+        .vars
+        .insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    with_tools.vars.insert(
+        "NVM_DIR".to_string(),
+        world.root.join(".nvm").display().to_string(),
+    );
+    let ran = with_tools.nvm(&["cache", "clear"]);
+    assert_eq!(ran.out, "nvm cache cleared.\n", "{}", ran.err);
+    assert!(!world.shelf.cache.join("bin/gone").exists());
+    assert!(world.shelf.cache.is_dir());
+    assert!(nvm_cache.join("bin/kept").is_file());
+
+    // `default-packages` in `$NVM_DIR` belongs to official nvm. The shelf
+    // reads its own list.
+    fs::write(world.root.join(".nvm/default-packages"), "not-this-one\n").unwrap();
+    fs::write(&world.shelf.default_packages, "typescript\n").unwrap();
+    let ran = world.call("nvm_get_default_packages", &[]);
+    assert_eq!(ran.out, "typescript");
+
+    // The path helpers that scripts call go through the shelf too.
+    let listed = format!("{}/bin:/usr/bin", world.path_of("v22.1.0"));
+    let ran = world.call("nvm_strip_path", &[&listed, "/bin"]);
+    assert_eq!(ran.out, "/usr/bin");
+    let ran = world.call(
+        "nvm_change_path",
+        &["/usr/bin", "/bin", &world.path_of("v22.1.0")],
+    );
+    assert_eq!(ran.out, format!("{listed}\n"));
+}
+
+#[test]
+fn a_version_the_shelf_will_not_remove_is_not_called_uninstalled() {
+    let world = World::new();
+    world.with(&["v20.11.1", "v22.1.0"]);
+    fs::write(world.shelf.folder("v20.11.1").join("keep"), "").unwrap();
+    fs::write(world.shelf.aliases.join("old"), "v20.11.1\n").unwrap();
+
+    let ran = world.nvm(&["uninstall", "20"]);
+    assert_eq!(ran.outcome.status, 1);
+    assert_eq!(ran.out, "");
+    assert!(
+        ran.err
+            .ends_with("nvm: could not uninstall v20.11.1: the shelf keeps this one\n"),
+        "{}",
+        ran.err
+    );
+    assert!(world.shelf.folder("v20.11.1").join("bin/node").exists());
+    assert!(world.shelf.aliases.join("old").exists());
+}
+
+#[test]
+fn an_install_through_the_shelf_keeps_what_was_asked_for() {
+    let mut world = World::new();
+    world
+        .vars
+        .insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    world
+        .vars
+        .insert("NVM_NODEJS_ORG_MIRROR".to_string(), serve_index());
+    // A hook would take the install away from the shelf. The shelf turns
+    // hooks down, so this one never runs.
+    let hook = world.root.join("hook");
+    fs::write(&hook, "#!/bin/sh\ntouch \"$(dirname \"$0\")/hook-ran\"\n").unwrap();
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+    world.vars.insert(
+        "NVM_INSTALL_THIRD_PARTY_HOOK".to_string(),
+        hook.display().to_string(),
+    );
+
+    let ran = world.nvm(&[
+        "install",
+        "-b",
+        "--no-progress",
+        "--alias=mine",
+        "22",
+        "--with-intl=none",
+    ]);
+    assert_eq!(ran.outcome.status, 0, "{}{}", ran.out, ran.err);
+    assert!(!world.root.join("hook-ran").exists());
+    assert!(!ran.err.contains("THIRD_PARTY_HOOK"), "{}", ran.err);
+    assert_eq!(
+        *world.shelf.asked.borrow(),
+        [
+            "v22.1.0 source:false binary-only:true no-progress:true jobs: configure: --with-intl=none"
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(world.shelf.aliases.join("mine")).unwrap(),
+        "22\n"
+    );
+
+    let ran = world.nvm(&["install", "-j", "3", "--default", "20"]);
+    assert_eq!(ran.outcome.status, 0, "{}{}", ran.out, ran.err);
+    assert_eq!(
+        world.shelf.asked.borrow()[1],
+        "v20.11.1 source:false binary-only:false no-progress:false jobs:3 configure:"
+    );
+    assert_eq!(
+        fs::read_to_string(world.shelf.aliases.join("default")).unwrap(),
+        "20\n"
+    );
 }
 
 // From here on: the second identity. `shelfy` is installed, loaded and
@@ -704,9 +915,9 @@ fn real_shells_run_nvm_through_the_second_program() {
 
     let script = r#"
 . "$NVM_DIR/nvm.sh" || exit 90
-echo "loaded:${SHELFY_LOADED-} default:$(nvm current)"
+echo "loaded:${SHELFY_LOADED-} default:$(nvm current) shelf:${SHELF_NODE_VERSION-}"
 nvm use 22.1.0 || exit 91
-echo "node:$(command -v node)"
+echo "node:$(command -v node) shelf:${SHELF_NODE_VERSION-}"
 echo "aliases:$(nvm alias default 22 >/dev/null && cat "$HOME/shelf-aliases/default")"
 case "$(command -v __shelfy_handoff)" in __shelfy_handoff) echo own:yes ;; esac
 command -v __nvmimic_handoff >/dev/null 2>&1 && echo "nvmimic's function is here"
@@ -731,8 +942,8 @@ echo done
         assert_eq!(
             said,
             format!(
-                "loaded:1 default:v20.1.0\nNow using node v22.1.0 (npm v10.7.0)\n\
-                 node:{}/shelf/22.1.0/bin/node\naliases:22\nown:yes\ndone\n",
+                "loaded:1 default:v20.1.0 shelf:20.1.0\nNow using node v22.1.0 (npm v10.7.0)\n\
+                 node:{}/shelf/22.1.0/bin/node shelf:22.1.0\naliases:22\nown:yes\ndone\n",
                 home.display()
             ),
             "{shell}: {errors}"

@@ -119,11 +119,15 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
         }
     };
     activate(nvm, &version_dir);
+    let backend = nvm.backend;
+    backend.switched(&mut nvm.vars, Some(&version));
     // Asks the newly active node for its version while a switch is being
     // paid for anyway, so `nvm current` and the next shell start nothing.
     local::ls_current(nvm);
 
-    if nvm.vars.get("NVM_SYMLINK_CURRENT") == "true" {
+    if nvm.vars.get("NVM_SYMLINK_CURRENT") == "true"
+        && backend.offers(crate::complete::Needs::SymlinkCurrent)
+    {
         let current = format!("{}/current", nvm.vars.get("NVM_DIR"));
         let _ = std::fs::remove_file(&current);
         let _ = std::os::unix::fs::symlink(&version_dir, &current);

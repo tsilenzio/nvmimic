@@ -9,7 +9,7 @@ use std::fs;
 ///
 /// nvm: nvm_cache_dir
 pub fn cache_dir(nvm: &Nvm) -> String {
-    format!("{}/.cache", nvm.vars.get("NVM_DIR"))
+    nvm.backend.cache_dir(&nvm.vars)
 }
 
 /// nvm: nvm:cache

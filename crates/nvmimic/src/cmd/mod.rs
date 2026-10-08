@@ -38,6 +38,14 @@ pub fn nvm(nvm: &mut Nvm, args: &[String]) -> i32 {
         }
     }
 
+    // A store other than nvm's own may not do everything nvm does.
+    let backend = nvm.backend;
+    if let Some((what, needs)) = crate::complete::turned_down(args, &|needs| backend.offers(needs))
+    {
+        nvm.io.err(&backend.unavailable(&what, needs));
+        return 1;
+    }
+
     let command = args[0].as_str();
     let rest = &args[1..];
     match command {

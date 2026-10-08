@@ -318,7 +318,7 @@ pub fn install_npm_if_needed(nvm: &mut Nvm) -> i32 {
 ///
 /// nvm: nvm_get_default_packages
 pub fn get_default_packages(nvm: &mut Nvm) -> (String, i32) {
-    let file = format!("{}/default-packages", nvm.vars.get("NVM_DIR"));
+    let file = nvm.backend.default_packages_file(&nvm.vars);
     if !Path::new(&file).is_file() {
         return (String::new(), 0);
     }

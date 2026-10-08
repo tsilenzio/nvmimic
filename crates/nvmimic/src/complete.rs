@@ -14,8 +14,9 @@
 //! [`Backend`]: crate::backend::Backend
 //! [`Backend::offers`]: crate::backend::Backend::offers
 
-/// What an entry needs from the place versions are kept.
+/// What an entry needs from the place versions are kept. More may be added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Needs {
     /// Works with any store.
     Nothing,
@@ -31,10 +32,20 @@ pub enum Needs {
     Cache,
     /// Removes an installed version.
     Removal,
+    /// Keeps io.js releases as well as Node. Without it the name `iojs`
+    /// isn't suggested and an io.js version isn't installed.
+    Iojs,
+    /// Keeps a `current` link in the nvm folder that follows `nvm use`,
+    /// which is what `NVM_SYMLINK_CURRENT=true` asks for.
+    SymlinkCurrent,
+    /// Lets the program named in `NVM_INSTALL_THIRD_PARTY_HOOK` install a
+    /// version in place of the backend.
+    InstallHook,
 }
 
-/// What one argument of a command takes.
+/// What one argument of a command takes. More may be added.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Takes {
     /// An installed version, or an alias that names one.
     Version,
@@ -396,6 +407,57 @@ pub static NVMIMIC: Command = Command {
     ],
 };
 
+/// What `nvm <args>` needs that `offers` turns down, with the words that
+/// ask for it, such as `nvm install -s`. `None` when everything typed is on
+/// offer. `nvm` checks this before it runs a command.
+pub fn turned_down(args: &[String], offers: &dyn Fn(Needs) -> bool) -> Option<(String, Needs)> {
+    // The names nvm takes for a command besides the one in the table.
+    let name = match args.first()?.as_str() {
+        "i" => "install",
+        "list" => "ls",
+        "list-remote" => "ls-remote",
+        "copy-packages" => "reinstall-packages",
+        name => name,
+    };
+    let mut command = NVM.commands.iter().find(|command| command.name == name)?;
+    let mut typed = format!("nvm {}", args[0]);
+    if !offers(command.needs) {
+        return Some((typed, command.needs));
+    }
+    for arg in &args[1..] {
+        if arg == "--" {
+            break;
+        }
+        let needs = if arg.starts_with('-') {
+            command
+                .flags
+                .iter()
+                .find(|flag| match flag.name.ends_with('=') {
+                    true => arg.starts_with(flag.name),
+                    false => arg == flag.name,
+                })
+                .map(|flag| flag.needs)
+        } else {
+            match command.commands.iter().find(|next| next.name == arg) {
+                Some(next) => {
+                    command = next;
+                    typed = format!("{typed} {arg}");
+                    Some(next.needs)
+                }
+                // An argument: what comes after it is the command's own.
+                None => break,
+            }
+        };
+        if let Some(needs) = needs.filter(|needs| !offers(*needs)) {
+            return Some(match arg.starts_with('-') {
+                true => (format!("{typed} {arg}"), needs),
+                false => (typed, needs),
+            });
+        }
+    }
+    None
+}
+
 /// The suggestions for the word at `words[current]`. `words[0]` is the
 /// command itself. `offers` says whether the store can do what an entry
 /// needs, and `list` gives the words an argument can take.
@@ -520,5 +582,38 @@ mod tests {
         let commands = ask(&NVM, "nvm ", &no_source);
         assert!(!commands.contains(&"ls-remote".to_string()));
         assert!(commands.contains(&"ls".to_string()));
+    }
+    #[test]
+    fn a_command_or_flag_the_store_does_not_offer_is_named_as_typed() {
+        let asked = |line: &str, missing: Needs| {
+            let args: Vec<String> = words(line);
+            turned_down(&args, &|needs| needs != missing)
+        };
+        assert_eq!(
+            asked("install -s 20", Needs::Source),
+            Some(("nvm install -s".to_string(), Needs::Source))
+        );
+        assert_eq!(
+            asked("i --reinstall-packages-from=18 20", Needs::Packages),
+            Some((
+                "nvm i --reinstall-packages-from=18".to_string(),
+                Needs::Packages
+            ))
+        );
+        assert_eq!(
+            asked("cache clear", Needs::Cache),
+            Some(("nvm cache".to_string(), Needs::Cache))
+        );
+        assert_eq!(
+            asked("list-remote --lts", Needs::Remote),
+            Some(("nvm list-remote".to_string(), Needs::Remote))
+        );
+        // What comes after a version or `--` isn't nvm's flag.
+        assert_eq!(asked("install 20 -s", Needs::Source), None);
+        assert_eq!(asked("exec -- -s", Needs::Source), None);
+        // Everything is on offer from nvm's own store.
+        for line in ["install -s 20", "cache clear", "uninstall 20", "frobnicate"] {
+            assert_eq!(turned_down(&words(line), &|_| true), None);
+        }
     }
 }

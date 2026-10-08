@@ -8,6 +8,7 @@ use nvmimic::context::Nvm;
 use nvmimic::identity::{Identity, Packages};
 use nvmimic::nvm::paths;
 use nvmimic::shell::Vars;
+use std::cell::RefCell;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -53,6 +54,12 @@ pub static SHELFY: Identity = Identity {
 pub struct Shelf {
     pub store: PathBuf,
     pub aliases: PathBuf,
+    /// Downloads and install locks, kept away from `$NVM_DIR/.cache`.
+    pub cache: PathBuf,
+    /// The shelf's own list of packages for every new version.
+    pub default_packages: PathBuf,
+    /// What each install was asked for, for the tests to read.
+    pub asked: RefCell<Vec<String>>,
 }
 
 impl Shelf {
@@ -61,6 +68,9 @@ impl Shelf {
         Shelf {
             store: root.join("shelf"),
             aliases: root.join("shelf-aliases"),
+            cache: root.join("shelf-cache"),
+            default_packages: root.join("shelf-packages"),
+            asked: RefCell::new(Vec::new()),
         }
     }
 
@@ -74,9 +84,30 @@ impl Shelf {
 }
 
 impl Backend for Shelf {
-    // The shelf installs versions itself and never builds one.
+    // The shelf installs versions itself and never builds one. It keeps
+    // Node only, has no `current` link, and lets no hook install for it.
     fn offers(&self, needs: Needs) -> bool {
-        needs != Needs::Source
+        !matches!(
+            needs,
+            Needs::Source | Needs::Iojs | Needs::SymlinkCurrent | Needs::InstallHook
+        )
+    }
+
+    // The shelf keeps a variable of its own in step with the active
+    // version, the way a tool with its own idea of "the current Node" does.
+    fn switched(&self, vars: &mut Vars, version: Option<&str>) {
+        match version {
+            Some(version) => vars.export("SHELF_NODE_VERSION", version.trim_start_matches('v')),
+            None => vars.unset("SHELF_NODE_VERSION"),
+        }
+    }
+
+    fn cache_dir(&self, _vars: &Vars) -> String {
+        self.cache.display().to_string()
+    }
+
+    fn default_packages_file(&self, _vars: &Vars) -> String {
+        self.default_packages.display().to_string()
     }
 
     fn root(&self, vars: &Vars) -> String {
@@ -105,11 +136,24 @@ impl Backend for Shelf {
         (paths::tree_contains_path(&self.store(), path) == Some(true)).then_some(Flavor::Node)
     }
 
+    // A version with a `keep` file in it stays on the shelf.
     fn remove(&self, vars: &Vars, version: &str) -> std::io::Result<()> {
+        if self.folder(version).join("keep").exists() {
+            return Err(std::io::Error::other("the shelf keeps this one"));
+        }
         backend::remove_tree(&self.version_path(vars, version))
     }
 
     fn install(&self, nvm: &mut Nvm, request: &InstallRequest) -> Option<i32> {
+        self.asked.borrow_mut().push(format!(
+            "{} source:{} binary-only:{} no-progress:{} jobs:{} configure:{}",
+            request.version,
+            request.from_source,
+            request.binary_only,
+            request.no_progress,
+            request.make_jobs,
+            request.configure_args
+        ));
         nvm.io
             .echo(&format!("shelf: putting {} in place", request.version));
         fake_node(&self.folder(request.version), request.version);

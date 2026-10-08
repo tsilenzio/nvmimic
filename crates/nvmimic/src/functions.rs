@@ -122,12 +122,12 @@ pub fn call(nvm: &mut Nvm, name: &str, args: &[String], fd3: &mut dyn FnMut(&str
                 nvm.io.err("${NVM_DIR} not set!");
                 return 1;
             }
-            let stripped = paths::strip_path(arg(0), nvm.vars.get("NVM_DIR"), arg(1));
+            let stripped = nvm.backend.strip_path(&nvm.vars, arg(0), arg(1));
             nvm.io.out_raw(&stripped);
             0
         }
         "nvm_change_path" => {
-            let changed = paths::change_path(arg(0), arg(1), arg(2), nvm.vars.get("NVM_DIR"));
+            let changed = nvm.backend.change_path(&nvm.vars, arg(0), arg(1), arg(2));
             nvm.io.echo(&changed);
             0
         }
@@ -515,7 +515,11 @@ fn complete(nvm: &mut Nvm, args: &[String]) {
     let backend = nvm.backend;
     // The same words, in the same order, as nvm's own completion builds
     // from `nvm_ls` and its `__nvm_aliases`.
-    let always = ["node", "stable", "unstable", "iojs"].map(str::to_string);
+    let always: Vec<String> = ["node", "stable", "unstable", "iojs"]
+        .into_iter()
+        .filter(|name| *name != "iojs" || backend.offers(crate::complete::Needs::Iojs))
+        .map(str::to_string)
+        .collect();
     let mut list = |takes: Takes| -> Vec<String> {
         let mut found = Vec::new();
         if takes == Takes::Version {

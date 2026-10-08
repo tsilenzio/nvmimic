@@ -44,12 +44,15 @@ fn sanitized(nvm: &Nvm, path: &str) -> String {
 }
 
 /// Removes a download's work directory, as nvm's cleanup does, but only
-/// when it lies inside `$NVM_DIR`. Under dash, nvm 0.40.8 can be left
-/// holding the caller's own `$TMPDIR` here and removes that. nvmimic does
-/// not delete anything outside `$NVM_DIR`.
+/// when it lies inside `$NVM_DIR` or the backend's cache folder. Under
+/// dash, nvm 0.40.8 can be left holding the caller's own `$TMPDIR` here and
+/// removes that. nvmimic does not delete anything outside those two.
 fn remove_work_dir(nvm: &mut Nvm, dir: &str) {
     let nvm_dir = nvm.vars.get("NVM_DIR").to_string();
-    if paths::tree_contains_path(&nvm_dir, dir) == Some(true) {
+    let cache = cache_dir(nvm);
+    if paths::tree_contains_path(&nvm_dir, dir) == Some(true)
+        || paths::tree_contains_path(&cache, dir) == Some(true)
+    {
         tools::rm_rf(nvm, &[dir]);
     }
 }

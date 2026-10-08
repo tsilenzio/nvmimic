@@ -333,7 +333,13 @@ fn install(nvm: &mut Nvm, args: &[String], prefixed: &mut Option<Prefixed>) -> i
         return exit_code;
     }
 
-    let hook = nvm.vars.get("NVM_INSTALL_THIRD_PARTY_HOOK").to_string();
+    // A backend that installs its own way can turn the hook down. The hook
+    // would otherwise take the install away from it and be handed the
+    // backend's folder to write into.
+    let hook = match nvm.backend.offers(crate::complete::Needs::InstallHook) {
+        true => nvm.vars.get("NVM_INSTALL_THIRD_PARTY_HOOK").to_string(),
+        false => String::new(),
+    };
     if !hook.is_empty() {
         nvm.io.err(text::HOOK_DISPATCH);
         let method = if nobinary { "source" } else { "binary" };
@@ -357,8 +363,22 @@ fn install(nvm: &mut Nvm, args: &[String], prefixed: &mut Option<Prefixed>) -> i
             return 33;
         }
         exit_code = 0;
-    } else if let Some(status) = backend_install(nvm, &version, nobinary) {
+    } else if let Some(status) = backend_install(
+        nvm,
+        &Asked {
+            version: &version,
+            from_source: nobinary,
+            binary_only: nosource,
+            no_progress: noprogress || nvm.vars.get("NVM_NO_PROGRESS") == "1",
+            configure_args: &additional_parameters,
+        },
+    ) {
         exit_code = status;
+        // nvm's own installer makes the alias that `--alias=` or
+        // `--default` asked for once the release is unpacked.
+        if status == 0 && !alias_name.is_empty() {
+            call(nvm, &["alias", &alias_name, &provided]);
+        }
     } else {
         // One install of a version at a time, so two runs cannot both work
         // on its directory.
@@ -473,18 +493,39 @@ fn install(nvm: &mut Nvm, args: &[String], prefixed: &mut Option<Prefixed>) -> i
 }
 
 /// Lets the backend install the version in its own way, if it has one.
-fn backend_install(nvm: &mut Nvm, version: &str, from_source: bool) -> Option<i32> {
+fn backend_install(nvm: &mut Nvm, asked: &Asked) -> Option<i32> {
     let backend = nvm.backend;
-    let flavor = match version::is_iojs(version) {
+    let flavor = match version::is_iojs(asked.version) {
         true => Flavor::Iojs,
         false => Flavor::Node,
     };
+    if flavor == Flavor::Iojs && !backend.offers(crate::complete::Needs::Iojs) {
+        let what = format!("nvm install {}", asked.version);
+        nvm.io
+            .err(&backend.unavailable(&what, crate::complete::Needs::Iojs));
+        return Some(1);
+    }
+    let make_jobs = nvm.vars.get("NVM_MAKE_JOBS").to_string();
     let request = InstallRequest {
-        version,
+        version: asked.version,
         flavor,
-        from_source,
+        from_source: asked.from_source,
+        binary_only: asked.binary_only,
+        no_progress: asked.no_progress,
+        make_jobs: &make_jobs,
+        configure_args: asked.configure_args,
     };
     backend.install(nvm, &request)
+}
+
+/// What `nvm install` was asked for, as far as a backend's own install
+/// gets to know it.
+struct Asked<'a> {
+    version: &'a str,
+    from_source: bool,
+    binary_only: bool,
+    no_progress: bool,
+    configure_args: &'a str,
 }
 
 /// The optional steps once the version is active: the newest npm, the

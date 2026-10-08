@@ -12,6 +12,7 @@
 //! [`Backend::owner_of`] and [`Backend::remove`]. The rest have defaults
 //! that fit most stores. See each method for when to replace it.
 
+use crate::complete::Needs;
 use crate::context::Nvm;
 use crate::nvm::{paths, version};
 use crate::shell::Vars;
@@ -53,13 +54,28 @@ pub struct Installed {
 }
 
 /// What `nvm install` asks a backend that installs versions its own way.
+/// More may be added, so it can't be built outside this crate.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct InstallRequest<'a> {
     /// The exact version, as nvm names it: `v22.1.0` or `iojs-v3.3.1`.
     pub version: &'a str,
     pub flavor: Flavor,
     /// Whether the caller asked for a build from source (`nvm install -s`).
     pub from_source: bool,
+    /// Whether the caller ruled a build from source out (`nvm install -b`,
+    /// or `NVM_NO_SOURCE_FALLBACK=1`).
+    pub binary_only: bool,
+    /// Whether to leave out the progress bar (`--no-progress`, or
+    /// `NVM_NO_PROGRESS=1`).
+    pub no_progress: bool,
+    /// How many `make` jobs a build may run: nvm's `NVM_MAKE_JOBS`, which
+    /// `-j` sets. Empty when nobody said.
+    pub make_jobs: &'a str,
+    /// What came after the version on the command line, each with a space
+    /// in front, as nvm keeps them. nvm hands these to `configure` when it
+    /// builds from source.
+    pub configure_args: &'a str,
 }
 
 /// What reading an alias file found.
@@ -94,22 +110,59 @@ pub trait Backend {
     /// found on `PATH`, and a `node` that is not the backend's is `system`.
     fn owner_of(&self, vars: &Vars, path: &str) -> Option<Flavor>;
 
-    /// Removes an installed version, as `rm -rf` on its folder would.
+    /// Removes an installed version, as `rm -rf` on its folder would. After
+    /// an error, `nvm uninstall` prints it, leaves the version's aliases
+    /// alone and returns 1.
     fn remove(&self, vars: &Vars, version: &str) -> std::io::Result<()>;
+
+    /// Whether this backend can do what a command or flag needs. Tab
+    /// completion leaves out the entries it can't, see [`crate::complete`],
+    /// and a command or flag it can't do is turned down when it is run,
+    /// with what [`Backend::unavailable`] says.
+    fn offers(&self, _needs: Needs) -> bool {
+        true
+    }
+
+    /// What to print when someone runs a command or flag this backend
+    /// doesn't offer. `what` is how they typed it, such as `nvm install -s`.
+    /// nvm has no words for this, so these are the library's own.
+    fn unavailable(&self, what: &str, _needs: Needs) -> String {
+        format!("`{what}` isn't available with this setup.")
+    }
 
     /// Installs a version in the backend's own way and returns nvm's exit
     /// status, or returns `None` to let nvm download and unpack the release
     /// into [`Backend::version_path`] itself. What the backend wants shown
-    /// goes through `nvm.io`. After a status of 0, nvm checks the install
-    /// and switches to it as it does after its own.
-    /// Whether this backend can do what a command or flag needs. Tab
-    /// completion leaves out the entries it can't, see [`crate::complete`].
-    fn offers(&self, _needs: crate::complete::Needs) -> bool {
-        true
-    }
-
+    /// goes through `nvm.io`, the `Downloading and installing` line
+    /// included (`crate::text::install::downloading_and_installing`). After
+    /// a status of 0, nvm checks the install, makes the alias `--alias=` or
+    /// `--default` asked for, and switches to the version as it does after
+    /// its own install.
     fn install(&self, _nvm: &mut Nvm, _request: &InstallRequest) -> Option<i32> {
         None
+    }
+
+    /// Called when the calling shell was just pointed at one of this
+    /// backend's versions (`Some`, with nvm's name for it, as after `nvm
+    /// use`) or away from all of them (`None`, as after `nvm deactivate`
+    /// and `nvm unload`). A backend that keeps a variable of its own in
+    /// step with the active version sets it here: what it does to `vars`
+    /// reaches the shell with nvm's own changes, also when a new shell
+    /// switches to the default version while it loads.
+    fn switched(&self, _vars: &mut Vars, _version: Option<&str>) {}
+
+    /// Where downloads, unpacked archives and install locks are kept. The
+    /// default is nvm's `.cache` under [`Backend::root`]. `nvm cache clear`
+    /// empties this folder.
+    ///
+    /// nvm: nvm_cache_dir
+    fn cache_dir(&self, vars: &Vars) -> String {
+        format!("{}/.cache", self.root(vars))
+    }
+
+    /// The file listing the npm packages to add to every new version.
+    fn default_packages_file(&self, vars: &Vars) -> String {
+        format!("{}/default-packages", self.root(vars))
     }
 
     /// Takes this backend's entries ending in `suffix` out of a colon list
@@ -261,8 +314,11 @@ impl Backend for NvmDirBackend {
         }
     }
 
+    // nvm runs `rm -rf` with its complaints thrown away and reports the
+    // version as uninstalled whatever happened, so a failure isn't one here.
     fn remove(&self, vars: &Vars, version: &str) -> std::io::Result<()> {
-        remove_tree(&self.version_path(vars, version))
+        let _ = remove_tree(&self.version_path(vars, version));
+        Ok(())
     }
 }
 
