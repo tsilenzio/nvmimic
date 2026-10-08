@@ -40,9 +40,9 @@ and remembers the answers.
 
 How close it is gets measured, not guessed. A test harness runs official nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
-they print, return, set and write. It runs 348 test scripts written for
+they print, return, set and write. It runs 343 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
-way (228 of them so far). Right now every one of them matches. Another 63
+way (177 of them so far). Right now every one of them matches. Another 63
 of nvm's tests install real Node releases from nodejs.org. Those run in a
 separate pass that needs the internet. What still differs is listed under
 [Known differences](#known-differences).
@@ -411,13 +411,12 @@ outside `$NVM_DIR`. Everything else about that failure matches.
 
 These aren't known differences. They're places nobody has looked.
 
-- **Linux.** The tests have run once on Linux (Debian 12 on arm64, in a
-  container), and 2145 of 2150 comparisons matched. The other five come from
-  two of nvm's own tests. One defines a shell function called `manpath` on
-  a machine with no `manpath` program, and `nvm use` then leaves `MANPATH`
-  alone where nvm sets it. The other reads an alias file with a zero byte
-  in it, and nvmimic prints that byte where nvm doesn't. Everything else
-  is tested on macOS, and there's no Linux download of nvmimic yet.
+- **Linux.** The tests also run on Linux, in a container (Debian 12 on
+  arm64), and all 2028 comparisons there match. One of nvm's own tests is
+  left out on Linux. It defines a shell function called `manpath` on a
+  machine with no `manpath` program, and `nvm use` then leaves `MANPATH`
+  alone where nvm sets it. Everything else is tested on macOS, and there's
+  no Linux download of nvmimic yet.
 - **Building real Node from source.** The tests build from a stand-in source
   package with a tiny `configure` script and `Makefile`. Every step nvm
   takes around the build is compared. A real Node build, which takes most of
