@@ -627,6 +627,20 @@ fn dry_run_changes_nothing() {
 }
 
 #[test]
+fn a_dry_run_lists_its_steps_and_never_asks() {
+    let home = Home::new();
+    real_nvm(&home);
+    let out = home.nvmimic(&["self", "install", "--dry-run"]);
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(said.contains("Would install nvmimic"), "{said}");
+    assert!(said.contains("Would keep a copy of"), "{said}");
+    assert!(!said.contains("[y/N]"), "{said}");
+    assert!(!home.has_own_files());
+    assert!(!home.root.join(".nvm.backup-1").exists());
+}
+
+#[test]
 fn git_installs_get_a_warning() {
     let home = Home::new();
     real_nvm(&home);

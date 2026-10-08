@@ -385,9 +385,13 @@ fn choices(default: bool) -> &'static str {
     if default { "[Y/n]" } else { "[y/N]" }
 }
 
+/// Asks before a step. A dry run only lists what would happen, so it never
+/// asks and carries on as if the answer were yes.
 pub(crate) fn ask(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
     if options.force {
         ui.say(&format!("{question} {} y (--force)", choices(default)));
+        true
+    } else if options.dry_run {
         true
     } else {
         ui.ask(question, default)
@@ -532,7 +536,12 @@ pub fn self_install(
             ui.say("happens, run `nvmimic self install` again.");
         }
         ui.say("Making a full backup of the folder first is a good idea.");
-        if ask(
+        if options.dry_run && !options.force {
+            ui.say(&format!(
+                "Would ask whether to copy all of {} to a backup folder first.",
+                nvm_dir.display()
+            ));
+        } else if ask(
             ui,
             options,
             &format!(
