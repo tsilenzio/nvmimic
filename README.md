@@ -38,7 +38,7 @@ start no other program at all, with one small exception: the first
 `nvm use` after Node or npm changes asks each of them for its version once
 and remembers the answers.
 
-How close it is gets measured, not guessed. A test harness runs real nvm and
+How close it is gets measured, not guessed. A test harness runs official nvm and
 nvmimic side by side under bash, zsh, sh and dash, and compares everything
 they print, return, set and write. It runs 348 test scripts written for
 nvmimic, plus the tests from nvm's own test suite that can be compared this
@@ -62,7 +62,7 @@ you start from scratch. If nvm is already there, nvmimic takes it over: it keeps
 settings, keeps a copy of nvm's own scripts in a backup folder, and offers to copy
 the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
-load Homebrew's copy would keep running the real nvm.
+load Homebrew's copy would keep running official nvm.
 
 You can stop `self install` at any moment, and a crash or a power cut can
 too. It copies nvm's scripts and writes down where the copies are before it
@@ -72,7 +72,7 @@ install` again to finish, or `nvmimic self uninstall` to go back.
 `self install` also copies the nvmimic program to `~/.local/bin/nvmimic`.
 That way you can type `nvmimic self install` again later without hunting for
 the file you downloaded. nvmimic never puts a program named `nvm` on your
-`PATH`, because real nvm is a shell function and scripts check for that.
+`PATH`, because official nvm is a shell function and scripts check for that.
 
 ### Loading nvm in your shell
 
@@ -204,7 +204,7 @@ Pick one of these:
 - Run `nvmimic self eject`, upgrade nvm the usual way, then run
   `nvmimic self install` again.
 - Or run nvm's install script as usual. It writes nvm's scripts back over
-  nvmimic's, so your shells run real nvm again until you run
+  nvmimic's, so your shells run official nvm again until you run
   `nvmimic self install` once more. nvm's installer doesn't touch nvmimic's
   own files, so nothing is lost in between.
 
@@ -229,13 +229,13 @@ One thing can cost a second start. A program only sees the variables your
 shell exported, and nvm also reads some that are set without `export`. So
 the printed code first checks that every variable nvmimic looked at holds
 what nvmimic saw. If one doesn't, the shell starts nvmimic again and hands
-every variable over. You get the same result either way. Real nvm starts around 40
+every variable over. You get the same result either way. Official nvm starts around 40
 small programs for the same job, plus `node` in some cases.
 
 On the test machine, `cargo xtask bench` measured the extra time a new shell
 spends on nvm:
 
-| Shell | Real nvm 0.40.8 | nvmimic |
+| Shell | Official nvm 0.40.8 | nvmimic |
 |---|---|---|
 | bash 3.2 | 144ms | 5ms |
 | zsh | 346ms | 6ms |
@@ -275,7 +275,7 @@ puts them back and removes nvmimic.
 
 ### The text of the functions
 
-`declare -f nvm_ls` and `type nvm_ls` print the code of a function. Real nvm
+`declare -f nvm_ls` and `type nvm_ls` print the code of a function. Official nvm
 shows its shell code there. nvmimic shows a one-line function that calls the
 nvmimic program. They can't be the same text unless nvmimic is nvm.
 
@@ -292,7 +292,7 @@ names a line number inside one of them names a different number.
   versions, so their contents differ from nvm's. Nothing else in `$NVM_DIR`
   is nvmimic's.
 - Outside `$NVM_DIR`, nvmimic keeps the files listed under
-  [Where nvmimic keeps its files](#where-nvmimic-keeps-its-files). Real nvm
+  [Where nvmimic keeps its files](#where-nvmimic-keeps-its-files). Official nvm
   has none of them.
 
 ### One extra function
@@ -306,7 +306,7 @@ The functions carry nvmimic's version. If you update nvmimic while a shell
 is open, that shell gets the new functions the next time you run `nvm`.
 
 Nothing extra hides behind the name `nvm` itself. `nvm` accepts exactly the
-commands real nvm accepts and prints nvm's help for anything else.
+commands official nvm accepts and prints nvm's help for anything else.
 
 ### Tab completion suggests more
 
@@ -376,7 +376,7 @@ call asks the real programs again.
 
 nvm hands many small jobs to programs such as `sed`, `awk`, `sort` and
 `uname`. nvmimic does most of those jobs itself. So if one of those programs
-is missing from your `PATH`, or you put a different one in front, real nvm
+is missing from your `PATH`, or you put a different one in front, official nvm
 fails or changes and nvmimic carries on as if nothing happened. This is
 outside the promise too.
 
@@ -447,7 +447,7 @@ don't call them from your own scripts.
 ## Working on it
 
 - `cargo test --workspace` runs the unit tests.
-- `cargo xtask parity` compares nvmimic with real nvm on every test script.
+- `cargo xtask parity` compares nvmimic with official nvm on every test script.
   It starts a lot of small programs. Run one at a time. More on it below.
 - `cargo xtask bench --check` times sourcing `nvm.sh` and fails if nvmimic gets
   slower than the budget in `bench/budget.toml`.
@@ -463,8 +463,8 @@ don't call them from your own scripts.
 
 ### How the parity tests stay quick
 
-Running real nvm is the slow half of a comparison, and real nvm at one
-version gives the same answer every time. So the first run saves what real
+Running official nvm is the slow half of a comparison, and official nvm at one
+version gives the same answer every time. So the first run saves what official
 nvm did for each test script under each shell, and later runs read that back
 instead of running nvm again. These saved answers are called recordings.
 They live in `target/parity-golden/` and stay on your machine.
@@ -475,7 +475,7 @@ operating system version, or the test code that runs a script.
 
 Some more things you can ask for:
 
-- `cargo xtask parity` is the everyday run. Where real nvm did exactly the
+- `cargo xtask parity` is the everyday run. Where official nvm did exactly the
   same thing under bash, zsh, sh and dash, the script runs under one of them,
   a different one each run. Where the shells differ, it runs under all four.
 - `cargo xtask parity --all-shells` runs every script under every shell.
@@ -484,11 +484,11 @@ Some more things you can ask for:
   and each Rust file names the nvm functions it rewrites in `nvm:` comments.
   A change to a file picks the scripts that cover its functions. A change
   this can't place runs everything.
-- `cargo xtask parity --full` trusts no recording. It runs real nvm and
+- `cargo xtask parity --full` trusts no recording. It runs official nvm and
   nvmimic side by side on everything and tells you if a recording had gone
   out of date. Run it before a release and when moving to a new nvm version.
 - `cargo xtask parity covers` works out the `# covers:` lines again by
-  running real nvm with a note-taking line in each of its functions.
+  running official nvm with a note-taking line in each of its functions.
 - `cargo xtask parity --network` runs the tests from nvm's own suite that
   install real Node releases, which the everyday run leaves out. It
   downloads from nodejs.org, so it needs the internet. Each file is fetched
