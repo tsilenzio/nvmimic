@@ -7,7 +7,8 @@
 //! commands wrote. `nvm.sh` names every one of these files by its full path
 //! either way.
 
-use crate::harness::{Outcome, copy, link_staged, nvmimic_bin, repo_root, write_script};
+use crate::harness::{copy, link_staged, nvmimic_bin, repo_root, write_script};
+use crate::subject::Subject;
 use nvmimic::identity::Identity;
 use nvmimic::install::nvm_sh;
 use nvmimic::shell::quote;
@@ -77,14 +78,19 @@ pub fn install(nvm_dir: &Path, side: &Path, count_launches: bool) {
 /// `shell/bash_completion` registers.
 const OWN_FUNCTIONS: [&str; 2] = ["__nvmimic_handoff", "_nvmimic_complete"];
 
-/// Takes nvmimic's own functions out of the list of functions a run left
-/// behind. Every other name in that list is compared with real nvm's.
-pub fn hide_own_function(outcome: &mut Outcome) {
-    if let Some(functions) = outcome.state.get_mut("functions") {
-        *functions = functions
-            .split(' ')
-            .filter(|name| !OWN_FUNCTIONS.contains(name))
-            .collect::<Vec<_>>()
-            .join(" ");
+/// nvmimic as the program a run compares with official nvm.
+pub struct Nvmimic;
+
+impl Subject for Nvmimic {
+    fn name(&self) -> &str {
+        "nvmimic"
+    }
+
+    fn install(&self, nvm_dir: &Path, side: &Path, count_launches: bool) {
+        install(nvm_dir, side, count_launches)
+    }
+
+    fn own_functions(&self) -> Vec<String> {
+        OWN_FUNCTIONS.map(str::to_string).to_vec()
     }
 }

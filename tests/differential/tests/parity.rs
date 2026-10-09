@@ -21,7 +21,7 @@ fn plan() -> Plan {
     match std::env::var("NVMIMIC_PARITY_RUN").as_deref() {
         Ok("everyday") if !recording() => Plan::everyday(true),
         Ok("all-shells") if !recording() => Plan::everyday(false),
-        _ => Plan::full(Impl::Nvm, Impl::Nvmimic),
+        _ => Plan::full(Impl::Nvm, harness::NVMIMIC),
     }
 }
 
@@ -34,48 +34,6 @@ fn report(results: &[Result]) -> usize {
     let passing = results.iter().filter(|r| r.differences.is_empty()).count();
     eprintln!("{passing}/{} case-shell pairs match", results.len());
     passing
-}
-
-/// Every difference from the last run, in `target/parity-report.txt`.
-fn write_report(results: &[Result]) {
-    let mut text = String::new();
-    for result in results.iter().filter(|r| !r.differences.is_empty()) {
-        text.push_str(&format!(
-            "==== {} ({})\n{}\n\n",
-            result.id,
-            result.shell,
-            result.differences.join("\n")
-        ));
-    }
-    let path = harness::repo_root().join("target/parity-report.txt");
-    let _ = std::fs::write(path, text);
-}
-
-/// How long every pair took, in `target/parity-timings.tsv`: milliseconds
-/// per side, then each side's time to source nvm.sh and to finish setup when
-/// `NVMIMIC_PARITY_PHASES` is set.
-fn write_timings(results: &[Result]) {
-    let ms = |d: std::time::Duration| d.as_millis().to_string();
-    let phase = |p: harness::Phases| match p {
-        Some((sourced, ready)) => format!("{}\t{}", ms(sourced), ms(ready)),
-        None => "\t".to_string(),
-    };
-    let mut text = String::from(
-        "id\tshell\tleft_ms\tright_ms\tleft_sourced\tleft_ready\tright_sourced\tright_ready\n",
-    );
-    for r in results {
-        text.push_str(&format!(
-            "{}\t{}\t{}\t{}\t{}\t{}\n",
-            r.id,
-            r.shell,
-            ms(r.elapsed.0),
-            ms(r.elapsed.1),
-            phase(r.phases.0),
-            phase(r.phases.1)
-        ));
-    }
-    let path = harness::repo_root().join("target/parity-timings.tsv");
-    let _ = std::fs::write(path, text);
 }
 
 /// The harness itself works: real nvm sources and answers in every shell.
@@ -162,8 +120,9 @@ fn reference_cases_match_or_are_known() {
     let mut results = cases::run_all(&all, plan()).unwrap_or_else(stopped);
     results.retain(|r| !cases::is_listed(&skipped, &r.id, &r.shell));
     report(&results);
-    write_report(&results);
-    write_timings(&results);
+    let target = harness::target_dir();
+    cases::write_report(&results, &target.join("parity-report.txt"));
+    cases::write_timings(&results, &target.join("parity-timings.tsv"));
 
     if recording() {
         cases::record(
@@ -176,27 +135,9 @@ fn reference_cases_match_or_are_known() {
     }
 
     let known = cases::listed(KNOWN_FAILING);
-    let mut unexpected = Vec::new();
-    let mut fixed = Vec::new();
-    for result in &results {
-        let listed = cases::is_listed(&known, &result.id, &result.shell);
-        match (result.differences.is_empty(), listed) {
-            (false, false) => unexpected.push(format!(
-                "{} ({}):\n{}",
-                result.id,
-                result.shell,
-                result.differences.join("\n")
-            )),
-            (true, true) => fixed.push(format!("{} {}", result.id, result.shell)),
-            _ => {}
-        }
+    if let Err(message) = cases::judge(&results, &known, KNOWN_FAILING) {
+        panic!("{message}");
     }
-    assert!(
-        unexpected.is_empty() && fixed.is_empty(),
-        "unexpected differences:\n{}\n\nnow passing, remove from KNOWN_FAILING:\n{}",
-        unexpected.join("\n\n"),
-        fixed.join("\n")
-    );
 }
 
 /// Measures which parts of nvm.sh every case runs and writes the result
@@ -293,7 +234,7 @@ fn everyday_commands_launch_only_nvmimic() {
     ];
     for shell in harness::shells() {
         for (step, expected) in steps {
-            let outcome = world.run_with(Impl::Nvmimic, &shell, "", &installed, step);
+            let outcome = world.run_with(harness::NVMIMIC, &shell, "", &installed, step);
             let foreign: Vec<&String> = outcome
                 .launches
                 .iter()
@@ -311,7 +252,7 @@ fn everyday_commands_launch_only_nvmimic() {
         // With nothing remembered, the first `nvm use` asks node and npm for
         // their versions and the second one reuses the answers.
         let outcome = world.run_with(
-            Impl::Nvmimic,
+            harness::NVMIMIC,
             &shell,
             "",
             &format!("nvm install 24.15.0\n{compiled}rm -rf \"$HOME/../own/cache\""),
@@ -331,7 +272,7 @@ fn everyday_commands_launch_only_nvmimic() {
         // version manager's stand-in that answers differently next time.
         // The stand-in releases come with such a script.
         let outcome = world.run_with(
-            Impl::Nvmimic,
+            harness::NVMIMIC,
             &shell,
             "",
             "nvm install 24.15.0",
@@ -348,7 +289,7 @@ fn everyday_commands_launch_only_nvmimic() {
         // One TAB starts nvmimic once and nothing else.
         if shell.name == "bash" {
             let outcome = world.run_with(
-                Impl::Nvmimic,
+                harness::NVMIMIC,
                 &shell,
                 "",
                 "nvm install 24.15.0",

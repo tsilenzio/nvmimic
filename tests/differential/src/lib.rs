@@ -10,6 +10,7 @@ pub mod harness;
 pub mod mirror;
 pub mod nvmsh;
 pub mod own;
+pub mod subject;
 pub mod suite;
 
 use std::path::PathBuf;

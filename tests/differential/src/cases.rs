@@ -21,7 +21,7 @@
 
 use crate::golden;
 use crate::guard::Guard;
-use crate::harness::{self, Impl, Outcome, Shell, SuiteSide, World, diff};
+use crate::harness::{self, Impl, Outcome, Shell, SuiteSide, World, diff, differences};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -157,7 +157,12 @@ fn fingerprint(text: &str) -> String {
 /// `<id> <shell>` pairs listed in `cases/<name>`, where the shell is a name
 /// or `*`. Text after `#` is a comment.
 pub fn listed(name: &str) -> BTreeSet<(String, String)> {
-    fs::read_to_string(cases_dir().join(name))
+    listed_in(&cases_dir(), name)
+}
+
+/// [`listed`] from a folder of the caller's choosing.
+pub fn listed_in(dir: &Path, name: &str) -> BTreeSet<(String, String)> {
+    fs::read_to_string(dir.join(name))
         .unwrap_or_default()
         .lines()
         .map(|line| line.split('#').next().unwrap_or("").trim())
@@ -223,9 +228,10 @@ impl Plan {
     /// Both sides run for every case under every shell. This is the run for
     /// releases and for moving the nvm pin.
     pub fn full(left: Impl, right: Impl) -> Plan {
-        let recordings = match (left, right) {
-            (Impl::Nvm, Impl::Nvmimic) => Recordings::Refresh,
-            _ => Recordings::Unused,
+        // Official nvm against a program is what recordings are for.
+        let recordings = match left == Impl::Nvm && right != Impl::Nvm {
+            true => Recordings::Refresh,
+            false => Recordings::Unused,
         };
         Plan {
             left,
@@ -240,7 +246,7 @@ impl Plan {
     pub fn network() -> Plan {
         Plan {
             left: Impl::Nvm,
-            right: Impl::Nvmimic,
+            right: harness::NVMIMIC,
             recordings: Recordings::Unused,
             one_shell: false,
         }
@@ -248,9 +254,14 @@ impl Plan {
 
     /// nvmimic against recordings of real nvm.
     pub fn everyday(one_shell: bool) -> Plan {
+        Plan::everyday_for(harness::NVMIMIC, one_shell)
+    }
+
+    /// Another program against the same recordings.
+    pub fn everyday_for(subject: Impl, one_shell: bool) -> Plan {
         Plan {
             left: Impl::Nvm,
-            right: Impl::Nvmimic,
+            right: subject,
             recordings: Recordings::Replay,
             one_shell,
         }
@@ -369,11 +380,23 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
                                 fresh
                             }
                         };
-                        let mut b = world.run_case(right, shell, case, &mut suite_right);
-                        if right == Impl::Nvmimic {
-                            crate::own::hide_own_function(&mut b);
-                        }
-                        let mut differences = diff((&labels.0, &a), (&labels.1, &b));
+                        let b = world.run_case(right, shell, case, &mut suite_right);
+                        // What the right side differs in on purpose is
+                        // left out, rule by rule.
+                        let expected = match right {
+                            Impl::Subject(subject) => Some(subject.expected()),
+                            Impl::Nvm => None,
+                        };
+                        let mut differences: Vec<String> =
+                            differences((&labels.0, &a), (&labels.1, &b))
+                                .into_iter()
+                                .filter(|(key, _)| {
+                                    !expected.is_some_and(|expected| {
+                                        expected.covers(&case.id, &shell.name, key)
+                                    })
+                                })
+                                .map(|(_, text)| text)
+                                .collect();
                         if let Some(changes) = stale {
                             differences.push(format!(
                                 "real nvm no longer does what was recorded for this pair, so \
@@ -467,9 +490,88 @@ pub fn measure_covers(
 
 /// Writes `<id> <shell>` lines for every result that differs, under a header.
 pub fn record(name: &str, header: &str, results: &[Result]) {
+    record_in(&cases_dir(), name, header, results)
+}
+
+/// [`record`] into a folder of the caller's choosing, for a program that
+/// keeps its own lists.
+pub fn record_in(dir: &Path, name: &str, header: &str, results: &[Result]) {
     let mut text = String::from(header);
     for result in results.iter().filter(|r| !r.differences.is_empty()) {
         text.push_str(&format!("{} {}\n", result.id, result.shell));
     }
-    fs::write(cases_dir().join(name), text).unwrap();
+    fs::write(dir.join(name), text).unwrap();
+}
+
+/// The rule a run passes by: every pair matches unless it is on the `known`
+/// list, and a listed pair that now matches fails too, so the list only
+/// ever shrinks. `list` is the list's name, for the message.
+pub fn judge(
+    results: &[Result],
+    known: &BTreeSet<(String, String)>,
+    list: &str,
+) -> std::result::Result<(), String> {
+    let mut unexpected = Vec::new();
+    let mut fixed = Vec::new();
+    for result in results {
+        let listed = is_listed(known, &result.id, &result.shell);
+        match (result.differences.is_empty(), listed) {
+            (false, false) => unexpected.push(format!(
+                "{} ({}):\n{}",
+                result.id,
+                result.shell,
+                result.differences.join("\n")
+            )),
+            (true, true) => fixed.push(format!("{} {}", result.id, result.shell)),
+            _ => {}
+        }
+    }
+    if unexpected.is_empty() && fixed.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "unexpected differences:\n{}\n\nnow passing, remove from {list}:\n{}",
+        unexpected.join("\n\n"),
+        fixed.join("\n")
+    ))
+}
+
+/// Writes every difference of a run to `path`, one block per pair.
+pub fn write_report(results: &[Result], path: &Path) {
+    let mut text = String::new();
+    for result in results.iter().filter(|r| !r.differences.is_empty()) {
+        text.push_str(&format!(
+            "==== {} ({})\n{}\n\n",
+            result.id,
+            result.shell,
+            result.differences.join("\n")
+        ));
+    }
+    let _ = fs::write(path, text);
+}
+
+/// Writes how long every pair took to `path`: milliseconds per side, then
+/// each side's time to source nvm.sh and to finish setup when
+/// `NVMIMIC_PARITY_PHASES` is set.
+pub fn write_timings(results: &[Result], path: &Path) {
+    let ms = |d: Duration| d.as_millis().to_string();
+    let phase = |p: harness::Phases| match p {
+        Some((sourced, ready)) => format!("{}\t{}", ms(sourced), ms(ready)),
+        None => "\t".to_string(),
+    };
+    let mut text = String::from(
+        "id\tshell\tleft_ms\tright_ms\tleft_sourced\tleft_ready\tright_sourced\tright_ready\n",
+    );
+    for r in results {
+        text.push_str(&format!(
+            "{}\t{}\t{}\t{}\t{}\t{}\n",
+            r.id,
+            r.shell,
+            ms(r.elapsed.0),
+            ms(r.elapsed.1),
+            phase(r.phases.0),
+            phase(r.phases.1)
+        ));
+    }
+    let _ = fs::write(path, text);
 }

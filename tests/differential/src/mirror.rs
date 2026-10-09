@@ -144,7 +144,7 @@ fn kept_files() -> PathBuf {
         .take(6)
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    let parent = crate::harness::repo_root().join("target/parity-mirror");
+    let parent = crate::harness::target_dir().join("parity-mirror");
     let root = parent.join(&recipe);
     if intact(&root) {
         return root;
@@ -322,8 +322,8 @@ fn real_origin(path: &str) -> Option<String> {
 fn fetched(url: &str) -> PathBuf {
     static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
     let _turn = ONE_AT_A_TIME.lock().unwrap();
-    let kept = crate::harness::repo_root()
-        .join("target/parity-network")
+    let kept = crate::harness::target_dir()
+        .join("parity-network")
         .join(url.trim_start_matches("https://"));
     let missing = kept.with_extension("nvmimic-missing");
     if kept.is_file() || missing.is_file() || url.contains("..") {
@@ -391,6 +391,7 @@ fn mode_of(path: &Path) -> u32 {
 fn build_dist(dist: &Path, scratch: &Path, shared: Option<&Path>) {
     fs::create_dir_all(dist).unwrap();
     let mut tab = String::from(INDEX_HEADER);
+    let mut json = Vec::new();
 
     for release in RELEASES {
         let version = format!("v{}", release.version);
@@ -447,6 +448,15 @@ fn build_dist(dist: &Path, scratch: &Path, shared: Option<&Path>) {
         }
         fs::write(dir.join("SHASUMS256.txt"), sums).unwrap();
 
+        // nodejs.org writes `false` where a release has no LTS name.
+        json.push(serde_json::json!({
+            "version": version,
+            "date": release.date,
+            "files": files(release.version),
+            "npm": NPM_VERSION,
+            "lts": release.lts.map_or(serde_json::Value::Bool(false), Into::into),
+            "security": false,
+        }));
         let lts = release.lts.unwrap_or("-");
         tab.push_str(&format!(
             "{version}\t{}\t{}\t{NPM_VERSION}\t-\t-\t-\t-\t-\t{lts}\t-\n",
@@ -456,10 +466,15 @@ fn build_dist(dist: &Path, scratch: &Path, shared: Option<&Path>) {
     }
 
     fs::write(dist.join("index.tab"), tab).unwrap();
+    // nvm reads `index.tab`. Other tools that install Node read the same
+    // list as `index.json`, so the mirror has both, as nodejs.org does.
+    let json = serde_json::to_string_pretty(&json).unwrap();
+    fs::write(dist.join("index.json"), format!("{json}\n")).unwrap();
 
     // nvm also lists io.js releases. An empty index keeps it off iojs.org.
     fs::create_dir_all(dist.join("iojs")).unwrap();
     fs::write(dist.join("iojs/index.tab"), INDEX_HEADER).unwrap();
+    fs::write(dist.join("iojs/index.json"), "[]\n").unwrap();
 }
 
 /// The layout nvm's post-install validation checks: an executable

@@ -34,7 +34,7 @@ const FORMAT: &str = "1";
 const SHAPING_SOURCES: &[&str] = &["src/harness.rs", "src/mirror.rs", "src/suite.rs"];
 
 pub fn dir() -> PathBuf {
-    harness::repo_root().join("target/parity-golden")
+    harness::target_dir().join("parity-golden")
 }
 
 fn hex(digest: impl AsRef<[u8]>) -> String {

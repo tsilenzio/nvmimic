@@ -374,6 +374,16 @@ fn install(nvm: &mut Nvm, args: &[String], prefixed: &mut Option<Prefixed>) -> i
         },
     ) {
         exit_code = status;
+        // nvm calls its installer as `NVM_NO_PROGRESS=... NVM_OFFLINE=...
+        // nvm_install_binary`, and bash in POSIX mode keeps those two set
+        // afterwards. The backend's install stands in for that call.
+        *prefixed = Some(Prefixed {
+            no_progress: match nvm.vars.get("NVM_NO_PROGRESS") {
+                "" => (noprogress as u8).to_string(),
+                set => set.to_string(),
+            },
+            offline: nvm.vars.get("NVM_OFFLINE").to_string(),
+        });
         // nvm's own installer makes the alias that `--alias=` or
         // `--default` asked for once the release is unpacked.
         if status == 0 && !alias_name.is_empty() {

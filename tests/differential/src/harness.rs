@@ -2,6 +2,7 @@
 //! homes that share one fake mirror, then reports what differs.
 
 use crate::mirror::{self, Mirror};
+use crate::subject::Subject;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -16,18 +17,41 @@ use std::time::{Duration, Instant};
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// One side of a comparison: official nvm, or a program built to match it.
+#[derive(Clone, Copy)]
 pub enum Impl {
     Nvm,
-    Nvmimic,
+    Subject(&'static dyn Subject),
 }
+
+/// nvmimic as a side of a comparison.
+pub const NVMIMIC: Impl = Impl::Subject(&crate::own::Nvmimic);
 
 impl Impl {
     pub fn name(self) -> &'static str {
         match self {
             Impl::Nvm => "nvm",
-            Impl::Nvmimic => "nvmimic",
+            Impl::Subject(subject) => subject.name(),
         }
+    }
+
+    fn subject(self) -> Option<&'static dyn Subject> {
+        match self {
+            Impl::Nvm => None,
+            Impl::Subject(subject) => Some(subject),
+        }
+    }
+}
+
+impl PartialEq for Impl {
+    fn eq(&self, other: &Impl) -> bool {
+        self.name() == other.name()
+    }
+}
+
+impl std::fmt::Debug for Impl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.name())
     }
 }
 
@@ -89,11 +113,22 @@ pub fn repo_root() -> PathBuf {
         .unwrap()
 }
 
+/// Where a run keeps what it builds and records: the mirror's files, the
+/// recordings of official nvm, the reports. `$NVMIMIC_PARITY_TARGET`, or
+/// this repository's `target` folder. Another program that runs the harness
+/// from its own repository can point this at its own.
+pub fn target_dir() -> PathBuf {
+    std::env::var_os("NVMIMIC_PARITY_TARGET")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| repo_root().join("target"))
+}
+
 /// The nvmimic binary under test: `$NVMIMIC_BIN`, or the workspace's debug build.
 pub fn nvmimic_bin() -> PathBuf {
     let path = std::env::var_os("NVMIMIC_BIN")
         .map(PathBuf::from)
         .unwrap_or_else(|| repo_root().join("target/debug/nvmimic"));
+    // Not `target_dir()`: this is where cargo put the program.
     assert!(
         path.is_file(),
         "{} is missing, run `cargo build -p nvmimic-cli` first",
@@ -437,6 +472,9 @@ impl World {
             .env("NVM_IOJS_ORG_MIRROR", &iojs_mirror)
             .env("DIFF_STATE", &state_file)
             .current_dir(&work);
+        if let Some(subject) = which.subject() {
+            command.envs(subject.env(&side));
+        }
         if shell.name == "zsh" {
             command.arg("-f");
         }
@@ -456,13 +494,16 @@ impl World {
 
         let mut state = parse_state(&String::from_utf8_lossy(&raw_state), shell.kind());
         for value in state.values_mut() {
-            *value = self.normalize(value, &side);
+            *value = self.normalize(which, value, &side);
         }
         state.extend(
-            snapshot(&home, &work)
+            snapshot(which, &home, &work)
                 .into_iter()
-                .map(|(key, value)| (key, self.normalize(&value, &side))),
+                .map(|(key, value)| (key, self.normalize(which, &value, &side))),
         );
+        if let Some(subject) = which.subject() {
+            hide_functions(&mut state, &subject.own_functions());
+        }
 
         let covered = fs::read_to_string(&covers_log)
             .unwrap_or_default()
@@ -472,12 +513,12 @@ impl World {
         let launches = fs::read_to_string(&launch_log)
             .unwrap_or_default()
             .lines()
-            .map(|line| self.normalize(line, &side))
+            .map(|line| self.normalize(which, line, &side))
             .collect();
 
         Outcome {
-            stdout: self.normalize(&String::from_utf8_lossy(&stdout), &side),
-            stderr: self.normalize(&String::from_utf8_lossy(&stderr), &side),
+            stdout: self.normalize(which, &String::from_utf8_lossy(&stdout), &side),
+            stderr: self.normalize(which, &String::from_utf8_lossy(&stderr), &side),
             code,
             timed_out,
             state,
@@ -489,7 +530,7 @@ impl World {
     }
 
     /// Replaces sandbox-specific paths so the two sides can be compared.
-    fn normalize(&self, text: &str, side: &Path) -> String {
+    fn normalize(&self, which: Impl, text: &str, side: &Path) -> String {
         let side = side.display().to_string();
         let text = text
             .replace(&format!("{side}/home/.nvm/versions/node/"), "<install>/")
@@ -501,6 +542,10 @@ impl World {
             .replace(&self.mirror.root.display().to_string(), "<mirror-files>")
             // macOS reports temp paths both with and without the /private prefix.
             .replace("/private<", "<");
+        let text = match which.subject() {
+            Some(subject) => subject.normalize(text),
+            None => text,
+        };
         match crate::mirror::network_pass() {
             true => settle_progress(&text),
             false => text,
@@ -639,9 +684,9 @@ fn fresh_suite_files(which: Impl) -> &'static BTreeMap<String, String> {
         let world = World::new();
         let side = world.root.join("fresh");
         prepare_suite_side(which, &side, &world.options);
-        let files = snapshot(&side.join("home"), &side.join("work"))
+        let files = snapshot(which, &side.join("home"), &side.join("work"))
             .into_iter()
-            .map(|(key, value)| (key, world.normalize(&value, &side)))
+            .map(|(key, value)| (key, world.normalize(which, &value, &side)))
             .collect();
         Box::leak(Box::new(files))
     })
@@ -731,7 +776,19 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, options: &Options) {
             }
             link_staged("nvm/nvm-exec", &reference.join("nvm-exec"), nvm_dir);
         }
-        Impl::Nvmimic => crate::own::install(nvm_dir, side, count_launches),
+        Impl::Subject(subject) => subject.install(nvm_dir, side, count_launches),
+    }
+}
+
+/// Takes a subject's own functions out of the list of functions a run left
+/// behind. Every other name in that list is compared with official nvm's.
+fn hide_functions(state: &mut BTreeMap<String, String>, own: &[String]) {
+    if let Some(functions) = state.get_mut("functions") {
+        *functions = functions
+            .split(' ')
+            .filter(|name| !own.iter().any(|own| own == name))
+            .collect::<Vec<_>>()
+            .join(" ");
     }
 }
 
@@ -747,7 +804,7 @@ fn install(which: Impl, nvm_dir: &Path, side: &Path, options: &Options) {
 /// out `/usr/bin/sudo` gets past it.
 fn block_sudo(side: &Path) {
     let sudo = staged(Path::new("sudo"), |path| {
-        let log = repo_root().join("target/parity-sudo.log");
+        let log = target_dir().join("parity-sudo.log");
         write_script(
             path,
             &format!(
@@ -939,7 +996,7 @@ fn parse_vars(listing: &str, shell: &str) -> BTreeMap<String, String> {
 /// Everything under the case's home and working directories, except the
 /// implementation's own scripts. Small text files are recorded whole so a
 /// difference is readable, anything else by size and hash.
-fn snapshot(home: &Path, work: &Path) -> BTreeMap<String, String> {
+fn snapshot(which: Impl, home: &Path, work: &Path) -> BTreeMap<String, String> {
     let mut files = BTreeMap::new();
     for (label, root) in [("home", home), ("work", work)] {
         let mut stack = vec![root.to_path_buf()];
@@ -950,7 +1007,12 @@ fn snapshot(home: &Path, work: &Path) -> BTreeMap<String, String> {
             for entry in entries.flatten() {
                 let path = entry.path();
                 let relative = path.strip_prefix(root).unwrap().display().to_string();
-                if label == "home" && is_implementation_file(&relative) {
+                if label == "home"
+                    && (is_implementation_file(&relative)
+                        || which
+                            .subject()
+                            .is_some_and(|subject| subject.ignores_file(&relative)))
+                {
                     continue;
                 }
                 // Real npm keeps a download cache and the time of its last
@@ -1039,20 +1101,33 @@ pub(crate) fn write_script(path: &Path, body: &str) {
 
 /// A readable list of everything that differs between two outcomes.
 pub fn diff(left: (&str, &Outcome), right: (&str, &Outcome)) -> Vec<String> {
+    differences(left, right)
+        .into_iter()
+        .map(|(_, text)| text)
+        .collect()
+}
+
+/// Everything that differs between two outcomes, each with its key: `timed
+/// out`, `exit`, `stdout`, `stderr`, or the name of a piece of what the run
+/// left behind, such as `var:NVM_BIN` or `fs:home/.nvm/alias/default`.
+pub fn differences(left: (&str, &Outcome), right: (&str, &Outcome)) -> Vec<(String, String)> {
     let (left_name, a) = left;
     let (right_name, b) = right;
     let mut differences = Vec::new();
 
     if a.timed_out || b.timed_out {
-        differences.push(format!(
-            "timed out: {left_name} {}, {right_name} {}",
-            a.timed_out, b.timed_out
+        differences.push((
+            "timed out".to_string(),
+            format!(
+                "timed out: {left_name} {}, {right_name} {}",
+                a.timed_out, b.timed_out
+            ),
         ));
     }
     if a.code != b.code {
-        differences.push(format!(
-            "exit: {left_name} {:?}, {right_name} {:?}",
-            a.code, b.code
+        differences.push((
+            "exit".to_string(),
+            format!("exit: {left_name} {:?}, {right_name} {:?}", a.code, b.code),
         ));
     }
     for (name, x, y) in [
@@ -1060,8 +1135,9 @@ pub fn diff(left: (&str, &Outcome), right: (&str, &Outcome)) -> Vec<String> {
         ("stderr", &a.stderr, &b.stderr),
     ] {
         if x != y {
-            differences.push(format!(
-                "{name}:\n--- {left_name}\n{x}--- {right_name}\n{y}---"
+            differences.push((
+                name.to_string(),
+                format!("{name}:\n--- {left_name}\n{x}--- {right_name}\n{y}---"),
             ));
         }
     }
@@ -1070,7 +1146,10 @@ pub fn diff(left: (&str, &Outcome), right: (&str, &Outcome)) -> Vec<String> {
         let x = a.state.get(key);
         let y = b.state.get(key);
         if x != y {
-            differences.push(format!("{key}: {left_name} {x:?}, {right_name} {y:?}"));
+            differences.push((
+                key.clone(),
+                format!("{key}: {left_name} {x:?}, {right_name} {y:?}"),
+            ));
         }
     }
     differences

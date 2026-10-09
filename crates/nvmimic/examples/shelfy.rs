@@ -24,7 +24,7 @@ use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-fn main() -> ExitCode {
+pub fn main() -> ExitCode {
     let args: Vec<String> = env::args().skip(1).collect();
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
     // The shelf stands in the home folder unless SHELFY_ROOT moves it.
