@@ -1110,24 +1110,23 @@ fn unload_and_completion_go_by_the_programs_name() {
     assert!(!ran.out.contains("self"), "{}", ran.out);
 }
 
-/// The `shelfy` program: the example in `examples/shelfy.rs`. `cargo test`
-/// builds it beside the tests. A run of this test alone builds it here.
+/// The `shelfy` program: the example in `examples/shelfy.rs`. It is built
+/// here every time. `cargo test` builds examples only when it runs every
+/// test of the package, and a copy left by an earlier build would be
+/// stale without anyone noticing.
 fn shelfy_program() -> PathBuf {
+    let mut build = std::process::Command::new(env!("CARGO"));
+    build.args(["build", "--quiet", "-p", "nvmimic", "--example", "shelfy"]);
+    if !cfg!(debug_assertions) {
+        build.arg("--release");
+    }
+    assert!(build.status().unwrap().success(), "building shelfy");
     let tests = std::env::current_exe().unwrap();
-    let program = tests
+    tests
         .parent()
         .and_then(Path::parent)
         .unwrap()
-        .join("examples/shelfy");
-    if !program.is_file() {
-        let mut build = std::process::Command::new(env!("CARGO"));
-        build.args(["build", "--quiet", "-p", "nvmimic", "--example", "shelfy"]);
-        if !cfg!(debug_assertions) {
-            build.arg("--release");
-        }
-        assert!(build.status().unwrap().success(), "building shelfy");
-    }
-    program
+        .join("examples/shelfy")
 }
 
 fn shell_programs() -> Vec<(&'static str, &'static [&'static str])> {
@@ -1176,6 +1175,8 @@ echo "loaded:${SHELFY_LOADED-} default:$(nvm current) shelf:${SHELF_NODE_VERSION
 nvm use 22.1.0 || exit 91
 echo "node:$(command -v node) shelf:${SHELF_NODE_VERSION-}"
 echo "aliases:$(nvm alias default 22 >/dev/null && cat "$HOME/shelf-aliases/default")"
+nvm which 99 >/dev/null 2>&1
+echo "last:${SHELFY_LAST_STATUS-}"
 case "$(command -v __shelfy_handoff)" in __shelfy_handoff) echo own:yes ;; esac
 command -v __nvmimic_handoff >/dev/null 2>&1 && echo "nvmimic's function is here"
 nvm unload
@@ -1200,7 +1201,7 @@ echo done
             said,
             format!(
                 "loaded:1 default:v20.1.0 shelf:20.1.0\nNow using node v22.1.0 (npm v10.7.0)\n\
-                 node:{}/shelf/22.1.0/bin/node shelf:22.1.0\naliases:22\nown:yes\ndone\n",
+                 node:{}/shelf/22.1.0/bin/node shelf:22.1.0\naliases:22\nlast:1\nown:yes\ndone\n",
                 home.display()
             ),
             "{shell}: {errors}"

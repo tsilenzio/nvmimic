@@ -43,7 +43,11 @@ pub fn main() -> ExitCode {
     match words.as_slice() {
         [first, function, rest @ ..] if *first == HANDOFF => {
             let rest: Vec<String> = rest.iter().map(|arg| arg.to_string()).collect();
-            ExitCode::from(host.handoff(function, &rest))
+            // `handoff` alone would do. This form adds shell text of
+            // shelfy's own to what the calling shell runs after the call.
+            ExitCode::from(host.handoff_with(function, &rest, |outcome| {
+                format!("SHELFY_LAST_STATUS={}\n", outcome.status)
+            }))
         }
         ["--version"] => {
             println!("{}", SHELFY.version);
