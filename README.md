@@ -26,7 +26,11 @@ commands to one fast program, so a new shell barely notices it.
 
 ## Status
 
-Early work, copying nvm 0.40.8. Every nvm command now runs in nvmimic itself.
+This is nvmimic 0.1.0, an early release. It copies nvm 0.40.8 and runs on
+macOS. It passes its own tests, but few people have used it yet, so expect
+rough edges and keep `nvmimic self eject` in mind as the way back.
+
+Every nvm command now runs in nvmimic itself.
 For downloading and unpacking Node, and for npm, it starts the same programs
 nvm starts (curl or wget, tar, npm). curl and wget stay on purpose: they
 already know your proxy, your `~/.curlrc` and your system's certificates.
@@ -49,7 +53,24 @@ separate pass that needs the internet. What still differs is listed under
 
 ## Installing
 
-There are no release downloads yet, so build it with Rust first:
+On a Mac, [Homebrew](https://brew.sh) is the short way:
+
+```sh
+brew install tsilenzio/tap/nvmimic
+nvmimic self install
+```
+
+Or download the program yourself. One file runs on both Apple silicon and
+Intel Macs:
+
+```sh
+curl -LO https://github.com/tsilenzio/nvmimic/releases/latest/download/nvmimic-darwin-universal.tar.gz
+tar -xzf nvmimic-darwin-universal.tar.gz
+./nvmimic/nvmimic self install
+```
+
+There's no download for Linux yet. There, and anywhere else, build it with
+Rust:
 
 ```sh
 cargo build --release
