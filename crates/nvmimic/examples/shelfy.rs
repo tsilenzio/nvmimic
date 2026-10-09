@@ -19,7 +19,7 @@ mod shelf;
 use nvmimic::host::{HANDOFF, Host, is_tty};
 use nvmimic::init::Named;
 use nvmimic::install::{self, Env, Options, TerminalUi};
-use shelf::{SHELFY, Shelf};
+use shelf::{SHELFY, Shelf, ShelfSteps};
 use std::env;
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -54,7 +54,7 @@ fn main() -> ExitCode {
             Some(named) => init(&host, Some(named)),
             None => fail(&format!("init doesn't know the shell {shell}.")),
         },
-        ["self", action, flags @ ..] => self_command(action, flags),
+        ["self", action, flags @ ..] => self_command(&shelf, action, flags),
         _ => fail("usage: shelfy init [shell] | shelfy self <command> | shelfy --version"),
     }
 }
@@ -70,8 +70,9 @@ fn init(host: &Host, named: Option<Named>) -> ExitCode {
 }
 
 /// `shelfy self install`, `eject` and `uninstall`. The library does each of
-/// them for the identity in `Env`.
-fn self_command(action: &str, flags: &[&str]) -> ExitCode {
+/// them for the identity in `Env`, and `ShelfSteps` adds what only shelfy
+/// knows how to do.
+fn self_command(shelf: &Shelf, action: &str, flags: &[&str]) -> ExitCode {
     let options = Options {
         force: flags.contains(&"--force"),
         dry_run: flags.contains(&"--dry-run"),
@@ -80,13 +81,14 @@ fn self_command(action: &str, flags: &[&str]) -> ExitCode {
     };
     let env = Env::from_process_for(&SHELFY);
     let mut ui = TerminalUi;
+    let steps = ShelfSteps(shelf);
     let result = match action {
         "install" => match env::current_exe() {
-            Ok(program) => install::self_install(&env, &program, &options, &mut ui),
+            Ok(program) => install::self_install_with(&env, &program, &options, &mut ui, &steps),
             Err(error) => Err(error.to_string()),
         },
-        "eject" => install::self_eject(&env, &options, &mut ui),
-        "uninstall" => install::self_uninstall(&env, &options, &mut ui),
+        "eject" => install::self_eject_with(&env, &options, &mut ui, &steps),
+        "uninstall" => install::self_uninstall_with(&env, &options, &mut ui, &steps),
         _ => Err(format!("there is no command self {action}.")),
     };
     match result {

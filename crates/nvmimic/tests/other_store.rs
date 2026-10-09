@@ -13,7 +13,7 @@ mod shelf;
 use nvmimic::context::CallerShell;
 use nvmimic::shell::{Dialect, Effect, Vars};
 use nvmimic::{Caller, Outcome};
-use shelf::{SHELFY, Shelf, fake_node};
+use shelf::{CARRIED_NVM_SH, SHELFY, Shelf, ShelfSteps, fake_node};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -720,6 +720,22 @@ fn a_second_program_installs_and_leaves_under_its_own_name() {
     let said = ui.0.join("\n").replace(&at_home, "HOME");
     assert!(!said.contains("nvmimic"), "{said}");
 
+    // shelfy publishes no releases, so there is nothing to update from.
+    let source = nvmimic::update::Source::from_process_for(&SHELFY);
+    assert!(source.is_none());
+    let none = nvmimic::update::Source {
+        latest: "http://127.0.0.1:1/none".to_string(),
+        allow_unsigned: true,
+    };
+    assert_eq!(
+        nvmimic::update::self_update(&env, &none, &force(), &mut Said::default()),
+        Err("there are no shelfy releases for this system yet.".to_string())
+    );
+    assert_eq!(
+        nvmimic::update::self_rollback(&env, &force(), &mut Said::default()),
+        Err("there is no earlier shelfy to go back to.".to_string())
+    );
+
     // A script someone edited is kept under shelfy's name, and official
     // nvm's scripts come back.
     fs::write(home.join(".nvm/nvm.sh"), format!("{nvm_sh}# mine\n")).unwrap();
@@ -756,6 +772,154 @@ fn a_manifest_carries_lines_of_the_programs_own() {
     .unwrap();
     let again = Manifest::read(dirs).unwrap();
     assert_eq!(again.extra("shelf").collect::<Vec<_>>(), ["/a b/shelf"]);
+}
+
+#[test]
+fn the_programs_own_steps_run_inside_install_and_uninstall() {
+    let home = home("steps");
+    let shelf = Shelf::at(&home);
+    let steps = ShelfSteps(&shelf);
+    let env = env_for(&SHELFY, &home);
+    let program = program_file(&home);
+    let aliases = shelf.aliases.display().to_string();
+
+    // A dry run lists the program's own step with the library's.
+    let dry = Options {
+        dry_run: true,
+        ..Options::default()
+    };
+    let mut ui = Said::default();
+    install::self_install_with(&env, &program, &dry, &mut ui, &steps).unwrap();
+    assert_eq!(
+        ui.0.last().unwrap(),
+        &format!("Would make the shelf's alias folder at {aliases}.")
+    );
+    assert!(!shelf.aliases.exists());
+
+    let mut ui = Said::default();
+    install::self_install_with(&env, &program, &force(), &mut ui, &steps).unwrap();
+    assert!(shelf.aliases.is_dir());
+    assert!(ui.0.contains(&format!("The shelf's aliases are in {aliases}.")));
+    let dirs = env.dirs.as_ref().unwrap();
+    let manifest = Manifest::read(dirs).unwrap();
+    assert_eq!(
+        manifest.extra("shelf-aliases").collect::<Vec<_>>(),
+        [&aliases]
+    );
+
+    // There was no nvm before shelfy, so an uninstall has no `nvm.sh` to
+    // put back. shelfy carries one, and that is what is left.
+    let mut ui = Said::default();
+    install::self_uninstall_with(&env, &dry, &mut ui, &steps).unwrap();
+    let nvm_dir = home.join(".nvm");
+    assert!(
+        ui.0.contains(&format!(
+            "Would write official nvm's nvm.sh into {} from the copy shelfy carries.",
+            nvm_dir.display()
+        )),
+        "{:?}",
+        ui.0
+    );
+    assert!(ui.0.contains(&format!("Would remove {aliases} if it is empty.")));
+
+    let mut ui = Said::default();
+    install::self_uninstall_with(&env, &force(), &mut ui, &steps).unwrap();
+    assert_eq!(
+        fs::read_to_string(nvm_dir.join("nvm.sh")).unwrap(),
+        CARRIED_NVM_SH
+    );
+    assert!(!nvm_dir.join("nvm-exec").exists());
+    assert!(!shelf.aliases.exists());
+    assert!(!dirs.state.exists());
+    assert_eq!(
+        ui.0.last().unwrap(),
+        "Done. shelfy is gone and nvm is back."
+    );
+}
+
+#[test]
+fn a_carried_copy_is_only_for_when_there_is_nothing_to_put_back() {
+    // With an official nvm to go back to, that one comes back.
+    let home = home("carried");
+    official_nvm(&home);
+    let shelf = Shelf::at(&home);
+    let steps = ShelfSteps(&shelf);
+    let env = env_for(&SHELFY, &home);
+    let program = program_file(&home);
+    install::self_install_with(&env, &program, &force(), &mut Said::default(), &steps).unwrap();
+    install::self_uninstall_with(&env, &force(), &mut Said::default(), &steps).unwrap();
+    assert_eq!(
+        fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap(),
+        "official nvm.sh\n"
+    );
+
+    // Without one, an eject has something to hand the folder back to. The
+    // library alone refuses, because it carries no copy.
+    let home = self::home("carried-eject");
+    let shelf = Shelf::at(&home);
+    let steps = ShelfSteps(&shelf);
+    let env = env_for(&SHELFY, &home);
+    let program = program_file(&home);
+    install::self_install_with(&env, &program, &force(), &mut Said::default(), &steps).unwrap();
+    let refused = install::self_eject(&env, &force(), &mut Said::default());
+    assert!(
+        refused
+            .unwrap_err()
+            .starts_with("there is no nvm to go back to.")
+    );
+    let mut ui = Said::default();
+    install::self_eject_with(&env, &force(), &mut ui, &steps).unwrap();
+    assert_eq!(
+        fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap(),
+        CARRIED_NVM_SH
+    );
+    assert!(home.join(".local/bin/shelfy").is_file());
+    assert!(
+        shelf.aliases.is_dir(),
+        "an eject keeps the program's own files"
+    );
+    // And shelfy takes over again from the copy it left, like from any nvm.
+    install::self_install_with(&env, &program, &force(), &mut Said::default(), &steps).unwrap();
+    let nvm_sh = fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap();
+    assert_eq!(nvmimic::identity::program_of(&nvm_sh), Some("shelfy"));
+}
+
+#[test]
+fn a_step_of_the_programs_own_that_fails_leaves_official_nvm_working() {
+    struct Fails;
+    impl install::Steps for Fails {
+        fn install(
+            &self,
+            _site: &install::Site,
+            _manifest: &mut Manifest,
+            _ui: &mut dyn Ui,
+        ) -> Result<(), String> {
+            Err("the shelf fell over".to_string())
+        }
+    }
+    let home = home("failing");
+    official_nvm(&home);
+    let env = env_for(&SHELFY, &home);
+    let stopped = install::self_install_with(
+        &env,
+        &program_file(&home),
+        &force(),
+        &mut Said::default(),
+        &Fails,
+    );
+    assert_eq!(stopped, Err("the shelf fell over".to_string()));
+    for name in SCRIPTS {
+        let text = fs::read_to_string(home.join(".nvm").join(name)).unwrap();
+        assert_eq!(text, format!("official {name}\n"));
+    }
+    assert!(!home.join(".local/bin/shelfy").exists());
+    // What the stopped install left is cleared by an uninstall.
+    install::self_uninstall(&env, &force(), &mut Said::default()).unwrap();
+    assert!(!home.join(".local/state/shelfy/manifest").exists());
+    assert_eq!(
+        fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap(),
+        "official nvm.sh\n"
+    );
 }
 
 #[test]

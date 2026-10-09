@@ -6,6 +6,7 @@ use nvmimic::backend::{self, Backend, Flavor, Flavors, InstallRequest, Installed
 use nvmimic::complete::{Command, Needs, command, flag};
 use nvmimic::context::Nvm;
 use nvmimic::identity::{Identity, Packages};
+use nvmimic::install::{Leaving, Manifest, Site, Steps, Ui};
 use nvmimic::nvm::paths;
 use nvmimic::shell::Vars;
 use std::cell::RefCell;
@@ -182,5 +183,69 @@ pub fn fake_node(folder: &Path, version: &str) {
         let program = bin.join(name);
         fs::write(&program, format!("#!/bin/sh\necho {answer}\n")).unwrap();
         fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+/// A stand-in for the copy of official nvm a program can carry, for the
+/// times an uninstall has no `nvm.sh` to put back.
+pub const CARRIED_NVM_SH: &str =
+    "# official nvm, as shelfy carries it\nnvm() { echo 'official nvm'; }\n";
+
+/// What shelfy adds to `self install`, `self eject` and `self uninstall`:
+/// it makes its alias folder, writes the folder's place into the manifest,
+/// and takes the folder away again if it is still empty.
+pub struct ShelfSteps<'a>(pub &'a Shelf);
+
+impl Steps for ShelfSteps<'_> {
+    fn install_plan(&self, _site: &Site) -> Vec<String> {
+        vec![format!(
+            "make the shelf's alias folder at {}",
+            self.0.aliases.display()
+        )]
+    }
+
+    fn install(
+        &self,
+        _site: &Site,
+        manifest: &mut Manifest,
+        ui: &mut dyn Ui,
+    ) -> Result<(), String> {
+        fs::create_dir_all(&self.0.aliases).map_err(|error| error.to_string())?;
+        manifest.extra.retain(|(key, _)| key != "shelf-aliases");
+        manifest.extra.push((
+            "shelf-aliases".to_string(),
+            self.0.aliases.display().to_string(),
+        ));
+        ui.say(&format!(
+            "The shelf's aliases are in {}.",
+            self.0.aliases.display()
+        ));
+        Ok(())
+    }
+
+    fn leave_plan(&self, _site: &Site, how: Leaving, manifest: &Manifest) -> Vec<String> {
+        match (how, manifest.extra("shelf-aliases").next()) {
+            (Leaving::Eject, _) | (_, None) => Vec::new(),
+            (_, Some(folder)) => vec![format!("remove {folder} if it is empty")],
+        }
+    }
+
+    fn leave(
+        &self,
+        _site: &Site,
+        how: Leaving,
+        manifest: &mut Manifest,
+        _ui: &mut dyn Ui,
+    ) -> Result<(), String> {
+        if how != Leaving::Eject
+            && let Some(folder) = manifest.extra("shelf-aliases").next()
+        {
+            let _ = fs::remove_dir(folder);
+        }
+        Ok(())
+    }
+
+    fn official_script(&self, _site: &Site, name: &str) -> Option<String> {
+        (name == "nvm.sh").then(|| CARRIED_NVM_SH.to_string())
     }
 }

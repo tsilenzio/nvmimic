@@ -526,12 +526,93 @@ fn checkpoint() -> Result<(), String> {
     Ok(())
 }
 
+/// Where an install is, for the steps an embedding program adds.
+pub struct Site<'a> {
+    /// The nvm folder.
+    pub nvm_dir: &'a Path,
+    /// The program's own folders.
+    pub dirs: &'a Dirs,
+    /// The program the installed `nvm.sh` runs.
+    pub binary: &'a Path,
+}
+
+/// Steps of an embedding program's own inside `self install`, `self eject`
+/// and `self uninstall`. Every method has a default that does nothing,
+/// which is what nvmimic itself uses ([`NoSteps`]).
+///
+/// The `*_plan` methods say what the matching step will do, one entry per
+/// line shown. Each entry is worded to follow "Would" and "This will", with
+/// no full stop: `make the alias folder at /x/alias`.
+pub trait Steps {
+    fn install_plan(&self, _site: &Site) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The program's own part of an install. It runs once official nvm's
+    /// scripts are copied and the manifest is written, and before anything
+    /// in the nvm folder is replaced or uninstalled. An error stops the
+    /// install there, with official nvm still working. Lines added to
+    /// `manifest.extra` are written when this returns.
+    fn install(
+        &self,
+        _site: &Site,
+        _manifest: &mut Manifest,
+        _ui: &mut dyn Ui,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn leave_plan(&self, _site: &Site, _how: Leaving, _manifest: &Manifest) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// The program's own part of leaving. It runs after the scripts in the
+    /// nvm folder were dealt with and before the program's own record and
+    /// folders are removed, or for an eject, before the record is written
+    /// again.
+    fn leave(
+        &self,
+        _site: &Site,
+        _how: Leaving,
+        _manifest: &mut Manifest,
+        _ui: &mut dyn Ui,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// A copy of one of official nvm's scripts (`nvm.sh`, `nvm-exec` or
+    /// `bash_completion`) that the program carries, for an eject or an
+    /// uninstall that has none of its own to put back: there was no nvm
+    /// before, or the script was a link whose target is gone. `None` leaves
+    /// nothing in its place, and without an `nvm.sh` there is no `nvm`
+    /// command afterwards.
+    fn official_script(&self, _site: &Site, _name: &str) -> Option<String> {
+        None
+    }
+}
+
+/// No steps of the program's own.
+pub struct NoSteps;
+
+impl Steps for NoSteps {}
+
 /// `nvmimic self install`. `running` is the program being run.
 pub fn self_install(
     env: &Env,
     running: &Path,
     options: &Options,
     ui: &mut dyn Ui,
+) -> Result<(), String> {
+    self_install_with(env, running, options, ui, &NoSteps)
+}
+
+/// [`self_install`] with steps of the embedding program's own.
+pub fn self_install_with(
+    env: &Env,
+    running: &Path,
+    options: &Options,
+    ui: &mut dyn Ui,
+    steps: &dyn Steps,
 ) -> Result<(), String> {
     let identity = env.identity;
     let app = identity.name;
@@ -692,6 +773,14 @@ pub fn self_install(
                 ui.say(&format!("Would use the program at {}.", target.display()))
             }
         }
+        let site = Site {
+            nvm_dir: &nvm_dir,
+            dirs,
+            binary: plan.path(),
+        };
+        for step in steps.install_plan(&site) {
+            ui.say(&format!("Would {step}."));
+        }
         return Ok(());
     }
 
@@ -752,6 +841,18 @@ pub fn self_install(
     manifest.cache = Some(dirs.cache.clone());
     checkpoint()?;
     manifest.write(dirs, env.identity)?;
+
+    let site = Site {
+        nvm_dir: &nvm_dir,
+        dirs,
+        binary: plan.path(),
+    };
+    let written = manifest.clone();
+    checkpoint()?;
+    steps.install(&site, &mut manifest, ui)?;
+    if manifest != written {
+        manifest.write(dirs, env.identity)?;
+    }
 
     if let Some(prefix) = &homebrew {
         let brew = prefix.join("bin/brew");
@@ -942,8 +1043,8 @@ fn purge_allowed(nvm_dir: &Path, env: &Env) -> Result<(), String> {
 }
 
 /// The three ways nvmimic leaves `$NVM_DIR`.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Leaving {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Leaving {
     /// nvm's scripts go back and the nvmimic program stays.
     Eject,
     /// nvm's scripts go back and nvmimic goes.
@@ -989,20 +1090,46 @@ fn nothing_behind(name: &str, target: &Path) -> String {
 
 /// `nvmimic self eject`.
 pub fn self_eject(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(), String> {
-    leave(env, options, ui, Leaving::Eject)
+    self_eject_with(env, options, ui, &NoSteps)
+}
+
+/// [`self_eject`] with steps of the embedding program's own.
+pub fn self_eject_with(
+    env: &Env,
+    options: &Options,
+    ui: &mut dyn Ui,
+    steps: &dyn Steps,
+) -> Result<(), String> {
+    leave(env, options, ui, Leaving::Eject, steps)
 }
 
 /// `nvmimic self uninstall`, with or without `--purge`.
 pub fn self_uninstall(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(), String> {
+    self_uninstall_with(env, options, ui, &NoSteps)
+}
+
+/// [`self_uninstall`] with steps of the embedding program's own.
+pub fn self_uninstall_with(
+    env: &Env,
+    options: &Options,
+    ui: &mut dyn Ui,
+    steps: &dyn Steps,
+) -> Result<(), String> {
     let how = if options.purge {
         Leaving::Purge
     } else {
         Leaving::Uninstall
     };
-    leave(env, options, ui, how)
+    leave(env, options, ui, how, steps)
 }
 
-fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<(), String> {
+fn leave(
+    env: &Env,
+    options: &Options,
+    ui: &mut dyn Ui,
+    how: Leaving,
+    own: &dyn Steps,
+) -> Result<(), String> {
     let identity = env.identity;
     let app = identity.name;
     let dirs = env.dirs()?;
@@ -1044,6 +1171,23 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             .map(|target| (*name, target))
         })
         .collect();
+    let site = Site {
+        nvm_dir: &nvm_dir,
+        dirs,
+        binary: &binary,
+    };
+    // Official scripts the program carries a copy of, for the places where
+    // there is nothing of nvm's to put back.
+    let mut carried: Vec<(&str, String)> = match how {
+        Leaving::Purge => Vec::new(),
+        _ if manifest.ejected => Vec::new(),
+        _ => SCRIPTS
+            .iter()
+            .filter(|name| !restore.iter().any(|kept| kept == *name))
+            .filter_map(|name| Some((*name, own.official_script(&site, name)?)))
+            .collect(),
+    };
+    let has_nvm_sh = |carried: &[(&str, String)]| carried.iter().any(|(name, _)| *name == "nvm.sh");
 
     if how == Leaving::Eject {
         if manifest.ejected {
@@ -1052,7 +1196,7 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
                 nvm_dir.display()
             ));
         }
-        if restore.is_empty() && !dead.is_empty() {
+        if restore.is_empty() && !has_nvm_sh(&carried) && !dead.is_empty() {
             let links: Vec<String> = dead
                 .iter()
                 .map(|(name, target)| nothing_behind(name, target))
@@ -1062,7 +1206,7 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
                 links.join(" ")
             ));
         }
-        if restore.is_empty() {
+        if restore.is_empty() && !has_nvm_sh(&carried) {
             return Err(format!(
                 "there is no nvm to go back to. {app} found none in {} when it was installed, \
                  so it has no scripts of nvm's to put back. Nothing was changed.",
@@ -1143,6 +1287,9 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
         }
         restore.retain(|name| !not_ours.contains(&name.as_str()));
         dead.retain(|(name, _)| !not_ours.contains(name));
+        carried.retain(|(name, _)| {
+            !not_ours.contains(name) && !edited.iter().any(|(edited, _, _)| edited == name)
+        });
         if not_ours.len() < SCRIPTS.len() {
             steps.push(Step::new(format!(
                 "remove {app}'s scripts from {}",
@@ -1157,6 +1304,19 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             )));
         }
     }
+    if !carried.is_empty() {
+        let names: Vec<&str> = carried.iter().map(|(name, _)| *name).collect();
+        steps.push(Step::new(format!(
+            "write official nvm's {} into {} from the copy {app} carries",
+            names.join(", "),
+            nvm_dir.display()
+        )));
+    }
+    steps.extend(
+        own.leave_plan(&site, how, &manifest)
+            .into_iter()
+            .map(Step::new),
+    );
     if how != Leaving::Eject {
         steps.push(Step::new(format!(
             "remove {app}'s own files from {} and {}",
@@ -1186,6 +1346,10 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             "{} holds nvm's own scripts again, so there is nothing to put back.",
             nvm_dir.display()
         )),
+        Leaving::Eject if restore.is_empty() => ui.say(&format!(
+            "There is no nvm of your own to put back in {}, so {app} leaves the copy of official nvm it carries and stays installed.",
+            nvm_dir.display()
+        )),
         Leaving::Eject => ui.say(&format!(
             "This puts nvm's own {} back and keeps the {app} program, so `{app} self install` can take over again.",
             restore.join(", ")
@@ -1193,6 +1357,10 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
         _ if !restore.is_empty() => ui.say(&format!(
             "This puts nvm's own {} back, so nvm works as it did before {app}.",
             restore.join(", ")
+        )),
+        _ if has_nvm_sh(&carried) => ui.say(&format!(
+            "There is no nvm of your own to put back in {}, so {app} leaves the copy of official nvm it carries.",
+            nvm_dir.display()
         )),
         _ => ui.say(&format!(
             "There was no nvm in {} before {app}, so afterwards there is no `nvm` command.",
@@ -1288,6 +1456,10 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
                 None => move_file(&kept, &path)?,
             }
         }
+        for (name, text) in &carried {
+            let mode = if *name == "nvm-exec" { 0o755 } else { 0o644 };
+            write_file(&nvm_dir.join(name), text, mode)?;
+        }
         for name in SCRIPTS {
             let kept = backup.join(name);
             if dead_link(&kept) {
@@ -1298,6 +1470,8 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
             let _ = fs::remove_file(unfinished(&nvm_dir.join(name)));
         }
     }
+
+    own.leave(&site, how, &mut manifest, ui)?;
 
     if how == Leaving::Eject {
         manifest.backed_up.clear();
@@ -1339,7 +1513,8 @@ fn leave(env: &Env, options: &Options, ui: &mut dyn Ui, how: Leaving) -> Result<
     let _ = fs::remove_dir(&dirs.state);
 
     // "nvmimic is gone" would be wrong while its program is still there.
-    let back = !restore.is_empty() || manifest.ejected || !not_ours.is_empty();
+    let back =
+        !restore.is_empty() || manifest.ejected || !not_ours.is_empty() || has_nvm_sh(&carried);
     ui.say(&match (how, placed.is_some()) {
         (Leaving::Purge, true) => format!("Done. {app} and the nvm folder are gone."),
         (Leaving::Purge, false) => {
