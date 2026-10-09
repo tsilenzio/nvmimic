@@ -441,8 +441,47 @@ The library doesn't decide where Node versions are kept. It asks a
 questions a type has to answer: which versions are installed, where one of
 them lives, how to remove one. nvmimic's own backend answers with nvm's
 folders. If your program keeps Node somewhere else, write your own backend
-and every nvm command works on top of it. There's a small example in
-`crates/nvmimic/tests/other_store.rs`.
+and every nvm command works on top of it.
+
+A backend can do more than answer those questions:
+
+- install versions its own way (`install`)
+- hear about it when a shell switches to a version or away from one
+  (`switched`), and set a variable of its own in that shell
+- keep downloads and the list of default packages in its own place
+  (`cache_dir`, `default_packages_file`)
+- say what it can't do (`offers`). Building from source is an example. Tab
+  completion then leaves those entries out, and running one prints a
+  message and stops.
+
+The library doesn't decide what your program is called either. It takes an
+`Identity`: a name, a version and a few other facts. Everything nvmimic
+names after itself is then named after your program: its folders
+(`~/.local/state/<name>`), its settings (`<NAME>_STATE_DIR`), its shell
+function (`__<name>_handoff`) and the name in every message.
+
+Three more pieces finish a program:
+
+- `Host` answers the shell functions and prints what `<name> init` prints.
+- `self_install_with`, `self_eject_with` and `self_uninstall_with` set your
+  program up and remove it, with room for steps of your own (`Steps`).
+- `Manifest`, the record of an install, keeps lines of your own.
+
+`crates/nvmimic/examples/shelfy.rs` is a whole program built this way, in
+about a hundred lines. It keeps Node on a "shelf" outside the nvm folder
+and calls itself `shelfy`. `crates/nvmimic/tests/other_store.rs` runs it,
+in real shells too.
+
+Two programs built on the library can't share an nvm folder. Each one
+checks whose `nvm.sh` is there. If it's the other's, `self install` stops
+and tells you to run the other program's `self eject` or `self uninstall`
+first.
+
+The parity tests can compare your program with official nvm as well. You
+describe it as a `Subject` (in `tests/differential/src/subject.rs`): how it
+gets installed, which shell functions are its own, and where it differs on
+purpose. `tests/differential/tests/second_subject.rs` does that for
+`shelfy`.
 
 `nvm.sh` talks to the nvmimic program through the `__nvmimic_handoff`
 function and an internal command of the program that isn't in its help.

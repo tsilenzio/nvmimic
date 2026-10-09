@@ -774,6 +774,99 @@ fn a_manifest_carries_lines_of_the_programs_own() {
     assert_eq!(again.extra("shelf").collect::<Vec<_>>(), ["/a b/shelf"]);
 }
 
+/// A stand-in for a shelfy program of one version: it answers `--version`
+/// and says yes to `self install`.
+#[cfg(target_os = "macos")]
+fn shelfy_of(path: &Path, version: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(
+        path,
+        format!("#!/bin/sh\ncase \"$1\" in --version) echo {version} ;; esac\n"),
+    )
+    .unwrap();
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_second_program_updates_itself_from_its_own_releases() {
+    // shelfy as it would be with releases of its own.
+    static RELEASED: Identity = Identity {
+        name: "shelfy",
+        version: "3.1.4",
+        completion: &shelf::COMPLETION,
+        packages: nvmimic::identity::Packages {
+            homebrew: "shelfy",
+            cargo: "shelfy-cli",
+        },
+        release: Some(nvmimic::identity::Release {
+            url: "https://example.invalid/shelfy/releases",
+            team_id: None,
+        }),
+    };
+    let home = home("update");
+    let env = env_for(&RELEASED, &home);
+    let program = home.join("downloaded/shelfy");
+    shelfy_of(&program, "3.1.4");
+    install::self_install(&env, &program, &force(), &mut Said::default()).unwrap();
+
+    // A release is a folder with the archive, its checksum and its version.
+    // The archive and the folder inside it carry the program's name.
+    let release = home.join("release");
+    shelfy_of(&release.join("shelfy/shelfy"), "3.2.0");
+    let archive = nvmimic::update::archive_name_for(&RELEASED).unwrap();
+    assert_eq!(archive, "shelfy-darwin-universal.tar.gz");
+    let packed = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(release.join(&archive))
+        .arg("-C")
+        .arg(&release)
+        .arg("shelfy")
+        .status()
+        .unwrap();
+    assert!(packed.success());
+    let sum = std::process::Command::new("shasum")
+        .args(["-a", "256"])
+        .arg(release.join(&archive))
+        .output()
+        .unwrap();
+    let sum = String::from_utf8_lossy(&sum.stdout);
+    let sum = sum.split_whitespace().next().unwrap();
+    fs::write(release.join("SHA256SUMS"), format!("{sum}  {archive}\n")).unwrap();
+    fs::write(release.join("VERSION"), "3.2.0\n").unwrap();
+    let source = nvmimic::update::Source {
+        latest: format!("file://{}", release.display()),
+        allow_unsigned: true,
+    };
+
+    let installed = home.join(".local/bin/shelfy");
+    let version = || {
+        let out = std::process::Command::new(&installed)
+            .arg("--version")
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    let mut ui = Said::default();
+    nvmimic::update::self_update(&env, &source, &force(), &mut ui).unwrap();
+    assert_eq!(version(), "3.2.0");
+    assert!(
+        ui.0.contains(
+            &"Updated shelfy from 3.1.4 to 3.2.0. `shelfy self rollback` goes back to 3.1.4."
+                .to_string()
+        ),
+        "{:?}",
+        ui.0
+    );
+    let state = home.join(".local/state/shelfy");
+    assert!(state.join("previous/shelfy-3.1.4").is_file());
+
+    nvmimic::update::self_rollback(&env, &force(), &mut Said::default()).unwrap();
+    assert_eq!(version(), "3.1.4");
+    assert!(state.join("previous/shelfy-3.2.0").is_file());
+    assert!(!state.join("previous/shelfy-3.1.4").exists());
+}
+
 #[test]
 fn the_programs_own_steps_run_inside_install_and_uninstall() {
     let home = home("steps");
