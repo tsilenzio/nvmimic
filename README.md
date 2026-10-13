@@ -153,8 +153,15 @@ before you run `self install`:
 | What | Where | Variable |
 |---|---|---|
 | The nvmimic program | `~/.local/bin/nvmimic` | `NVMIMIC_INSTALL_PATH` |
-| The list of what was installed, and the backups of nvm's scripts | `~/.local/state/nvmimic` | `NVMIMIC_STATE_DIR` |
+| The list of what was installed | `~/.local/state/nvmimic` | `NVMIMIC_STATE_DIR` |
+| The backups of nvm's scripts, and who answers `nvm` | `~/.local/state/nvm-handover` | `NVM_HANDOVER_DIR` |
 | Remembered answers, safe to delete | `~/Library/Caches/nvmimic` on macOS, `~/.cache/nvmimic` elsewhere | `NVMIMIC_CACHE_DIR` |
+
+The backups have a folder with no program's name on it because a sister
+tool built on the same library can be set up for the same nvm folder, and
+the two share them. nvmimic 0.1.0 kept the backups in
+`~/.local/state/nvmimic/backup`. The first `self` command of a later
+version moves them over.
 
 If you use the `XDG_STATE_HOME` or `XDG_CACHE_HOME`
 settings, nvmimic follows them too. If something that isn't nvmimic already
@@ -486,6 +493,8 @@ Three more pieces finish a program:
 - `Host` answers the shell functions and prints what `<name> init` prints.
 - `self_install_with`, `self_eject_with` and `self_uninstall_with` set your
   program up and remove it, with room for steps of your own (`Steps`).
+- `self_disable_with` and `self_enable_with` put your program to sleep and
+  wake it, for when someone has two of these programs.
 - `Manifest`, the record of an install, keeps lines of your own.
 
 `crates/nvmimic/examples/shelfy.rs` is a whole program built this way, in
@@ -493,10 +502,22 @@ about a hundred lines. It keeps Node on a "shelf" outside the nvm folder
 and calls itself `shelfy`. `crates/nvmimic/tests/other_store.rs` runs it,
 in real shells too.
 
-Two programs built on the library can't share an nvm folder. Each one
-checks whose `nvm.sh` is there. If it's the other's, `self install` stops
-and tells you to run the other program's `self eject` or `self uninstall`
-first.
+Two programs built on the library can be set up for the same nvm folder.
+Only one answers `nvm` at a time, and the other stays installed and asleep.
+Whichever was told to take over last is in control:
+
+- `self install` on the sleeping one says what will change and asks first.
+  `--force` skips the question.
+- `self uninstall` on the one in control hands `nvm` to the other. With no
+  other program set up, official nvm's scripts go back.
+- `self eject` always goes back to official nvm. A program that ejected or
+  disabled itself stays asleep until it is told to take over again.
+
+They keep track of each other in one small record,
+`~/.local/state/nvm-handover/record`, next to the backups of official nvm's
+scripts. It belongs to neither program, so removing one never takes the
+backups away from the other. `crates/nvmimic-cli/tests/sister.rs` runs
+nvmimic and `shelfy` through every one of these moves.
 
 The parity tests can compare your program with official nvm as well. You
 describe it as a `Subject` (in `tests/differential/src/subject.rs`): how it
