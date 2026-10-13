@@ -1197,7 +1197,10 @@ fn install(
     manifest.nvm_dir = Some(nvm_dir.clone());
     manifest.placed = match &plan {
         BinaryPlan::Copy(_) => true,
-        BinaryPlan::Keep(_) => manifest.placed,
+        // Only for the same file as before. A program that `self install`
+        // placed somewhere else says nothing about this one, and
+        // `self uninstall` would delete a file nvmimic never put there.
+        BinaryPlan::Keep(kept) => manifest.placed && manifest.binary.as_deref() == Some(kept),
         BinaryPlan::Managed(_) => false,
     };
     manifest.binary = Some(plan.path().to_path_buf());
@@ -2691,6 +2694,34 @@ mod tests {
         };
         let steps = stopped_at_every_step("purge-stopped", false, &purge, self_uninstall, &[again]);
         assert!(steps >= 3, "only {steps} steps");
+    }
+
+    #[test]
+    fn an_uninstall_leaves_a_program_that_self_install_never_placed() {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let mut env = home_with_nvm("kept-program");
+        let program = env.home.join("program");
+        self_install(&env, &program, &force, &mut quiet()).unwrap();
+        let placed = env.dirs().unwrap().binary.clone();
+        assert!(placed.is_file());
+
+        // Installed again by a program that is told it stays where it is.
+        env.install_path_given = true;
+        if let Some(dirs) = env.dirs.as_mut() {
+            dirs.binary = program.clone();
+        }
+        self_install(&env, &program, &force, &mut quiet()).unwrap();
+        let manifest = Manifest::read(env.dirs().unwrap()).unwrap();
+        assert_eq!(manifest.binary.as_deref(), Some(program.as_path()));
+        assert!(!manifest.placed);
+
+        self_uninstall(&env, &force, &mut quiet()).unwrap();
+        assert!(program.is_file(), "the program that ran is still there");
+        assert!(nvm_is_back(&env));
+        let _ = fs::remove_dir_all(&env.home);
     }
 
     #[test]
