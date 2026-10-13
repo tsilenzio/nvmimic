@@ -37,6 +37,17 @@ pub fn archive_name_for(identity: &Identity) -> Option<String> {
     archive_name().map(|name| name.replacen("nvmimic", identity.name, 1))
 }
 
+/// The one nvmimic from before the shared folder ([`crate::handover`]). It
+/// reads a manifest with no line about official nvm's scripts as "there
+/// were none", so after a rollback to it, its `self uninstall` would put
+/// nothing back.
+const BEFORE_SHARING: (&str, &str) = ("nvmimic", "0.1.0");
+
+/// Whether `version` of `identity`'s program can't read the shared folder.
+fn before_sharing(identity: &Identity, version: &str) -> bool {
+    (identity.name, version) == BEFORE_SHARING
+}
+
 /// Where the program `self update` set aside is kept.
 pub fn previous_path(dirs: &Dirs, identity: &Identity, version: &str) -> PathBuf {
     dirs.state
@@ -335,9 +346,12 @@ fn update_in(
 
     let old = manifest.version.clone();
     swap(identity, dirs, manifest, binary, &new, &newest)?;
-    ui.say(&format!(
-        "Updated {app} from {old} to {newest}. `{app} self rollback` goes back to {old}."
-    ));
+    ui.say(&match before_sharing(identity, &old) {
+        true => format!("Updated {app} from {old} to {newest}."),
+        false => format!(
+            "Updated {app} from {old} to {newest}. `{app} self rollback` goes back to {old}."
+        ),
+    });
     ui.say("Open a new shell to use it.");
     Ok(())
 }
@@ -351,6 +365,12 @@ pub fn self_rollback(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<()
     let Some(previous) = manifest.previous.clone() else {
         return Err(format!("there is no earlier {app} to go back to."));
     };
+    if before_sharing(identity, &previous) {
+        return Err(format!(
+            "{app} {previous} can't read the folder {app} keeps official nvm's scripts in now, so it \
+             couldn't put them back, and there is no going back to it. Nothing was changed."
+        ));
+    }
     let kept = previous_path(dirs, identity, &previous);
     if !kept.is_file() {
         return Err(format!("{} is missing.", kept.display()));
@@ -386,6 +406,74 @@ pub fn self_rollback(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<()
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn there_is_no_going_back_to_the_nvmimic_from_before_the_shared_folder() {
+        let root = std::env::temp_dir().join(format!("nvmimic-rollback-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.to_string_lossy().into_owned();
+        let dirs = Dirs::resolve(|name| (name == "HOME").then(|| home.clone())).unwrap();
+        let env = Env {
+            home: root.clone(),
+            nvm_dir: None,
+            xdg_config_home: None,
+            homebrew_prefix: None,
+            cargo_home: None,
+            path: None,
+            dirs: Some(dirs.clone()),
+            install_path_given: false,
+            identity: &Identity::NVMIMIC,
+        };
+        let manifest = Manifest {
+            version: "0.1.2".into(),
+            binary: Some(root.join("bin/nvmimic")),
+            previous: Some("0.1.0".into()),
+            ..Manifest::default()
+        };
+        let kept = previous_path(&dirs, &Identity::NVMIMIC, "0.1.0");
+        fs::create_dir_all(kept.parent().unwrap()).unwrap();
+        fs::create_dir_all(root.join("bin")).unwrap();
+        fs::write(&kept, "the earlier program\n").unwrap();
+        fs::write(root.join("bin/nvmimic"), "the program\n").unwrap();
+        manifest.write(&dirs, &Identity::NVMIMIC).unwrap();
+
+        struct Silent;
+        impl Ui for Silent {
+            fn say(&mut self, _line: &str) {}
+            fn ask(&mut self, _question: &str, _default: bool) -> bool {
+                true
+            }
+        }
+        for dry_run in [false, true] {
+            let options = Options {
+                force: true,
+                dry_run,
+                ..Options::default()
+            };
+            let said = self_rollback(&env, &options, &mut Silent).unwrap_err();
+            assert!(!said.contains('\n'), "{said}");
+            assert!(
+                said.starts_with("nvmimic 0.1.0 can't read the folder"),
+                "{said}"
+            );
+            assert!(said.ends_with("Nothing was changed."), "{said}");
+        }
+        assert_eq!(Manifest::read(&dirs), Some(manifest));
+        assert_eq!(
+            fs::read_to_string(root.join("bin/nvmimic")).unwrap(),
+            "the program\n"
+        );
+        assert!(kept.is_file());
+
+        // The rule names one program and one version, and no other.
+        let shelfy = Identity {
+            name: "shelfy",
+            ..Identity::NVMIMIC
+        };
+        assert!(!before_sharing(&shelfy, "0.1.0"));
+        assert!(!before_sharing(&Identity::NVMIMIC, "0.1.1"));
+        let _ = fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn an_update_while_a_sister_tool_answers_writes_no_scripts() {
