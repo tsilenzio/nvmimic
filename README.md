@@ -164,9 +164,15 @@ says the same. nvmimic finds it through a link named `shared` in its state
 folder and puts the link back if it goes missing. `self uninstall` removes
 the shared folder once no program uses it any more.
 
-nvmimic 0.1.0 kept the backups in `~/.local/state/nvmimic/backup`. The
-first `self` command of a later version moves them over. A dry run moves
-nothing.
+nvmimic 0.1.0 kept the backups in `~/.local/state/nvmimic/backup`. A
+later version moves them over by itself: the first shell that loads it
+does that, once, and so does the first `self` command. So after `brew
+upgrade nvmimic` there is nothing for you to run. A dry run moves nothing.
+
+Two `self` commands can't change this setup at the same moment. Each one
+holds a lock while it runs. The lock is the empty file
+`~/.local/state/nvmimic-shared.lock`. A second command waits two seconds
+for the first and then tells you which program is in its way.
 
 If you use the `XDG_STATE_HOME` or `XDG_CACHE_HOME`
 settings, nvmimic follows them too. If something that isn't nvmimic already
@@ -192,6 +198,12 @@ as inside a script, they change nothing unless you pass `--force`.
 `self eject` hands the nvm folder back to nvm and keeps nvmimic around, so
 `nvmimic self install` can take over again later. It needs an nvm to go back
 to. If there was none before nvmimic, it says so and changes nothing.
+
+You can stop `self eject` and `self uninstall` at any moment too. nvm's
+scripts go back as copies, `nvm.sh` last, and a backup is only deleted once
+its script is back in the nvm folder. Run the same command again to finish.
+An uninstall that was stopped just before its last step leaves the nvmimic
+program where it was, and running it again tells you so.
 
 `self uninstall` never deletes a Node version, an alias or the nvm folder,
 even if nvmimic made that folder. If there was no nvm before nvmimic, you're
