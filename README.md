@@ -26,7 +26,7 @@ commands to one fast program, so a new shell barely notices it.
 
 ## Status
 
-This is nvmimic 0.1.0, an early release. It copies nvm 0.40.8 and runs on
+This is nvmimic 0.1.1, an early release. It copies nvm 0.40.8 and runs on
 macOS. It passes its own tests, but few people have used it yet, so expect
 rough edges and keep `nvmimic self eject` in mind as the way back.
 
@@ -480,7 +480,11 @@ A backend can do more than answer those questions:
 
 - install versions its own way (`install`)
 - hear about it when a shell switches to a version or away from one
-  (`switched`), and set a variable of its own in that shell
+  (`switched`), and set a variable of its own in that shell. It is told
+  whether someone asked for the switch or a loading shell made it
+- say no to the switch a shell makes by itself when it loads
+  (`switches_at_load`). That shell is then left as it is. `nvm use` still
+  works there
 - keep downloads and the list of default packages in its own place
   (`cache_dir`, `default_packages_file`)
 - say what it can't do (`offers`). Building from source is an example. Tab
