@@ -114,6 +114,21 @@ impl Home {
         command
     }
 
+    /// What `<name> init zsh` prints in this home, as a startup file with
+    /// `eval "$(nvmimic init zsh)"` gets it when a shell loads.
+    fn init(&self, name: &str) -> String {
+        let out = Command::new(program(name))
+            .args(["init", "zsh"])
+            .env_clear()
+            .env("HOME", &self.root)
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        assert_eq!(text(&out.stderr), "");
+        text(&out.stdout)
+    }
+
     /// Runs a `self` command with `--force` and expects it to work.
     fn ok(&self, name: &str, command: &str) -> String {
         let out = self.run(name, &[command, "--force"]);
@@ -756,6 +771,63 @@ fn with_the_shared_folder_deleted_both_carry_on_and_say_there_is_no_backup() {
     }
 }
 
+/// An install that nvmimic 0.1.0 made, after Homebrew or anything else but
+/// `self update` put a newer nvmimic in its place: no `self` command ran.
+#[test]
+fn an_upgraded_nvmimic_joins_the_shared_record_when_a_shell_loads_it() {
+    for ejected in [false, true] {
+        let home = Home::new(true);
+        home.ok(NVMIMIC, "install");
+        if ejected {
+            home.ok(NVMIMIC, "eject");
+        }
+        let printed = home.init(NVMIMIC);
+        as_0_1_0_left_it(&home, ejected);
+        let manifest = || fs::read_to_string(home.state(NVMIMIC).join("manifest")).unwrap();
+        assert!(manifest().contains("version 0.1.0\n"));
+
+        // While another command holds the lock, the shell loads as always
+        // and nothing moves.
+        let root = home.root.to_string_lossy().into_owned();
+        let dirs = Dirs::resolve(|name| (name == "HOME").then(|| root.clone())).unwrap();
+        let held = lock(&dirs, &Identity::NVMIMIC, Duration::ZERO).unwrap();
+        let before = snapshot(&home.root);
+        assert_eq!(home.init(NVMIMIC), printed);
+        assert_eq!(snapshot(&home.root), before);
+        drop(held);
+
+        // The first shell to load moves the install, and prints what a
+        // shell always gets.
+        assert_eq!(home.init(NVMIMIC), printed);
+        let record = home.record();
+        assert_eq!(record.programs[NVMIMIC].aside, ejected);
+        assert_eq!(record.answers.as_deref(), (!ejected).then_some(NVMIMIC));
+        assert_eq!(home.backup_is_whole(), !ejected);
+        assert!(!home.state(NVMIMIC).join("backup").exists());
+        let now = manifest();
+        let version = format!("version {}\n", env!("CARGO_PKG_VERSION"));
+        assert!(
+            now.contains(&version) && !now.contains("\nbackup "),
+            "{now}"
+        );
+        assert_eq!(now.contains("ejected scripts\n"), ejected, "{now}");
+
+        // Every shell after that changes nothing.
+        let after = snapshot(&home.root);
+        assert_eq!(home.init(NVMIMIC), printed);
+        assert_eq!(snapshot(&home.root), after);
+
+        // The sister tool is not refused any more, and both leave cleanly.
+        home.ok(SHELFY, "install");
+        assert_eq!(home.answers(), SHELFY);
+        home.ok(SHELFY, "uninstall");
+        assert_eq!(home.answers(), if ejected { "official" } else { NVMIMIC });
+        home.ok(NVMIMIC, "uninstall");
+        assert!(home.official_is_back());
+        assert!(!home.shared().exists() && !home.state(NVMIMIC).exists());
+    }
+}
+
 #[test]
 fn a_self_command_waits_for_the_lock_and_then_says_who_holds_it() {
     let home = Home::new(true);
@@ -848,9 +920,11 @@ fn two_self_commands_at_once_leave_one_record_that_matches_the_folder() {
     }
 }
 
-/// The nvmimic 0.1.0 that Homebrew installed, if this machine has it.
+/// The released nvmimic 0.1.0, if this machine has it: the program that
+/// `NVMIMIC_RELEASED_0_1_0` names, or the one Homebrew installed.
 fn released_0_1_0() -> Option<PathBuf> {
-    let program = PathBuf::from("/opt/homebrew/bin/nvmimic");
+    let program = std::env::var_os("NVMIMIC_RELEASED_0_1_0")
+        .map_or_else(|| PathBuf::from("/opt/homebrew/bin/nvmimic"), PathBuf::from);
     let version = Command::new(&program).arg("--version").output().ok()?;
     // With Homebrew's nvm installed, `self install` would uninstall it.
     let homebrew_nvm = Path::new("/opt/homebrew/opt/nvm").exists();
@@ -881,7 +955,9 @@ fn home_set_up_by_0_1_0(released: &Path) -> Home {
 #[test]
 fn an_install_by_the_released_0_1_0_is_moved_ejected_and_uninstalled() {
     let Some(released) = released_0_1_0() else {
-        eprintln!("skipped: nvmimic 0.1.0 is not at /opt/homebrew/bin/nvmimic");
+        eprintln!(
+            "skipped: nvmimic 0.1.0 is not at /opt/homebrew/bin/nvmimic, and NVMIMIC_RELEASED_0_1_0 names none"
+        );
         return;
     };
     let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/reference/nvm-v0.40.8");
@@ -950,4 +1026,29 @@ fn an_install_by_the_released_0_1_0_is_moved_ejected_and_uninstalled() {
         assert!(!home.state(NVMIMIC).join("backup").exists(), "{command}");
         assert_eq!(home.shared().exists(), command == "eject");
     }
+
+    // And a shell that loads this build over what 0.1.0 left, which is
+    // what happens after `brew upgrade`.
+    let home = home_set_up_by_0_1_0(&released);
+    home.init(NVMIMIC);
+    let state = home.state(NVMIMIC);
+    assert!(!state.join("backup").exists());
+    let manifest = fs::read_to_string(state.join("manifest")).unwrap();
+    let version = format!("version {}\n", env!("CARGO_PKG_VERSION"));
+    assert!(
+        manifest.contains(&version) && !manifest.contains("backup "),
+        "{manifest}"
+    );
+    let record = home.record();
+    assert_eq!(record.backed_up, SCRIPTS);
+    assert_eq!(record.answers.as_deref(), Some(NVMIMIC));
+    for name in SCRIPTS {
+        assert_eq!(
+            fs::read(home.shared().join("backup").join(name)).unwrap(),
+            official(name)
+        );
+    }
+    home.ok(NVMIMIC, "uninstall");
+    assert!(is_official(&home));
+    assert!(!home.shared().exists() && !state.exists());
 }

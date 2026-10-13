@@ -610,10 +610,7 @@ fn settle(dirs: &Dirs, identity: &Identity, loaded: &mut Loaded) -> Result<(), S
         return Ok(());
     };
     let before = dirs.backup_before_sharing();
-    // A move that was stopped after the record was written left the
-    // manifest's lines and the old folder behind. This finishes it.
-    let unfinished_move = !manifest.backed_up.is_empty() || present(&before);
-    if !loaded.moving && !unfinished_move {
+    if !loaded.moving && !half_moved(dirs, manifest) {
         return Ok(());
     }
     let backup = dirs.backup();
@@ -649,6 +646,55 @@ fn settle(dirs: &Dirs, identity: &Identity, loaded: &mut Loaded) -> Result<(), S
     let _ = fs::remove_dir(&before);
     loaded.moving = false;
     Ok(())
+}
+
+/// Whether a move into the shared folder was stopped after the record was
+/// written: the manifest's lines and the old folder are still there, and
+/// [`settle`] finishes it.
+fn half_moved(dirs: &Dirs, manifest: &Manifest) -> bool {
+    !manifest.backed_up.is_empty() || present(&dirs.backup_before_sharing())
+}
+
+/// Brings the records of an install up to date with the program that is
+/// running, where something other than `self update` put a newer program
+/// in place: a package manager's upgrade, or a file copied over the old
+/// one. No `self` command ran then, so an install made by nvmimic 0.1.0
+/// would stay out of the shared record, and the sister tool's `self
+/// install` would be refused for as long as it did.
+///
+/// `init` calls this when the manifest names another version than the
+/// program's own, which it sees in the manifest it reads anyway. The
+/// manifest is written with the program's version at the end, so this runs
+/// once per upgrade and a shell that loads afterwards pays nothing for it.
+///
+/// It says nothing and never fails: what `init` prints is run by a shell.
+/// Where another command holds the lock, or something can't be written,
+/// the next shell that loads tries again.
+pub fn catch_up(dirs: &Dirs, identity: &Identity) {
+    let _ = caught_up(dirs, identity);
+}
+
+fn caught_up(dirs: &Dirs, identity: &Identity) -> Result<(), String> {
+    let _lock = handover::lock(dirs, identity, std::time::Duration::ZERO)?;
+    // Read again under the lock. Another shell may have done it already.
+    let mut loaded = load(dirs, identity)?;
+    let behind = |manifest: &Manifest| manifest.version != identity.version;
+    if !loaded.manifest.as_ref().is_some_and(behind) {
+        return Ok(());
+    }
+    if loaded.moving
+        || loaded
+            .manifest
+            .as_ref()
+            .is_some_and(|m| half_moved(dirs, m))
+    {
+        settle(dirs, identity, &mut loaded)?;
+    }
+    let Some(mut manifest) = loaded.manifest else {
+        return Ok(());
+    };
+    manifest.version = identity.version.to_string();
+    manifest.write(dirs, identity)
 }
 
 /// How a question shows which answer an empty reply gives.

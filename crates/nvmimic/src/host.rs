@@ -230,6 +230,16 @@ impl Host<'_> {
         // install`.
         let dirs = crate::dirs::Dirs::from_process_for(self.identity);
         let manifest = dirs.as_ref().and_then(Manifest::read);
+        // A program that a package manager upgraded runs here before any
+        // `self` command does. The manifest still names the version it
+        // replaced, and that is the one moment its records are brought up
+        // to date. A shell that loads with the versions equal, which is
+        // every other one, pays for comparing two short strings.
+        if let (Some(dirs), Some(manifest)) = (&dirs, &manifest)
+            && manifest.version != self.identity.version
+        {
+            crate::install::catch_up(dirs, self.identity);
+        }
         let cache = dirs.as_ref().map(|dirs| {
             manifest
                 .as_ref()
