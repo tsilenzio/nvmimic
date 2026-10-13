@@ -29,6 +29,11 @@ const BASH_COMPLETION: &str = include_str!("../../../shell/bash_completion");
 /// The scripts nvm keeps in `$NVM_DIR`, which nvmimic replaces.
 const SCRIPTS: &[&str] = &["nvm.sh", "nvm-exec", "bash_completion"];
 
+/// The order the scripts leave `$NVM_DIR` in. `nvm.sh` says whose scripts
+/// the folder holds, so it changes hands last: until then a run that was
+/// stopped still reads as nvmimic's, and the next run carries on.
+const LEAVING_ORDER: &[&str] = &["nvm-exec", "bash_completion", "nvm.sh"];
+
 /// The line in the text `nvmimic init` prints where the function
 /// definitions end. What follows runs once, when a shell loads nvmimic.
 pub const LOAD_MARKER: &str =
@@ -440,6 +445,25 @@ fn keep_copy(from: &Path, to: &Path) -> Result<(), String> {
     fs::rename(&temporary, to).map_err(|e| format!("{}: {e}", to.display()))
 }
 
+/// Whether two files hold the same bytes. A file that can't be read is
+/// the same as nothing.
+fn same_contents(a: &Path, b: &Path) -> bool {
+    match (fs::read(a), fs::read(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+
+/// Makes `path` a link to `target` in one step, so `path` is never missing
+/// on the way.
+fn link_in_place(target: &Path, path: &Path) -> Result<(), String> {
+    let temporary = unfinished(path);
+    let _ = fs::remove_file(&temporary);
+    std::os::unix::fs::symlink(target, &temporary)
+        .and_then(|()| fs::rename(&temporary, path))
+        .map_err(|e| format!("{}: {e}", path.display()))
+}
+
 fn same_file(a: &Path, b: &Path) -> bool {
     match (fs::canonicalize(a), fs::canonicalize(b)) {
         (Ok(a), Ok(b)) => a == b,
@@ -503,7 +527,14 @@ fn load(dirs: &Dirs, identity: &Identity) -> Result<Loaded, String> {
         moving = from_0_1_0 && !record.lost;
         join(dirs, identity, &manifest, &mut record)?;
     }
-    manifest.ejected = !record.answers(identity);
+    // Where the record and the folder disagree after a stop, the file in
+    // the folder wins: with this program's `nvm.sh` there, its scripts are
+    // not out.
+    let in_place = manifest
+        .nvm_dir
+        .as_ref()
+        .is_some_and(|nvm_dir| is_ours(&nvm_dir.join("nvm.sh"), identity));
+    manifest.ejected = !record.answers(identity) && !in_place;
     Ok(Loaded {
         manifest: Some(manifest),
         record,
@@ -575,23 +606,38 @@ fn join(
 /// each script in a backup that one of the two files knows about.
 fn settle(dirs: &Dirs, identity: &Identity, loaded: &mut Loaded) -> Result<(), String> {
     handover::link(dirs)?;
-    let Some(manifest) = loaded.manifest.as_mut().filter(|_| loaded.moving) else {
+    let Some(manifest) = loaded.manifest.as_mut() else {
         return Ok(());
     };
     let before = dirs.backup_before_sharing();
+    // A move that was stopped after the record was written left the
+    // manifest's lines and the old folder behind. This finishes it.
+    let unfinished_move = !manifest.backed_up.is_empty() || present(&before);
+    if !loaded.moving && !unfinished_move {
+        return Ok(());
+    }
     let backup = dirs.backup();
     fs::create_dir_all(&backup).map_err(|e| format!("{}: {e}", backup.display()))?;
     for name in &manifest.backed_up {
-        if fs::metadata(before.join(name)).is_ok() {
-            keep_copy(&before.join(name), &backup.join(name))?;
+        let (old, new) = (before.join(name), backup.join(name));
+        // Only a move that is starting writes over what the shared folder
+        // holds. One that is being finished fills in what is missing.
+        if fs::metadata(&old).is_ok() && (loaded.moving || !present(&new)) {
+            checkpoint()?;
+            keep_copy(&old, &new)?;
         }
     }
-    loaded.record.write(dirs)?;
+    if loaded.moving {
+        checkpoint()?;
+        loaded.record.write(dirs)?;
+    }
 
     let moved = std::mem::take(&mut manifest.backed_up);
     manifest.links.clear();
     manifest.created.clear();
+    checkpoint()?;
     manifest.write(dirs, identity)?;
+    checkpoint()?;
     for name in SCRIPTS
         .iter()
         .copied()
@@ -674,7 +720,7 @@ thread_local! {
     static STEPS: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Called before each change `self install` makes on disk. A test can make
+/// Called before each change a `self` command makes on disk. A test can make
 /// one of these calls fail, which leaves the disk the way a crash or a
 /// power cut at that moment would.
 fn checkpoint() -> Result<(), String> {
@@ -861,6 +907,17 @@ pub fn self_install_with(
     // nvm-exec is the same file in nvm and nvmimic, so `nvm.sh` decides
     // whose scripts these are: while it is nvmimic's, all three are. The
     // same goes for a sister tool's, which are never official nvm's to keep.
+    //
+    // Without an `nvm.sh` nothing decides, as when someone deleted it. A
+    // script that is what this program wrote is then not kept as nvm's,
+    // which would write it over the copy of nvm's own.
+    let nvm_sh_there = present(&nvm_dir.join("nvm.sh"));
+    let wrote = |name: &str| {
+        loaded.manifest.as_ref().is_some_and(|manifest| {
+            let state = found(identity, &nvm_dir.join(name), name, manifest, plan.path());
+            matches!(state, Found::Ours | Found::OursEdited)
+        })
+    };
     let existing: Vec<&str> = SCRIPTS
         .iter()
         .copied()
@@ -868,6 +925,7 @@ pub fn self_install_with(
             sister.is_none()
                 && present(&nvm_dir.join(name))
                 && !is_ours(&nvm_dir.join("nvm.sh"), identity)
+                && (nvm_sh_there || !wrote(name))
         })
         .collect();
     if let Some(other) = &sister {
@@ -1418,6 +1476,13 @@ fn leave(
     let dirs = env.dirs()?;
     let mut loaded = load(dirs, identity)?;
     let Some(mut manifest) = loaded.manifest.clone() else {
+        // An uninstall that was stopped at its very end took the manifest
+        // and left the program's line in the shared record, or its link to
+        // the shared folder.
+        let left = loaded.record.programs.contains_key(app) || present(&dirs.shared_link());
+        if how != Leaving::Eject && left {
+            return forget(dirs, identity, loaded.record, options, ui);
+        }
         return Err(format!(
             "{app} is not installed. There is no record of an install in {}.",
             dirs.state.display()
@@ -1564,6 +1629,9 @@ fn leave(
     // Scripts that aren't nvmimic's any more. They stay as they are, and
     // nvm's older copy in the backup folder doesn't go back over them.
     let mut not_ours: Vec<&str> = Vec::new();
+    // Scripts that hold what the backup holds. An earlier run that was
+    // stopped put them back already, and there is nothing to say or do.
+    let mut back_already: Vec<&str> = Vec::new();
     if how == Leaving::Purge {
         let others: Vec<&str> = record.others(identity).collect();
         steps.push(Step {
@@ -1604,6 +1672,9 @@ fn leave(
                     });
                     edited.push((name, path, saved));
                 }
+                Found::NotOurs if same_contents(&path, &backup.join(name)) => {
+                    back_already.push(name);
+                }
                 Found::NotOurs => {
                     steps.push(Step {
                         note: Some(format!(
@@ -1617,17 +1688,18 @@ fn leave(
                 Found::Ours | Found::Missing => {}
             }
         }
-        restore.retain(|name| !not_ours.contains(&name.as_str()));
-        dead.retain(|(name, _)| !not_ours.contains(name));
+        let stays = |name: &str| not_ours.contains(&name) || back_already.contains(&name);
+        restore.retain(|name| !stays(name));
+        dead.retain(|(name, _)| !stays(name));
         carried.retain(|(name, _)| {
-            !not_ours.contains(name) && !edited.iter().any(|(edited, _, _)| edited == name)
+            !stays(name) && !edited.iter().any(|(edited, _, _)| edited == name)
         });
         if let Some((other, program)) = &heir {
             steps.push(Step::new(format!(
                 "hand `nvm` over to {other} by running `{} self install --force`",
                 program.display()
             )));
-        } else if not_ours.len() < SCRIPTS.len() {
+        } else if not_ours.len() + back_already.len() < SCRIPTS.len() {
             steps.push(Step::new(format!(
                 "remove {app}'s scripts from {}",
                 nvm_dir.display()
@@ -1691,7 +1763,8 @@ fn leave(
             "{app}'s scripts are already out of {}.",
             nvm_dir.display()
         )),
-        _ if restore.is_empty() && !not_ours.is_empty() => ui.say(&format!(
+        _ if restore.is_empty() && !(not_ours.is_empty() && back_already.is_empty()) => ui
+            .say(&format!(
             "{} holds nvm's own scripts again, so there is nothing to put back.",
             nvm_dir.display()
         )),
@@ -1762,41 +1835,41 @@ fn leave(
     manifest.created.clear();
     backup = dirs.backup();
 
+    // From here on the order is what keeps a stop at any moment harmless,
+    // as it is for an install. A script of nvm's goes back as a copy, in
+    // one step, and `nvm.sh` goes last. The shared record is written once
+    // all of them are back, and only then are the copies in the backup
+    // deleted. So each of nvm's scripts is always in `$NVM_DIR` or in a
+    // backup the record knows about, and whatever a stop left, the same
+    // command run again finishes it, and so does `self install`.
+    let mut put_back: Vec<&str> = Vec::new();
     if how == Leaving::Purge {
+        checkpoint()?;
         match fs::remove_dir_all(&nvm_dir) {
             Err(error) if error.kind() != io::ErrorKind::NotFound => {
                 return Err(format!("{}: {error}", nvm_dir.display()));
             }
             _ => {}
         }
-        for name in &record.backed_up {
-            let _ = fs::remove_file(backup.join(name));
-        }
     } else if let Some((other, program)) = &heir {
         // The sister tool writes its own scripts over these, so an edited
         // one is copied aside first, and nothing is taken out of the folder.
         for (name, path, saved) in &edited {
-            fs::copy(path, saved).map_err(|e| format!("{}: {e}", path.display()))?;
+            checkpoint()?;
+            keep_copy(path, saved)?;
             ui.say(&format!(
                 "{name} was edited after {app} installed it. Copied {} to {}.",
                 path.display(),
                 saved.display()
             ));
         }
+        checkpoint()?;
         handover::hand_to(other, program, &nvm_dir).map_err(|said| {
             format!("{other} could not take over ({said}), so {app} stays as it was.")
         })?;
         // The sister tool wrote the record.
         record = Record::read(dirs).unwrap_or(record);
     } else if !manifest.ejected {
-        for (name, path, saved) in &edited {
-            fs::rename(path, saved).map_err(|e| format!("{}: {e}", path.display()))?;
-            ui.say(&format!(
-                "{name} was edited after {app} installed it. Renamed {} to {}.",
-                path.display(),
-                saved.display()
-            ));
-        }
         for name in &not_ours {
             let kept = backup.join(name);
             let older = match present(&kept) {
@@ -1808,74 +1881,93 @@ fn leave(
                 nvm_dir.join(name).display()
             ));
         }
-        for name in SCRIPTS {
-            if !edited.iter().any(|(edited, _, _)| edited == name) && !not_ours.contains(name) {
-                let _ = fs::remove_file(nvm_dir.join(name));
+        for name in LEAVING_ORDER {
+            if not_ours.contains(name) || back_already.contains(name) {
+                continue;
             }
-        }
-        for name in &restore {
             let kept = backup.join(name);
             let path = nvm_dir.join(name);
-            match record.links.get(name) {
-                // A link goes back as the link it was while its target is
-                // still there. `join` leaves a full path as it is.
-                Some(target) if fs::metadata(nvm_dir.join(target)).is_ok() => {
-                    std::os::unix::fs::symlink(target, &path)
-                        .map_err(|e| format!("{}: {e}", path.display()))?;
-                    let _ = fs::remove_file(&kept);
+            if let Some((_, _, saved)) = edited.iter().find(|(edited, _, _)| edited == name) {
+                checkpoint()?;
+                keep_copy(&path, saved)?;
+                ui.say(&format!(
+                    "{name} was edited after {app} installed it. Renamed {} to {}.",
+                    path.display(),
+                    saved.display()
+                ));
+            }
+            checkpoint()?;
+            if restore.iter().any(|kept| kept == name) {
+                match record.links.get(*name) {
+                    // A link goes back as the link it was while its target
+                    // is still there. `join` leaves a full path as it is.
+                    Some(target) if fs::metadata(nvm_dir.join(target)).is_ok() => {
+                        link_in_place(target, &path)?;
+                    }
+                    Some(target) => {
+                        keep_copy(&kept, &path)?;
+                        ui.say(&format!(
+                            "{name} was a link to {}, which is gone. It comes back as a file with what the link pointed to.",
+                            target.display()
+                        ));
+                    }
+                    None => keep_copy(&kept, &path)?,
                 }
-                Some(target) => {
-                    move_file(&kept, &path)?;
-                    ui.say(&format!(
-                        "{name} was a link to {}, which is gone. It comes back as a file with what the link pointed to.",
-                        target.display()
-                    ));
-                }
-                None => move_file(&kept, &path)?,
+                put_back.push(name);
+            } else if let Some((_, text)) = carried.iter().find(|(carried, _)| carried == name) {
+                let mode = if *name == "nvm-exec" { 0o755 } else { 0o644 };
+                write_file(&path, text, mode)?;
+            } else {
+                let _ = fs::remove_file(&path);
             }
         }
-        for (name, text) in &carried {
-            let mode = if *name == "nvm-exec" { 0o755 } else { 0o644 };
-            write_file(&nvm_dir.join(name), text, mode)?;
-        }
+    }
+
+    checkpoint()?;
+    own.leave(&site, how, &mut manifest, ui)?;
+
+    // What the shared record says afterwards. With a sister tool in the
+    // folder the backup is as it was. Otherwise a script that is back in
+    // the folder needs no copy any more, and one that nvm put there itself
+    // since keeps its older copy.
+    let ours_to_settle = in_place.is_none() && heir.is_none();
+    if ours_to_settle {
+        record.backed_up.retain(|name| {
+            let kept = backup.join(name);
+            how != Leaving::Purge
+                && !put_back.contains(&name.as_str())
+                && present(&kept)
+                && !same_contents(&nvm_dir.join(name), &kept)
+        });
+        record.links.clear();
+        record.created.clear();
+        record.answers = None;
+    } else if let Some(other) = &in_place {
+        record.answers = Some(other.clone());
+    }
+    if let Some(program) = record.programs.get_mut(app) {
+        program.aside = true;
+    }
+    checkpoint()?;
+    record.write(dirs)?;
+    if ours_to_settle {
         for name in SCRIPTS {
             let kept = backup.join(name);
-            if dead_link(&kept) {
+            if !record.backed_up.iter().any(|listed| listed == name) {
+                checkpoint()?;
                 let _ = fs::remove_file(&kept);
             }
-            // What a stopped install can leave half written.
+            // What a stopped run can leave half written.
             let _ = fs::remove_file(unfinished(&kept));
             let _ = fs::remove_file(unfinished(&nvm_dir.join(name)));
         }
     }
 
-    own.leave(&site, how, &mut manifest, ui)?;
-
-    // What the shared record says afterwards. Scripts that went back are
-    // no longer in the backup, and with a sister tool in the folder the
-    // backup is as it was.
-    if how == Leaving::Purge {
-        record.backed_up.clear();
-    }
-    if in_place.is_none() && heir.is_none() {
-        record.backed_up.retain(|name| present(&backup.join(name)));
-        record.links.clear();
-        record.created.clear();
-    }
-    if let Some(other) = &in_place {
-        record.answers = Some(other.clone());
-    } else if record.answers(identity) {
-        record.answers = None;
-    }
-
     if how == Leaving::Eject {
         manifest.fingerprints.clear();
         manifest.ejected = true;
+        checkpoint()?;
         manifest.write(dirs, env.identity)?;
-        if let Some(program) = record.programs.get_mut(app) {
-            program.aside = true;
-        }
-        record.write(dirs)?;
         ui.say(&match &heir {
             Some((other, _)) => format!(
                 "Done. {other} answers `nvm` in {} now, and the {app} program stays at {}.",
@@ -1894,6 +1986,11 @@ fn leave(
     // Only what nvmimic put into its folders is removed, file by file. A
     // folder that then still holds something of yours stays. The two files
     // in the data folder are what earlier versions kept there.
+    //
+    // The manifest goes after everything it names but the program, so a
+    // run that was stopped can be run again. The program goes last, since
+    // it is what runs the command again.
+    checkpoint()?;
     for file in ["nvm-functions.sh", "nvmimic-functions.sh"] {
         let _ = fs::remove_file(data.join(file));
     }
@@ -1902,22 +1999,20 @@ fn leave(
         let _ = fs::remove_dir_all(cache.join(kind));
     }
     let _ = fs::remove_dir(&cache);
-    if let Some(binary) = &placed {
-        let _ = fs::remove_file(binary);
-    }
-    let _ = fs::remove_file(dirs.manifest());
-    let _ = fs::remove_file(unfinished(&dirs.manifest()));
     if let Some(version) = &manifest.previous {
         let _ = fs::remove_file(crate::update::previous_path(dirs, identity, version));
     }
     let _ = fs::remove_dir(dirs.state.join("previous"));
     let _ = fs::remove_dir(dirs.backup_before_sharing());
-    // The record goes while the link still says where it is. With no
-    // program left in it, the shared folder goes too.
-    record.programs.remove(app);
-    record.write(dirs)?;
-    let _ = fs::remove_file(dirs.shared_link());
-    let _ = fs::remove_dir(&dirs.state);
+    checkpoint()?;
+    let _ = fs::remove_file(dirs.manifest());
+    let _ = fs::remove_file(unfinished(&dirs.manifest()));
+    checkpoint()?;
+    leave_record(dirs, identity, record)?;
+    if let Some(binary) = &placed {
+        checkpoint()?;
+        let _ = fs::remove_file(binary);
+    }
 
     // "nvmimic is gone" would be wrong while its program is still there.
     let back =
@@ -1959,6 +2054,49 @@ fn leave(
                 binary.display()
             )),
         }
+    }
+    Ok(())
+}
+
+/// Takes the program out of the shared record and removes its link to the
+/// shared folder. The record goes while the link still says where it is.
+/// With no program left in it, the shared folder goes too.
+fn leave_record(dirs: &Dirs, identity: &Identity, mut record: Record) -> Result<(), String> {
+    record.programs.remove(identity.name);
+    record.write(dirs)?;
+    checkpoint()?;
+    let _ = fs::remove_file(dirs.shared_link());
+    let _ = fs::remove_dir(&dirs.state);
+    Ok(())
+}
+
+/// Finishes an uninstall that was stopped after it removed the manifest:
+/// the program's line in the shared record and its link to the shared
+/// folder are all that is left of it.
+fn forget(
+    dirs: &Dirs,
+    identity: &Identity,
+    record: Record,
+    options: &Options,
+    ui: &mut dyn Ui,
+) -> Result<(), String> {
+    let app = identity.name;
+    if options.dry_run {
+        ui.say(&format!(
+            "Would remove what an earlier uninstall left of {app} in {}.",
+            dirs.shared_folder().display()
+        ));
+        return Ok(());
+    }
+    leave_record(dirs, identity, record)?;
+    ui.say(&format!(
+        "Done. An earlier uninstall was stopped before it finished, and what it left of {app} is gone now."
+    ));
+    if present(&dirs.binary) {
+        ui.say(&format!(
+            "The {app} program is still at {}. Delete that file if you don't want it.",
+            dirs.binary.display()
+        ));
     }
     Ok(())
 }
@@ -2276,6 +2414,210 @@ mod tests {
         // Three scripts to keep, a manifest, a program and three scripts
         // to write: an install has at least that many steps.
         assert!(stopped_at >= 8, "only {stopped_at} steps");
+    }
+
+    /// Whether anything of nvmimic's own is left after an uninstall. The
+    /// program itself is not looked at.
+    fn leftovers(env: &Env) -> Vec<PathBuf> {
+        let dirs = env.dirs().unwrap();
+        [&dirs.state, &dirs.shared, &dirs.data, &dirs.cache]
+            .into_iter()
+            .filter(|path| present(path))
+            .cloned()
+            .collect()
+    }
+
+    /// Turns a new install into what nvmimic 0.1.0 left on disk: official
+    /// nvm's scripts and the lines about them in the program's own state
+    /// folder, and no shared folder.
+    fn as_0_1_0_left_it(env: &Env) {
+        let dirs = env.dirs().unwrap();
+        let record = Record::read(dirs).unwrap();
+        let mut manifest = Manifest::read(dirs).unwrap();
+        let before = dirs.backup_before_sharing();
+        fs::create_dir_all(&before).unwrap();
+        for name in &record.backed_up {
+            fs::rename(dirs.backup().join(name), before.join(name)).unwrap();
+        }
+        manifest.version = "0.1.0".to_string();
+        manifest.backed_up = record.backed_up;
+        manifest.links = record.links;
+        manifest.created = record.created;
+        manifest.write(dirs, &Identity::NVMIMIC).unwrap();
+        fs::remove_dir_all(&dirs.shared).unwrap();
+        fs::remove_file(dirs.shared_link()).unwrap();
+    }
+
+    /// What a test does after a stop: it is given the home and the step.
+    type Next<'a> = &'a dyn Fn(&Env, u32);
+
+    /// Stops `command` before each of its steps in turn, in a home where
+    /// nvmimic took over from official nvm. After every stop it runs
+    /// `after`, which does what someone would do next and checks what is
+    /// there. Returns how many steps the command has.
+    fn stopped_at_every_step(
+        label: &str,
+        from_0_1_0: bool,
+        options: &Options,
+        command: fn(&Env, &Options, &mut dyn Ui) -> Result<(), String>,
+        after: &[Next],
+    ) -> u32 {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let mut stopped_at = 0;
+        loop {
+            for next in after {
+                let env = home_with_nvm(label);
+                self_install(&env, &env.home.join("program"), &force, &mut quiet()).unwrap();
+                if from_0_1_0 {
+                    as_0_1_0_left_it(&env);
+                }
+                STEPS.set(0);
+                STOP_BEFORE.set(Some(stopped_at));
+                let result = command(&env, options, &mut quiet());
+                STOP_BEFORE.set(None);
+                if result.is_ok() {
+                    let _ = fs::remove_dir_all(&env.home);
+                    return stopped_at;
+                }
+                assert_eq!(result, Err("interrupted".to_string()));
+                next(&env, stopped_at);
+                let _ = fs::remove_dir_all(&env.home);
+            }
+            stopped_at += 1;
+        }
+    }
+
+    /// After a stop: install again, then uninstall. Both have to work, and
+    /// official nvm has to be back with nothing of nvmimic's left.
+    fn install_again_then_uninstall(env: &Env, step: u32) {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let dirs = env.dirs().unwrap();
+        let again = self_install(env, &env.home.join("program"), &force, &mut quiet());
+        // An uninstall stopped after it removed the manifest has left the
+        // program, which is then a file nvmimic has no record of. An
+        // install says so, and the uninstall run again clears the rest.
+        if Manifest::read(dirs).is_none() {
+            let said = again.unwrap_err();
+            assert!(said.contains("is already there"), "step {step}: {said}");
+            let _ = self_uninstall(env, &force, &mut quiet());
+            assert!(nvm_is_back(env), "step {step}");
+            assert_eq!(leftovers(env), Vec::<PathBuf>::new(), "step {step}");
+            return;
+        }
+        again.unwrap_or_else(|e| panic!("step {step}, install again: {e}"));
+        self_uninstall(env, &force, &mut quiet())
+            .unwrap_or_else(|e| panic!("step {step}, uninstall after installing again: {e}"));
+        assert!(
+            nvm_is_back(env),
+            "step {step}, installed again: nvm's scripts did not come back"
+        );
+        assert_eq!(leftovers(env), Vec::<PathBuf>::new(), "step {step}");
+    }
+
+    /// After a stopped uninstall: run it again. Official nvm has to be back
+    /// with nothing of nvmimic's left, whatever the second run answers.
+    fn uninstall_again(env: &Env, step: u32) {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let again = self_uninstall(env, &force, &mut quiet());
+        assert_ne!(again, Err("interrupted".to_string()));
+        assert!(
+            nvm_is_back(env),
+            "step {step}, uninstalled again ({again:?}): nvm's scripts did not come back"
+        );
+        assert_eq!(leftovers(env), Vec::<PathBuf>::new(), "step {step}");
+    }
+
+    /// After a stopped eject: run it again. Official nvm has to be back,
+    /// nvmimic has to know that it stepped aside, and taking over again
+    /// and uninstalling both have to work.
+    fn eject_again(env: &Env, step: u32) {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let dirs = env.dirs().unwrap();
+        let again = self_eject(env, &force, &mut quiet());
+        assert_ne!(again, Err("interrupted".to_string()));
+        assert!(
+            nvm_is_back(env),
+            "step {step}, ejected again ({again:?}): nvm's scripts did not come back"
+        );
+        let loaded = load(dirs, &Identity::NVMIMIC).unwrap();
+        assert!(
+            loaded.manifest.is_some_and(|manifest| manifest.ejected),
+            "step {step}, ejected again ({again:?}): nvmimic doesn't know its scripts are out"
+        );
+        assert!(!loaded.record.answers(&Identity::NVMIMIC), "step {step}");
+        install_again_then_uninstall(env, step);
+    }
+
+    #[test]
+    fn an_eject_stopped_at_any_step_loses_none_of_nvms_scripts() {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        for from_0_1_0 in [false, true] {
+            let steps = stopped_at_every_step(
+                "eject-stopped",
+                from_0_1_0,
+                &force,
+                self_eject,
+                &[&eject_again, &install_again_then_uninstall],
+            );
+            // Three scripts to put back and two records to write.
+            assert!(steps >= 5, "only {steps} steps");
+        }
+    }
+
+    #[test]
+    fn an_uninstall_stopped_at_any_step_loses_none_of_nvms_scripts() {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        for from_0_1_0 in [false, true] {
+            let steps = stopped_at_every_step(
+                "uninstall-stopped",
+                from_0_1_0,
+                &force,
+                self_uninstall,
+                &[&uninstall_again, &install_again_then_uninstall],
+            );
+            // Three scripts to put back, and the program's own files.
+            assert!(steps >= 6, "only {steps} steps");
+        }
+    }
+
+    #[test]
+    fn a_purge_stopped_at_any_step_finishes_when_it_is_run_again() {
+        let purge = Options {
+            force: true,
+            purge: true,
+            ..Options::default()
+        };
+        let again: Next = &|env, step| {
+            let purge = Options {
+                force: true,
+                purge: true,
+                ..Options::default()
+            };
+            let again = self_uninstall(env, &purge, &mut quiet());
+            assert_ne!(again, Err("interrupted".to_string()));
+            assert!(!present(&env.nvm_dir()), "step {step} ({again:?})");
+            assert_eq!(leftovers(env), Vec::<PathBuf>::new(), "step {step}");
+        };
+        let steps = stopped_at_every_step("purge-stopped", false, &purge, self_uninstall, &[again]);
+        assert!(steps >= 3, "only {steps} steps");
     }
 
     #[test]

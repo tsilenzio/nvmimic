@@ -383,9 +383,12 @@ fn nvms_own_scripts_written_over_ours_are_left_alone() {
 
         let dry = home.nvmimic(&["self", leaving, "--dry-run"]);
         assert!(dry.status.success(), "{}", text(&dry.stderr));
+        // nvm-exec is the same file in every nvm since 0.40, so the one in
+        // the folder is the one in the backup, and there is nothing to say
+        // about it.
         assert_eq!(
             text(&dry.stdout).matches("Would leave it alone.").count(),
-            3,
+            2,
             "{}",
             text(&dry.stdout)
         );
@@ -396,11 +399,13 @@ fn nvms_own_scripts_written_over_ours_are_left_alone() {
         for (file, newer) in SCRIPTS.iter().zip(&newer) {
             let path = home.nvm_dir().join(file);
             assert_eq!(&fs::read(&path).unwrap(), newer, "{leaving} {file}");
-            assert!(
+            let changed = *file != "nvm-exec";
+            assert_eq!(
                 said.contains(&format!(
                     "{} isn't the file nvmimic put there. Left it alone.",
                     path.display()
                 )),
+                changed,
                 "{said}"
             );
             assert!(
@@ -409,8 +414,13 @@ fn nvms_own_scripts_written_over_ours_are_left_alone() {
                     .join(format!("{file}.nvmimic-saved"))
                     .exists()
             );
-            // The older nvm nvmimic kept is still there, and stayed out.
-            assert!(home.shared().join("backup").join(file).is_file());
+            // The older nvm nvmimic kept is still there, and stayed out. A
+            // copy of what the folder holds anyway is not kept.
+            assert_eq!(
+                home.shared().join("backup").join(file).is_file(),
+                changed,
+                "{leaving} {file}"
+            );
         }
         assert!(!said.contains("was edited"), "{said}");
     }
