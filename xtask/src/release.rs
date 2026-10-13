@@ -221,6 +221,9 @@ fn release(unsigned: bool) -> Result<PathBuf, String> {
 
 /// The Homebrew formula for this release. It installs the program only.
 /// Everything that touches `$NVM_DIR` is `nvmimic self install`'s job.
+///
+/// It has no `version` line. Homebrew reads the version from the `v1.2.3`
+/// in the URL, and `brew audit --strict` reports a line that repeats it.
 fn formula(version: &str, sha256: &str) -> String {
     let releases = nvmimic::update::RELEASES;
     let homepage = releases.trim_end_matches("/releases");
@@ -229,7 +232,6 @@ fn formula(version: &str, sha256: &str) -> String {
   desc "Drop-in replacement for nvm that makes new shells start fast"
   homepage "{homepage}"
   url "{releases}/download/v{version}/{ARCHIVE}"
-  version "{version}"
   sha256 "{sha256}"
   license "MIT"
 
@@ -273,5 +275,6 @@ mod tests {
         assert!(text.contains("/download/v1.2.3/nvmimic-darwin-universal.tar.gz"));
         assert!(text.contains("sha256 \"abc\""));
         assert!(text.contains("nvmimic self install"));
+        assert!(!text.contains("\n  version "), "{text}");
     }
 }
