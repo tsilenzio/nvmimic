@@ -26,7 +26,7 @@ commands to one fast program, so a new shell barely notices it.
 
 ## Status
 
-This is nvmimic 0.1.1, an early release. It copies nvm 0.40.8 and runs on
+This is nvmimic 0.1.2, an early release. It copies nvm 0.40.8 and runs on
 macOS. It passes its own tests, but few people have used it yet, so expect
 rough edges and keep `nvmimic self eject` in mind as the way back.
 
