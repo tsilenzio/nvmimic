@@ -2,6 +2,7 @@
 //! every one of them in the shell, and other scripts call them, so each name
 //! leads to its port.
 
+use crate::backend::Reason;
 use crate::cmd;
 use crate::context::Nvm;
 use crate::nvm::complaint;
@@ -587,8 +588,21 @@ fn alias_files(nvm: &Nvm) -> Vec<String> {
 ///
 /// nvm: nvm_auto
 pub fn auto(nvm: &mut Nvm, mode: &str) -> i32 {
+    // Both ways a shell loads end here: `init` running it to print the
+    // switch, and the shell function `nvm_auto` on a second start. What it
+    // switches is a loading shell's doing, and the backend is told so.
+    let before = std::mem::replace(&mut nvm.reason, Reason::Loading);
+    let status = auto_mode(nvm, mode);
+    nvm.reason = before;
+    status
+}
+
+fn auto_mode(nvm: &mut Nvm, mode: &str) -> i32 {
     match mode {
         "none" => 0,
+        // Asked before anything is looked at, so a backend that says no
+        // costs a loading shell nothing more.
+        "use" if !nvm.backend.switches_at_load(&nvm.vars) => 0,
         "use" => {
             let current = local::ls_current(nvm);
             let use_args = |version: Option<&str>| -> Vec<String> {

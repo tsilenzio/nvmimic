@@ -2,7 +2,7 @@
 //! and `shelfy`, the name of the program built on it. Shared by the tests in
 //! `other_store.rs` and the example program in `examples/shelfy.rs`.
 
-use nvmimic::backend::{self, Backend, Flavor, Flavors, InstallRequest, Installed};
+use nvmimic::backend::{self, Backend, Flavor, Flavors, InstallRequest, Installed, Reason};
 use nvmimic::complete::{Command, Needs, command, flag};
 use nvmimic::context::Nvm;
 use nvmimic::identity::{Identity, Packages};
@@ -96,11 +96,25 @@ impl Backend for Shelf {
 
     // The shelf keeps a variable of its own in step with the active
     // version, the way a tool with its own idea of "the current Node" does.
-    fn switched(&self, vars: &mut Vars, version: Option<&str>) {
+    // A second one says whether someone asked for the switch or a loading
+    // shell made it.
+    fn switched(&self, vars: &mut Vars, version: Option<&str>, reason: Reason) {
         match version {
             Some(version) => vars.export("SHELF_NODE_VERSION", version.trim_start_matches('v')),
             None => vars.unset("SHELF_NODE_VERSION"),
         }
+        let why = match reason {
+            Reason::Loading => "loading",
+            _ => "asked",
+        };
+        vars.export("SHELF_SWITCH", why);
+    }
+
+    // A shell that says the shelf is looked after by something else is
+    // left alone when it loads, the way a tool that picks the Node version
+    // itself would want. `nvm use` still works there.
+    fn switches_at_load(&self, vars: &Vars) -> bool {
+        vars.get("SHELF_HANDS_OFF").is_empty()
     }
 
     fn cache_dir(&self, _vars: &Vars) -> String {

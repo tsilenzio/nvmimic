@@ -83,6 +83,7 @@ pub fn run(
         caller_shell: std::rc::Rc::new(caller.shell),
         cache_dir: caller.cache_dir.map(std::rc::Rc::new),
         identity: caller.identity,
+        reason: backend::Reason::Asked,
     };
     let status = functions::call(&mut nvm, function, args, fd3);
     nvm.io.flush();

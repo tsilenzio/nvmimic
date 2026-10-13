@@ -120,7 +120,7 @@ pub fn run(nvm: &mut Nvm, args: &[String]) -> i32 {
     };
     activate(nvm, &version_dir);
     let backend = nvm.backend;
-    backend.switched(&mut nvm.vars, Some(&version));
+    backend.switched(&mut nvm.vars, Some(&version), nvm.reason);
     // Asks the newly active node for its version while a switch is being
     // paid for anyway, so `nvm current` and the next shell start nothing.
     local::ls_current(nvm);

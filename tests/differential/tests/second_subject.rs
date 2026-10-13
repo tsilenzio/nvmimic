@@ -93,7 +93,8 @@ impl Subject for Shelfy {
                  * * fs:home/.nvm/.cache*\n\
                  # What shelfy sets for itself.\n\
                  * * var:SHELFY_*\n\
-                 * * var:SHELF_NODE_VERSION\n",
+                 * * var:SHELF_NODE_VERSION\n\
+                 * * var:SHELF_SWITCH\n",
             )
         })
     }

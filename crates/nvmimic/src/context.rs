@@ -144,6 +144,9 @@ pub struct Nvm<'a> {
     pub cache_dir: Option<std::rc::Rc<std::path::PathBuf>>,
     /// The program whose shell functions made this call.
     pub identity: &'static crate::identity::Identity,
+    /// Whether this is a loading shell switching by itself, and not a
+    /// command someone ran. See [`crate::backend::Reason`].
+    pub reason: crate::backend::Reason,
 }
 
 /// What the calling shell goes by when it reports an error of its own. See
@@ -291,6 +294,7 @@ impl<'a> Nvm<'a> {
                 caller_shell,
                 cache_dir,
                 identity: self.identity,
+                reason: self.reason,
             };
             body(&mut inner);
         }

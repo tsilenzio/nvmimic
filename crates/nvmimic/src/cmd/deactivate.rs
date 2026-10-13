@@ -67,5 +67,5 @@ pub fn deactivate(nvm: &mut Nvm, silent: bool) {
     nvm.vars.unset("NVM_BIN");
     nvm.vars.unset("NVM_INC");
     let backend = nvm.backend;
-    backend.switched(&mut nvm.vars, None);
+    backend.switched(&mut nvm.vars, None, nvm.reason);
 }

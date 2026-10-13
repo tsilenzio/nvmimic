@@ -37,6 +37,18 @@ impl Flavor {
 }
 
 /// Which installs a listing looks at.
+/// Why the calling shell was pointed at a version or away from all of
+/// them. More may be added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Reason {
+    /// Someone ran a command: `nvm use`, `nvm deactivate`, `nvm install`.
+    Asked,
+    /// A shell is loading nvm and switches to the default version by
+    /// itself. Nobody typed anything.
+    Loading,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flavors {
     Node,
@@ -148,8 +160,24 @@ pub trait Backend {
     /// and `nvm unload`). A backend that keeps a variable of its own in
     /// step with the active version sets it here: what it does to `vars`
     /// reaches the shell with nvm's own changes, also when a new shell
-    /// switches to the default version while it loads.
-    fn switched(&self, _vars: &mut Vars, _version: Option<&str>) {}
+    /// switches to the default version while it loads. `reason` tells the
+    /// two apart, whichever way the shell loads.
+    fn switched(&self, _vars: &mut Vars, _version: Option<&str>, _reason: Reason) {}
+
+    /// Whether a shell that loads nvm switches to the default version by
+    /// itself, as nvm does. A backend that answers `false` for a shell
+    /// leaves that shell as it is: `PATH`, `MANPATH`, `NVM_BIN` and
+    /// `NVM_INC` are not changed at load, nothing is printed, loading
+    /// returns 0, and [`Backend::switched`] is not called. It is the same
+    /// as loading with `--no-use`. An `nvm use` that someone types is
+    /// never asked about here, and neither is loading with `--install`.
+    ///
+    /// `vars` are the shell's exported variables and the ones the shell
+    /// functions hand over on every call. A variable the shell holds
+    /// without exporting it, and that is not on that list, is not seen.
+    fn switches_at_load(&self, _vars: &Vars) -> bool {
+        true
+    }
 
     /// Where downloads, unpacked archives and install locks are kept. The
     /// default is nvm's `.cache` under [`Backend::root`]. `nvm cache clear`

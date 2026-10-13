@@ -348,6 +348,8 @@ fn the_shelf_hears_about_every_switch() {
     }));
     world.apply(&ran);
     assert_eq!(world.vars["SHELF_NODE_VERSION"], "22.1.0");
+    // Someone asked for this switch.
+    assert_eq!(world.vars["SHELF_SWITCH"], "asked");
 
     let ran = world.nvm(&["deactivate"]);
     world.apply(&ran);
@@ -383,6 +385,85 @@ fn the_shelf_hears_about_every_switch() {
         load.contains("export SHELF_NODE_VERSION='20.11.1'\n"),
         "{load}"
     );
+    // The shelf is told that a loading shell made this switch, in the
+    // text `init` prints and when the shell starts the program a second
+    // time and runs `nvm_auto` through it.
+    assert!(load.contains("export SHELF_SWITCH='loading'\n"), "{load}");
+    world.vars.remove("SHELF_SWITCH");
+    let ran = world.call("nvm_auto", &["use"]);
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_SWITCH"], "loading");
+    assert_eq!(world.vars["SHELF_NODE_VERSION"], "20.11.1");
+    // Loading with `--install` is a loading shell's doing as well.
+    world.vars.remove("SHELF_SWITCH");
+    world
+        .vars
+        .insert("NVM_NODEJS_ORG_MIRROR".to_string(), serve_index());
+    let ran = world.call("nvm_auto", &["install"]);
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_SWITCH"], "loading");
+    // And the next thing someone types is asked for again.
+    let ran = world.nvm(&["use", "22"]);
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_SWITCH"], "asked");
+}
+
+#[test]
+fn a_shelf_that_says_no_is_left_alone_when_a_shell_loads() {
+    let mut world = World::new();
+    world.with(&["v20.11.1", "v22.1.0"]);
+    fs::write(world.shelf.aliases.join("default"), "20\n").unwrap();
+    world
+        .vars
+        .insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    world
+        .vars
+        .insert("SHELF_HANDS_OFF".to_string(), "1".to_string());
+    let shell = |env: &BTreeMap<String, String>| nvmimic::init::Shell {
+        env: env.clone(),
+        dialect: Dialect::Bash,
+        caller: CallerShell::default(),
+        cache_dir: None,
+        identity: &SHELFY,
+    };
+
+    // What `init` prints changes nothing in the shell: no `PATH`, no
+    // `NVM_BIN`, no `NVM_INC`, and no word to the shelf.
+    let load = nvmimic::init::load(&["NVM_DIR", "PATH"], shell(&world.vars), &world.shelf).unwrap();
+    let changes = load
+        .split_once("; then\n")
+        .and_then(|(_, rest)| rest.split_once("else\n"))
+        .map(|(changes, _)| changes)
+        .unwrap();
+    assert_eq!(changes, ":\n", "{load}");
+
+    // The second start: `nvm_auto use` through the program.
+    let ran = world.call("nvm_auto", &["use"]);
+    assert_eq!(ran.outcome.status, 0);
+    assert!(ran.outcome.effects.is_empty());
+    assert_eq!(format!("{}{}", ran.out, ran.err), "");
+
+    // `nvm use` is never declined, and neither is loading with `--install`.
+    world
+        .vars
+        .insert("NVM_NODEJS_ORG_MIRROR".to_string(), serve_index());
+    let ran = world.call("nvm_auto", &["install"]);
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_NODE_VERSION"], "20.11.1");
+    let ran = world.nvm(&["use", "22"]);
+    assert_eq!(ran.outcome.status, 0);
+    world.apply(&ran);
+    assert_eq!(world.vars["SHELF_NODE_VERSION"], "22.1.0");
+    assert_eq!(world.vars["SHELF_SWITCH"], "asked");
+    assert!(world.vars["PATH"].contains("/shelf/22.1.0/bin"));
+
+    // Without the shelf's no, the same shell switches as nvm does.
+    world.vars.remove("SHELF_HANDS_OFF");
+    world
+        .vars
+        .insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    let load = nvmimic::init::load(&["NVM_DIR", "PATH"], shell(&world.vars), &world.shelf).unwrap();
+    assert!(load.contains("/shelf/20.11.1/bin"), "{load}");
 }
 
 #[test]
@@ -1156,4 +1237,108 @@ echo done
         .collect();
     in_nvm_dir.sort();
     assert_eq!(in_nvm_dir, ["bash_completion", "nvm-exec", "nvm.sh"]);
+}
+
+/// Loads shelfy in each shell both ways a shell can load it, and reads
+/// off what the shelf was told. A stand-in at the program's path counts
+/// the starts, which is how each run shows the way it took.
+#[test]
+fn real_shells_tell_the_shelf_why_and_leave_a_shell_alone_when_it_says_no() {
+    let home = home("loading");
+    let shelfy = shelfy_program();
+    let installed = std::process::Command::new(&shelfy)
+        .args(["self", "install", "--force"])
+        .env_clear()
+        .env("HOME", &home)
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOMEBREW_PREFIX", home.join("no-homebrew"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(
+        installed.status.success(),
+        "{}",
+        String::from_utf8_lossy(&installed.stderr)
+    );
+    let shelf = Shelf::at(&home);
+    for version in ["v20.1.0", "v22.1.0"] {
+        fake_node(&shelf.folder(version), version);
+    }
+    fs::create_dir_all(&shelf.aliases).unwrap();
+    fs::write(shelf.aliases.join("default"), "20\n").unwrap();
+
+    let program = home.join(".local/bin/shelfy");
+    let real = home.join(".local/bin/shelfy-real");
+    let starts = home.join("starts");
+    fs::rename(&program, &real).unwrap();
+    fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nprintf 'start\\n' >> '{}'\nexec '{}' \"$@\"\n",
+            starts.display(),
+            real.display()
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let script = r#"
+. "$NVM_DIR/nvm.sh"
+echo "status:$? starts:$(grep -c start "$STARTS")"
+echo "why:${SHELF_SWITCH-} shelf:${SHELF_NODE_VERSION-} bin:${NVM_BIN-} inc:${NVM_INC-} path:${PATH}"
+nvm use 22.1.0 >/dev/null || exit 91
+echo "why:${SHELF_SWITCH-} shelf:${SHELF_NODE_VERSION-} bin:${NVM_BIN-}"
+"#;
+    let at_home = home.display().to_string();
+    for (shell, flags) in shell_programs() {
+        // A variable the shell holds without exporting it is one `init`
+        // did not see, so the printed switch is passed over and the
+        // program is started a second time.
+        for (way, before, expected_starts) in
+            [("one start", "", 1), ("second start", "NVM_NO_COLORS=1", 2)]
+        {
+            for hands_off in [false, true] {
+                let _ = fs::remove_file(&starts);
+                let mut command = std::process::Command::new(shell);
+                command
+                    .args(flags)
+                    .args(["-c", &format!("{before}{script}")])
+                    .env_clear()
+                    .env("HOME", &home)
+                    .env("NVM_DIR", home.join(".nvm"))
+                    .env("PATH", "/usr/bin:/bin")
+                    .env("STARTS", &starts)
+                    // What a shell sets by itself when nobody did, set
+                    // here so that `init` sees what the shell holds.
+                    .env("SHELL", shell)
+                    .env("TERM", "dumb")
+                    .env("PWD", &home)
+                    .current_dir(&home);
+                if hands_off {
+                    command.env("SHELF_HANDS_OFF", "1");
+                }
+                let out = command.output().unwrap();
+                let said = String::from_utf8_lossy(&out.stdout);
+                let errors = String::from_utf8_lossy(&out.stderr);
+                let at_load = match hands_off {
+                    // Nothing was changed, and the shelf heard nothing.
+                    true => "why: shelf: bin: inc: path:/usr/bin:/bin".to_string(),
+                    false => format!(
+                        "why:loading shelf:20.1.0 bin:{at_home}/shelf/20.1.0/bin \
+                         inc:{at_home}/shelf/20.1.0/include/node \
+                         path:{at_home}/shelf/20.1.0/bin:/usr/bin:/bin"
+                    ),
+                };
+                assert_eq!(
+                    said,
+                    format!(
+                        "status:0 starts:{expected_starts}\n{at_load}\n\
+                         why:asked shelf:22.1.0 bin:{at_home}/shelf/22.1.0/bin\n"
+                    ),
+                    "{shell}, {way}, hands off {hands_off}: {errors}"
+                );
+                assert_eq!(errors, "", "{shell}, {way}");
+            }
+        }
+    }
 }
