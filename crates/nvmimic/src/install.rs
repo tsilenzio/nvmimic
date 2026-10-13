@@ -143,7 +143,8 @@ pub trait Ui {
 
 #[derive(Clone, Debug, Default)]
 pub struct Options {
-    /// Don't ask before going ahead.
+    /// Don't ask. The command goes ahead, and a question about something
+    /// extra gets the answer an empty reply gives.
     pub force: bool,
     /// Say what would happen and change nothing.
     pub dry_run: bool,
@@ -702,14 +703,34 @@ fn choices(default: bool) -> &'static str {
     if default { "[Y/n]" } else { "[y/N]" }
 }
 
-/// Asks before a step. A dry run only lists what would happen, so it never
-/// asks and carries on as if the answer were yes.
+/// Asks whether to go ahead with what the command was told to do, or with
+/// a step it can't do without. `--force` is the yes to that. A dry run
+/// only lists what would happen, so it never asks and carries on as if the
+/// answer were yes.
 pub(crate) fn ask(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
     if options.force {
         ui.say(&format!("{question} {} y (--force)", choices(default)));
         true
     } else if options.dry_run {
         true
+    } else {
+        ui.ask(question, default)
+    }
+}
+
+/// Asks about something extra that the command can do without. `--force`
+/// means don't ask, so the question gets the answer an empty reply gives,
+/// and the line says which that was.
+fn offer(ui: &mut dyn Ui, options: &Options, question: &str, default: bool) -> bool {
+    if options.force {
+        let answer = if default { "y" } else { "n" };
+        ui.say(&format!(
+            "{question} {} {answer} (--force)",
+            choices(default)
+        ));
+        default
+    } else if options.dry_run {
+        default
     } else {
         ui.ask(question, default)
     }
@@ -1044,7 +1065,7 @@ fn install(
                 "Would ask whether to copy all of {} to a backup folder first.",
                 nvm_dir.display()
             ));
-        } else if ask(
+        } else if offer(
             ui,
             options,
             &format!(
@@ -2694,6 +2715,46 @@ mod tests {
         };
         let steps = stopped_at_every_step("purge-stopped", false, &purge, self_uninstall, &[again]);
         assert!(steps >= 3, "only {steps} steps");
+    }
+
+    #[test]
+    fn force_takes_the_default_of_a_question_about_something_extra() {
+        let copy = |env: &Env| env.home.join(".nvm.backup-1");
+        let copy_question = |line: &String| line.starts_with("Copy all of ");
+
+        // `--force` goes ahead with the install and makes no copy of the
+        // nvm folder: an empty reply to that question means no.
+        let env = home_with_nvm("force-default");
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let mut ui = quiet();
+        self_install(&env, &env.home.join("program"), &force, &mut ui).unwrap();
+        assert!(!present(&copy(&env)));
+        assert!(ui.asked.is_empty(), "{:?}", ui.asked);
+        let answered: Vec<&String> = ui
+            .said
+            .iter()
+            .filter(|l| l.ends_with("(--force)"))
+            .collect();
+        assert_eq!(answered.len(), 2, "{answered:?}");
+        assert!(copy_question(answered[0]) && answered[0].ends_with("[y/N] n (--force)"));
+        assert_eq!(answered[1], "Install nvmimic now? [y/N] y (--force)");
+        assert!(Manifest::read(env.dirs().unwrap()).is_some());
+        let _ = fs::remove_dir_all(&env.home);
+
+        // Someone who says yes at a terminal still gets the copy.
+        let env = home_with_nvm("asked-for-copy");
+        let asking = Options {
+            terminal: true,
+            ..Options::default()
+        };
+        let mut ui = quiet();
+        self_install(&env, &env.home.join("program"), &asking, &mut ui).unwrap();
+        assert!(copy_question(&ui.asked[0]), "{:?}", ui.asked);
+        assert!(copy(&env).join("nvm.sh").is_file());
+        let _ = fs::remove_dir_all(&env.home);
     }
 
     #[test]

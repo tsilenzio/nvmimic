@@ -658,10 +658,12 @@ fn takeover_keeps_versions_and_uninstall_restores_nvm() {
     let stdout = text(&out.stdout);
     assert!(out.status.success(), "{stdout}{}", text(&out.stderr));
     assert!(stdout.contains("drop-in replacement"));
+    // `--force` takes the default of the question about a full copy.
     assert!(
-        home.root.join(".nvm.backup-1/nvm.sh").is_file(),
-        "full backup made"
+        stdout.contains("to a backup folder first? [y/N] n (--force)"),
+        "{stdout}"
     );
+    assert!(!home.root.join(".nvm.backup-1").exists());
 
     let dir = home.nvm_dir();
     assert!(dir.join("versions/node/v22.1.0/bin").is_dir());

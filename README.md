@@ -85,6 +85,11 @@ the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
 load Homebrew's copy would keep running official nvm.
 
+`--force` means "don't ask". The command goes ahead with what you told it
+to do. A question about something extra gets the answer you'd give by
+pressing Enter, so `self install --force` makes no copy of the whole nvm
+folder. Run it without `--force` and say yes if you want that copy.
+
 You can stop `self install` at any moment, and a crash or a power cut can
 too. It copies nvm's scripts and writes down where the copies are before it
 replaces anything, so nvm's scripts are never lost. Run `nvmimic self
@@ -240,6 +245,10 @@ print a message about the missing program in every new shell.
 checks the download three ways: the checksum matches, nvmimic's developer
 signed it, and it runs. Then it swaps the new program in and keeps the old
 one. `nvmimic self rollback` brings the old one back.
+
+The one version you can't go back to is 0.1.0. It can't read the folder
+where nvmimic keeps official nvm's scripts now, so it couldn't put them
+back when you uninstall it. `self rollback` says so and changes nothing.
 
 If you installed nvmimic with Homebrew or cargo, update it with that tool
 instead. `self update` tells you the command.

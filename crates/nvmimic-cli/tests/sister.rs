@@ -828,6 +828,43 @@ fn an_upgraded_nvmimic_joins_the_shared_record_when_a_shell_loads_it() {
     }
 }
 
+/// Every hand-over runs the sister's `self install --force`, and `--force`
+/// takes the default of a question about something extra. So no program
+/// ever makes a copy of the whole nvm folder because it was handed `nvm`.
+#[test]
+fn no_forced_command_and_no_hand_over_copies_the_nvm_folder() {
+    for (first, second) in ORDERS {
+        let home = Home::new(true);
+        let mut said = String::new();
+        for (name, command) in [
+            (first, "install"),
+            (second, "install"),
+            // Hands `nvm` back to the first.
+            (second, "uninstall"),
+            (second, "install"),
+            (first, "uninstall"),
+            (second, "eject"),
+            (second, "install"),
+            (second, "uninstall"),
+        ] {
+            said.push_str(&home.ok(name, command));
+            let copies: Vec<_> = fs::read_dir(&home.root)
+                .unwrap()
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|file| file.contains("backup"))
+                .collect();
+            assert!(copies.is_empty(), "{name} self {command}: {copies:?}");
+        }
+        assert!(home.official_is_back());
+        // The first install over official nvm is the one that has the
+        // question, and it is answered with its default.
+        assert_eq!(said.matches("to a backup folder first?").count(), 1);
+        assert!(said.contains("to a backup folder first? [y/N] n (--force)"));
+        assert!(!said.contains("Copied "), "{said}");
+    }
+}
+
 #[test]
 fn a_self_command_waits_for_the_lock_and_then_says_who_holds_it() {
     let home = Home::new(true);
