@@ -717,7 +717,11 @@ fn a_second_program_installs_and_leaves_under_its_own_name() {
         );
     }
     assert!(ui.0.iter().any(|line| line.contains("shelfy")));
+    // The folder the sister tools share is named after nvmimic for every
+    // one of them. Nothing else shelfy says carries the name.
     let said = ui.0.join("\n").replace(&at_home, "HOME");
+    assert!(said.contains("HOME/.local/state/nvmimic-shared/backup"));
+    let said = said.replace("nvmimic-shared", "the shared folder");
     assert!(!said.contains("nvmimic"), "{said}");
 
     // shelfy publishes no releases, so there is nothing to update from.

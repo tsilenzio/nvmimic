@@ -73,7 +73,7 @@ impl Home {
 
     /// The record shared with sister tools, and official nvm's scripts.
     fn shared(&self) -> PathBuf {
-        self.root.join(".local/state/nvm-handover")
+        self.root.join(".local/state/nvmimic-shared")
     }
 
     /// Whether anything of nvmimic's own is left.
@@ -613,7 +613,7 @@ fn own_folders_follow_their_variables() {
         ("NVMIMIC_CACHE_DIR", elsewhere.join("cache")),
         // The record shared with sister tools has a variable of its own,
         // with no program's name in it.
-        ("NVM_HANDOVER_DIR", elsewhere.join("shared")),
+        ("NVMIMIC_SHARED_DIR", elsewhere.join("shared")),
     ];
     let vars: Vec<(&str, &Path)> = vars.iter().map(|(k, v)| (*k, v.as_path())).collect();
     // Something of the user's own in the data folder has to survive.

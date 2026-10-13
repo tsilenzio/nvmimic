@@ -447,35 +447,76 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// The program's own manifest and the shared record, as the `self`
-/// commands start from them.
-///
-/// nvmimic 0.1.0 kept official nvm's scripts and the lines about them in
-/// its own state folder. A manifest whose program isn't in the shared
-/// record yet is from then, and what it holds is moved over here, before
-/// the command does anything else. A dry run moves it too: nothing about
-/// the installation changes by it.
-fn load(dirs: &Dirs, identity: &Identity) -> Result<(Option<Manifest>, Record), String> {
-    let mut record = Record::read(dirs).unwrap_or_default();
-    let Some(mut manifest) = Manifest::read(dirs) else {
-        return Ok((None, record));
-    };
-    if !record.programs.contains_key(identity.name) {
-        join(dirs, identity, &mut manifest, &mut record)?;
-    }
-    manifest.ejected = !record.answers(identity);
-    Ok((Some(manifest), record))
+/// What a `self` command starts from.
+struct Loaded {
+    /// The program's own manifest, if it is installed.
+    manifest: Option<Manifest>,
+    /// The shared record, with this program in it.
+    record: Record,
+    /// The manifest is from nvmimic 0.1.0, which kept official nvm's
+    /// scripts and the lines about them in its own state folder. They are
+    /// in `record` already and still have to be moved on disk, which
+    /// [`settle`] does once the command goes ahead.
+    moving: bool,
 }
 
-/// Moves what a manifest from before the shared record holds into the
-/// record. Official nvm's scripts are copied first and the record that
-/// names them is written before the manifest lets go of them, so a stop at
-/// any moment leaves each script in a backup that one of the two files
-/// knows about.
+impl Loaded {
+    /// Where official nvm's scripts are right now.
+    fn backup(&self, dirs: &Dirs) -> PathBuf {
+        match self.moving {
+            true => dirs.backup_before_sharing(),
+            false => dirs.backup(),
+        }
+    }
+}
+
+/// Reads the program's own manifest and the shared record, and changes
+/// nothing on disk. A dry run and a command that is refused work from this
+/// alone.
+///
+/// An installed program that isn't in the record is put into it here, in
+/// memory. That is an install made by nvmimic 0.1.0, or one whose shared
+/// folder someone deleted.
+fn load(dirs: &Dirs, identity: &Identity) -> Result<Loaded, String> {
+    let read = Record::read(dirs);
+    let folder_gone = read.is_none();
+    let mut record = read.unwrap_or_default();
+    let Some(mut manifest) = Manifest::read(dirs) else {
+        return Ok(Loaded {
+            manifest: None,
+            record,
+            moving: false,
+        });
+    };
+    let mut moving = false;
+    if !record.programs.contains_key(identity.name) {
+        // Every manifest 0.1.0 wrote has a line for each script, or says
+        // that the scripts are out. One with neither was written beside a
+        // record, and so was one whose link to the shared folder is there.
+        let from_0_1_0 = !manifest.backed_up.is_empty()
+            || !manifest.links.is_empty()
+            || !manifest.created.is_empty()
+            || manifest.ejected;
+        if folder_gone && (!from_0_1_0 || dead_link(&dirs.shared_link())) {
+            record.lost = true;
+        }
+        moving = from_0_1_0 && !record.lost;
+        join(dirs, identity, &manifest, &mut record)?;
+    }
+    manifest.ejected = !record.answers(identity);
+    Ok(Loaded {
+        manifest: Some(manifest),
+        record,
+        moving,
+    })
+}
+
+/// Puts an installed program that the record doesn't know into the record,
+/// with what its manifest says about official nvm's scripts.
 fn join(
     dirs: &Dirs,
     identity: &Identity,
-    manifest: &mut Manifest,
+    manifest: &Manifest,
     record: &mut Record,
 ) -> Result<(), String> {
     let app = identity.name;
@@ -491,15 +532,10 @@ fn join(
         ));
     }
     let before = dirs.backup_before_sharing();
-    let backup = dirs.backup();
-    fs::create_dir_all(&backup).map_err(|e| format!("{}: {e}", backup.display()))?;
     for name in &manifest.backed_up {
-        let kept = before.join(name);
-        if record.backed_up.contains(name) || fs::metadata(&kept).is_err() {
-            continue;
+        if !record.backed_up.contains(name) && fs::metadata(before.join(name)).is_ok() {
+            record.backed_up.push(name.clone());
         }
-        keep_copy(&kept, &backup.join(name))?;
-        record.backed_up.push(name.clone());
     }
     for (name, target) in &manifest.links {
         record
@@ -523,10 +559,34 @@ fn join(
             aside: manifest.ejected,
         },
     );
-    if !manifest.ejected {
+    if !manifest.ejected && record.answers.is_none() {
         record.answers = Some(app.to_string());
     }
-    record.write(dirs)?;
+    Ok(())
+}
+
+/// The first change a `self` command makes once it goes ahead: the
+/// program's link to the shared folder is put in place, and what
+/// [`load`] worked out is written down.
+///
+/// For an install made by 0.1.0, official nvm's scripts are copied into
+/// the shared folder first, and the record that names them is written
+/// before the manifest lets go of them. So a stop at any moment leaves
+/// each script in a backup that one of the two files knows about.
+fn settle(dirs: &Dirs, identity: &Identity, loaded: &mut Loaded) -> Result<(), String> {
+    handover::link(dirs)?;
+    let Some(manifest) = loaded.manifest.as_mut().filter(|_| loaded.moving) else {
+        return Ok(());
+    };
+    let before = dirs.backup_before_sharing();
+    let backup = dirs.backup();
+    fs::create_dir_all(&backup).map_err(|e| format!("{}: {e}", backup.display()))?;
+    for name in &manifest.backed_up {
+        if fs::metadata(before.join(name)).is_ok() {
+            keep_copy(&before.join(name), &backup.join(name))?;
+        }
+    }
+    loaded.record.write(dirs)?;
 
     let moved = std::mem::take(&mut manifest.backed_up);
     manifest.links.clear();
@@ -541,6 +601,7 @@ fn join(
         let _ = fs::remove_file(unfinished(&before.join(name)));
     }
     let _ = fs::remove_dir(&before);
+    loaded.moving = false;
     Ok(())
 }
 
@@ -727,10 +788,9 @@ pub fn self_install_with(
     let dirs = env.dirs()?;
     let nvm_dir = env.nvm_dir();
     let backup = dirs.backup();
-    let (previous, mut record) = load(dirs, identity)?;
-    let reinstall = previous.is_some();
-    let mut manifest = previous.unwrap_or_default();
-    if let Some(installed_for) = &manifest.nvm_dir
+    let mut loaded = load(dirs, identity)?;
+    let reinstall = loaded.manifest.is_some();
+    if let Some(installed_for) = loaded.manifest.as_ref().and_then(|m| m.nvm_dir.as_ref())
         && *installed_for != nvm_dir
     {
         return Err(format!(
@@ -740,9 +800,9 @@ pub fn self_install_with(
             nvm_dir.display()
         ));
     }
-    if let Some(shared) = &record.nvm_dir
+    if let Some(shared) = &loaded.record.nvm_dir
         && *shared != nvm_dir
-        && let Some(other) = record.others(identity).next()
+        && let Some(other) = loaded.record.others(identity).next()
     {
         return Err(format!(
             "{other} is set up for {}, and NVM_DIR now names {}. {app} and {other} share one \
@@ -753,8 +813,11 @@ pub fn self_install_with(
     }
     // The sister tool that answers `nvm` now, if one does.
     let sister = sister_in_place(&nvm_dir, identity);
+    // With the shared folder deleted, nobody is in the record, and the
+    // sister tool comes back into it with its own next `self` command.
     if let Some(other) = &sister
-        && !record.programs.contains_key(other)
+        && !loaded.record.programs.contains_key(other)
+        && !loaded.record.lost
     {
         return Err(format!(
             "{other}'s scripts are in {}, and that {other} is from before {app} and {other} \
@@ -763,7 +826,13 @@ pub fn self_install_with(
             nvm_dir.display()
         ));
     }
-    let plan = plan_binary(env, dirs, running, &manifest)?;
+    let plan = plan_binary(
+        env,
+        dirs,
+        running,
+        loaded.manifest.as_ref().unwrap_or(&Manifest::default()),
+    )?;
+    let was_ejected = loaded.manifest.as_ref().is_some_and(|m| m.ejected);
 
     let homebrew = env.homebrew_nvm();
     if let Some(prefix) = &homebrew {
@@ -883,7 +952,7 @@ pub fn self_install_with(
         ));
     }
 
-    if !existing.is_empty() && manifest.ejected {
+    if !existing.is_empty() && was_ejected {
         ui.say(&format!(
             "Taking over from the nvm in {} again.",
             nvm_dir.display()
@@ -936,7 +1005,14 @@ pub fn self_install_with(
     // anything of nvm's is replaced or uninstalled. So each of nvm's scripts
     // is always in `$NVM_DIR` or in a backup the record knows about, and
     // `self install` and `self uninstall` both work on whatever a stop left.
+    settle(dirs, identity, &mut loaded)?;
+    let Loaded {
+        manifest, record, ..
+    } = loaded;
+    let (mut manifest, mut record) = (manifest.unwrap_or_default(), record);
     let record_before = record.clone();
+    // The link was just put in place, so this is the folder it names.
+    let backup = dirs.backup();
     for dir in [&nvm_dir, &dirs.data, &dirs.state, &backup, &dirs.cache] {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
@@ -955,6 +1031,7 @@ pub fn self_install_with(
                 checkpoint()?;
                 keep_copy(&path, &backup.join(name))?;
                 copied.push(name);
+                record.lost = false;
                 if !record.backed_up.iter().any(|n| n == name) {
                     record.backed_up.push(name.to_string());
                 }
@@ -1028,8 +1105,9 @@ pub fn self_install_with(
                     let _ = fs::remove_file(backup.join(name));
                 }
                 let _ = fs::remove_file(dirs.manifest());
-                let _ = fs::remove_dir(&dirs.state);
                 record_before.write(dirs)?;
+                let _ = fs::remove_file(dirs.shared_link());
+                let _ = fs::remove_dir(&dirs.state);
             }
             return Err("`brew uninstall nvm` did not finish, so nothing was changed.".to_string());
         }
@@ -1288,7 +1366,9 @@ pub fn self_enable_with(
     let identity = env.identity;
     let app = identity.name;
     let dirs = env.dirs()?;
-    let (manifest, record) = load(dirs, identity)?;
+    let Loaded {
+        manifest, record, ..
+    } = load(dirs, identity)?;
     let Some(manifest) = manifest else {
         return Err(format!(
             "{app} is not installed yet. Run `{app} self install` first."
@@ -1336,8 +1416,8 @@ fn leave(
     let identity = env.identity;
     let app = identity.name;
     let dirs = env.dirs()?;
-    let (manifest, mut record) = load(dirs, identity)?;
-    let Some(mut manifest) = manifest else {
+    let mut loaded = load(dirs, identity)?;
+    let Some(mut manifest) = loaded.manifest.clone() else {
         return Err(format!(
             "{app} is not installed. There is no record of an install in {}.",
             dirs.state.display()
@@ -1348,7 +1428,16 @@ fn leave(
     // asleep then, and the scripts are not its own to touch.
     let in_place = sister_in_place(&nvm_dir, identity);
     manifest.ejected |= in_place.is_some();
-    let backup = dirs.backup();
+    // Until the command goes ahead, the scripts of an install made by
+    // 0.1.0 are still where 0.1.0 kept them.
+    let mut backup = loaded.backup(dirs);
+    let mut record = loaded.record.clone();
+    // What there is to say when the shared folder was deleted.
+    let no_backup = format!(
+        "The folder {app} shares with its sister tool ({}) was deleted, and the backup of \
+         official nvm's scripts was in it, so there is no backup to restore.",
+        dirs.shared.display()
+    );
     let binary = manifest
         .binary
         .clone()
@@ -1433,6 +1522,9 @@ fn leave(
                 "{app}'s scripts are already out of {}. Nothing was changed.",
                 nvm_dir.display()
             ));
+        }
+        if record.lost && restore.is_empty() && !has_nvm_sh(&carried) {
+            return Err(format!("{no_backup} Nothing was changed."));
         }
         if restore.is_empty() && !has_nvm_sh(&carried) && !dead.is_empty() {
             let links: Vec<String> = dead
@@ -1628,6 +1720,9 @@ fn leave(
         for (name, target) in &dead {
             ui.say(&nothing_behind(name, target));
         }
+        if record.lost && restore.is_empty() {
+            ui.say(&no_backup);
+        }
         ui.say("Your Node versions and aliases stay as they are.");
     }
 
@@ -1657,6 +1752,15 @@ fn leave(
             return Err("stopped. Nothing was changed.".to_string());
         }
     }
+
+    // The command goes ahead. An install made by 0.1.0 has its scripts
+    // moved into the shared folder now, which is where the rest of this
+    // looks for them.
+    settle(dirs, identity, &mut loaded)?;
+    manifest.backed_up.clear();
+    manifest.links.clear();
+    manifest.created.clear();
+    backup = dirs.backup();
 
     if how == Leaving::Purge {
         match fs::remove_dir_all(&nvm_dir) {
@@ -1808,9 +1912,12 @@ fn leave(
     }
     let _ = fs::remove_dir(dirs.state.join("previous"));
     let _ = fs::remove_dir(dirs.backup_before_sharing());
-    let _ = fs::remove_dir(&dirs.state);
+    // The record goes while the link still says where it is. With no
+    // program left in it, the shared folder goes too.
     record.programs.remove(app);
     record.write(dirs)?;
+    let _ = fs::remove_file(dirs.shared_link());
+    let _ = fs::remove_dir(&dirs.state);
 
     // "nvmimic is gone" would be wrong while its program is still there.
     let back =

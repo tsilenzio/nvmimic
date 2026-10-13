@@ -84,7 +84,7 @@ impl Home {
     }
 
     fn shared(&self) -> PathBuf {
-        self.state("nvm-handover")
+        self.state("nvmimic-shared")
     }
 
     /// Runs `<name> self <args>` with no terminal. Each program is told
@@ -479,6 +479,31 @@ fn as_0_1_0_left_it(home: &Home, ejected: bool) {
     }
     fs::write(state.join("manifest"), manifest).unwrap();
     fs::remove_dir_all(home.shared()).unwrap();
+    fs::remove_file(state.join("shared")).unwrap();
+}
+
+/// Every file under `dir` with what it holds, and every link with where it
+/// points.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, String)> {
+    let mut found = Vec::new();
+    let mut folders = vec![dir.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder).into_iter().flatten().flatten() {
+            let path = entry.path();
+            let meta = fs::symlink_metadata(&path).unwrap();
+            if meta.is_dir() {
+                folders.push(path.clone());
+                found.push((path, "folder".to_string()));
+            } else if meta.is_symlink() {
+                let target = fs::read_link(&path).unwrap();
+                found.push((path, format!("link to {}", target.display())));
+            } else {
+                found.push((path.clone(), text(&fs::read(&path).unwrap())));
+            }
+        }
+    }
+    found.sort();
+    found
 }
 
 #[test]
@@ -523,18 +548,35 @@ fn an_install_made_by_0_1_0_is_moved_into_the_shared_record_by_itself() {
 }
 
 #[test]
-fn a_dry_run_on_an_install_made_by_0_1_0_still_shows_the_right_plan() {
+fn a_dry_run_on_an_install_made_by_0_1_0_moves_nothing() {
     let home = Home::new(true);
     home.ok(NVMIMIC, "install");
     as_0_1_0_left_it(&home, false);
+    let before = snapshot(&home.root);
+
+    // The plan is worked out from the records where 0.1.0 left them.
     let plan = text(&home.run(NVMIMIC, &["uninstall", "--dry-run"]).stdout);
     assert!(
         plan.contains("Would put nvm's own nvm.sh, nvm-exec, bash_completion back in"),
         "{plan}"
     );
-    assert_eq!(home.answers(), NVMIMIC);
+    assert_eq!(snapshot(&home.root), before, "uninstall --dry-run");
+    let plan = text(&home.run(NVMIMIC, &["eject", "--dry-run"]).stdout);
+    assert!(plan.contains("Would put nvm's own nvm.sh"), "{plan}");
+    assert_eq!(snapshot(&home.root), before, "eject --dry-run");
+    assert!(
+        home.run(NVMIMIC, &["install", "--dry-run"])
+            .status
+            .success()
+    );
+    assert_eq!(snapshot(&home.root), before, "install --dry-run");
+    // A command that stops for lack of a terminal moves nothing either.
+    assert!(!home.run(NVMIMIC, &["uninstall"]).status.success());
+    assert_eq!(snapshot(&home.root), before, "uninstall with no terminal");
+
     home.ok(NVMIMIC, "uninstall");
     assert!(home.official_is_back());
+    assert!(!home.shared().exists() && !home.state(NVMIMIC).exists());
 }
 
 #[test]
@@ -547,17 +589,24 @@ fn an_ejected_install_made_by_0_1_0_joins_as_one_that_stepped_aside() {
     // shelfy arrives first and knows nothing of nvmimic yet.
     home.ok(SHELFY, "install");
     assert_eq!(home.record().programs.len(), 1);
-    // nvmimic's next `self` command brings it into the record, asleep.
+    // A command of nvmimic's that is refused changes nothing.
     let refused = home.run(NVMIMIC, &["eject", "--force"]);
     assert!(!refused.status.success());
-    let record = home.record();
-    assert!(record.programs[NVMIMIC].aside, "{record:?}");
-    assert_eq!(record.answers.as_deref(), Some(SHELFY));
+    assert_eq!(home.record().programs.len(), 1);
     assert_eq!(home.answers(), SHELFY);
 
+    // Its uninstall is not handed to nvmimic, which nobody told to wake.
     home.ok(SHELFY, "uninstall");
     assert!(home.official_is_back());
     assert!(home.installed(NVMIMIC));
+
+    // nvmimic's next `self` command that goes ahead brings it in.
+    home.ok(NVMIMIC, "install");
+    let record = home.record();
+    assert_eq!(record.answers.as_deref(), Some(NVMIMIC));
+    assert!(!record.programs[NVMIMIC].aside, "{record:?}");
+    home.ok(NVMIMIC, "uninstall");
+    assert!(home.official_is_back());
 }
 
 #[test]
@@ -584,4 +633,216 @@ fn a_sister_from_before_the_shared_record_is_not_written_over() {
     home.ok(SHELFY, "install");
     assert_eq!(home.answers(), SHELFY);
     assert!(home.backup_is_whole());
+}
+
+#[test]
+fn each_program_finds_the_shared_folder_through_its_own_link() {
+    let home = Home::new(true);
+    home.ok(NVMIMIC, "install");
+    home.ok(SHELFY, "install");
+    for name in [NVMIMIC, SHELFY] {
+        assert_eq!(
+            fs::read_link(home.state(name).join("shared")).unwrap(),
+            home.shared()
+        );
+    }
+    let readme = fs::read_to_string(home.shared().join("README")).unwrap();
+    assert!(
+        readme.contains("nvmimic and nvmise") && readme.contains("don't delete"),
+        "{readme}"
+    );
+
+    // The folder is renamed by moving it and pointing each link at it.
+    let moved = home.root.join("moved/shared-by-the-two");
+    fs::create_dir_all(moved.parent().unwrap()).unwrap();
+    fs::rename(home.shared(), &moved).unwrap();
+    for name in [NVMIMIC, SHELFY] {
+        let link = home.state(name).join("shared");
+        fs::remove_file(&link).unwrap();
+        std::os::unix::fs::symlink(&moved, &link).unwrap();
+    }
+    home.ok(NVMIMIC, "install");
+    assert_eq!(home.answers(), NVMIMIC);
+    assert!(
+        !home.shared().exists(),
+        "nothing went to the standard place"
+    );
+    assert!(moved.join("record").is_file());
+
+    // Each program takes its own link along, and the last one the folder.
+    home.ok(NVMIMIC, "uninstall");
+    assert_eq!(home.answers(), SHELFY);
+    assert!(!home.state(NVMIMIC).exists());
+    assert!(moved.join("README").is_file());
+    home.ok(SHELFY, "uninstall");
+    assert!(home.official_is_back());
+    assert!(!moved.exists() && !home.state(SHELFY).exists());
+}
+
+#[test]
+fn a_deleted_link_and_one_pointing_nowhere_are_put_back() {
+    for broken in ["deleted", "pointing nowhere"] {
+        for name in [NVMIMIC, SHELFY] {
+            let home = Home::new(true);
+            home.ok(name, "install");
+            let link = home.state(name).join("shared");
+            fs::remove_file(&link).unwrap();
+            if broken == "pointing nowhere" {
+                std::os::unix::fs::symlink(home.root.join("not/there"), &link).unwrap();
+            }
+
+            // The standard place is used, and nothing is said to be lost.
+            let plan = text(&home.run(name, &["eject", "--dry-run"]).stdout);
+            assert!(plan.contains("Would put nvm's own nvm.sh"), "{plan}");
+            assert!(!plan.contains("no backup to restore"), "{plan}");
+            home.ok(name, "eject");
+            assert!(home.official_is_back(), "{name}, link {broken}");
+            assert_eq!(fs::read_link(&link).unwrap(), home.shared());
+        }
+    }
+}
+
+#[test]
+fn with_the_shared_folder_deleted_both_carry_on_and_say_there_is_no_backup() {
+    for (first, second) in ORDERS {
+        let home = Home::new(true);
+        home.ok(first, "install");
+        home.ok(second, "install");
+        fs::remove_dir_all(home.shared()).unwrap();
+
+        // Eject has nothing to go back to and says why. shelfy carries a
+        // copy of official nvm for that, so only nvmimic is asked.
+        if second == NVMIMIC {
+            let refused = home.run(second, &["eject", "--force"]);
+            assert!(!refused.status.success());
+            let said = text(&refused.stderr);
+            assert!(
+                said.contains("was deleted")
+                    && said.contains("so there is no backup to restore. Nothing was changed."),
+                "{said}"
+            );
+        }
+        assert_eq!(home.answers(), second);
+
+        // The one asleep still takes over, and the other still hands back.
+        home.ok(first, "install");
+        assert_eq!(home.answers(), first);
+        home.ok(second, "install");
+        assert_eq!(home.answers(), second);
+        assert!(home.shared().join("README").is_file());
+
+        // Both uninstall, and each says there is no backup to restore.
+        let said = home.ok(second, "uninstall");
+        assert!(said.contains("so there is no backup to restore."), "{said}");
+        assert!(!home.state(second).exists());
+        let said = home.ok(first, "uninstall");
+        assert!(said.contains("so there is no backup to restore."), "{said}");
+        assert!(!home.state(first).exists());
+        assert!(!home.shared().exists());
+        assert!(!home.official_is_back());
+    }
+}
+
+/// The nvmimic 0.1.0 that Homebrew installed, if this machine has it.
+fn released_0_1_0() -> Option<PathBuf> {
+    let program = PathBuf::from("/opt/homebrew/bin/nvmimic");
+    let version = Command::new(&program).arg("--version").output().ok()?;
+    // With Homebrew's nvm installed, `self install` would uninstall it.
+    let homebrew_nvm = Path::new("/opt/homebrew/opt/nvm").exists();
+    (text(&version.stdout).trim() == "0.1.0" && !homebrew_nvm).then_some(program)
+}
+
+/// A home with official nvm 0.40.8's own three scripts, taken over by the
+/// released nvmimic 0.1.0.
+fn home_set_up_by_0_1_0(released: &Path) -> Home {
+    let home = Home::new(false);
+    let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/reference/nvm-v0.40.8");
+    for name in SCRIPTS {
+        fs::copy(reference.join(name), home.nvm_dir().join(name)).unwrap();
+    }
+    let installed = Command::new(released)
+        .args(["self", "install", "--force"])
+        .env_clear()
+        .env("HOME", &home.root)
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOMEBREW_PREFIX", home.root.join("no-homebrew"))
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert!(installed.status.success(), "{}", text(&installed.stderr));
+    home
+}
+
+#[test]
+fn an_install_by_the_released_0_1_0_is_moved_ejected_and_uninstalled() {
+    let Some(released) = released_0_1_0() else {
+        eprintln!("skipped: nvmimic 0.1.0 is not at /opt/homebrew/bin/nvmimic");
+        return;
+    };
+    let reference = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/reference/nvm-v0.40.8");
+    let official = |name: &str| fs::read(reference.join(name)).unwrap();
+    let is_official = |home: &Home| {
+        SCRIPTS
+            .iter()
+            .all(|name| fs::read(home.nvm_dir().join(name)).is_ok_and(|b| b == official(name)))
+    };
+
+    let home = home_set_up_by_0_1_0(&released);
+    let state = home.state(NVMIMIC);
+    let manifest = fs::read_to_string(state.join("manifest")).unwrap();
+    assert!(manifest.contains("version 0.1.0\n"), "{manifest}");
+    for name in SCRIPTS {
+        assert!(manifest.contains(&format!("backup {name}\n")), "{manifest}");
+        assert_eq!(
+            fs::read(state.join("backup").join(name)).unwrap(),
+            official(name)
+        );
+    }
+    assert_eq!(home.answers(), NVMIMIC);
+    assert!(!home.shared().exists());
+
+    // A dry run by this build moves nothing.
+    let before = snapshot(&home.root);
+    let plan = text(&home.run(NVMIMIC, &["uninstall", "--dry-run"]).stdout);
+    assert!(
+        plan.contains("Would put nvm's own nvm.sh, nvm-exec, bash_completion back in"),
+        "{plan}"
+    );
+    assert_eq!(snapshot(&home.root), before);
+
+    // This build over it: the move.
+    home.ok(NVMIMIC, "install");
+    assert!(!state.join("backup").exists());
+    let manifest = fs::read_to_string(state.join("manifest")).unwrap();
+    assert!(!manifest.contains("backup "), "{manifest}");
+    let record = home.record();
+    assert_eq!(record.backed_up, SCRIPTS);
+    assert_eq!(record.answers.as_deref(), Some(NVMIMIC));
+    assert!(!record.lost);
+    for name in SCRIPTS {
+        assert_eq!(
+            fs::read(home.shared().join("backup").join(name)).unwrap(),
+            official(name)
+        );
+    }
+    assert_eq!(fs::read_link(state.join("shared")).unwrap(), home.shared());
+    assert_eq!(home.answers(), NVMIMIC);
+
+    // An eject, then taking over again, then an uninstall.
+    home.ok(NVMIMIC, "eject");
+    assert!(is_official(&home));
+    home.ok(NVMIMIC, "install");
+    assert_eq!(home.answers(), NVMIMIC);
+    home.ok(NVMIMIC, "uninstall");
+    assert!(is_official(&home));
+    assert!(!home.shared().exists() && !state.exists());
+
+    // And each of the two straight over what 0.1.0 left.
+    for command in ["eject", "uninstall"] {
+        let home = home_set_up_by_0_1_0(&released);
+        home.ok(NVMIMIC, command);
+        assert!(is_official(&home), "{command}");
+        assert!(!home.state(NVMIMIC).join("backup").exists(), "{command}");
+        assert_eq!(home.shared().exists(), command == "eject");
+    }
 }

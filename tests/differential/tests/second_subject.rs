@@ -51,7 +51,7 @@ impl Subject for Shelfy {
             .envs(own_folders(side))
             // The record shared with sister tools, which only the `self`
             // commands read and no program's own setting moves.
-            .env("NVM_HANDOVER_DIR", side.join("own/shared"))
+            .env("NVMIMIC_SHARED_DIR", side.join("own/shared"))
             .output()
             .unwrap();
         assert!(

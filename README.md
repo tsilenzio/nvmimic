@@ -154,14 +154,19 @@ before you run `self install`:
 |---|---|---|
 | The nvmimic program | `~/.local/bin/nvmimic` | `NVMIMIC_INSTALL_PATH` |
 | The list of what was installed | `~/.local/state/nvmimic` | `NVMIMIC_STATE_DIR` |
-| The backups of nvm's scripts, and who answers `nvm` | `~/.local/state/nvm-handover` | `NVM_HANDOVER_DIR` |
+| The backups of nvm's scripts, and who answers `nvm` | `~/.local/state/nvmimic-shared` | `NVMIMIC_SHARED_DIR` |
 | Remembered answers, safe to delete | `~/Library/Caches/nvmimic` on macOS, `~/.cache/nvmimic` elsewhere | `NVMIMIC_CACHE_DIR` |
 
-The backups have a folder with no program's name on it because a sister
-tool built on the same library can be set up for the same nvm folder, and
-the two share them. nvmimic 0.1.0 kept the backups in
-`~/.local/state/nvmimic/backup`. The first `self` command of a later
-version moves them over.
+The backups have a folder of their own because a sister tool built on the
+same library can be set up for the same nvm folder, and the two share
+them. Don't delete that folder while nvmimic is installed. A `README` in it
+says the same. nvmimic finds it through a link named `shared` in its state
+folder and puts the link back if it goes missing. `self uninstall` removes
+the shared folder once no program uses it any more.
+
+nvmimic 0.1.0 kept the backups in `~/.local/state/nvmimic/backup`. The
+first `self` command of a later version moves them over. A dry run moves
+nothing.
 
 If you use the `XDG_STATE_HOME` or `XDG_CACHE_HOME`
 settings, nvmimic follows them too. If something that isn't nvmimic already
@@ -514,9 +519,12 @@ Whichever was told to take over last is in control:
   disabled itself stays asleep until it is told to take over again.
 
 They keep track of each other in one small record,
-`~/.local/state/nvm-handover/record`, next to the backups of official nvm's
-scripts. It belongs to neither program, so removing one never takes the
-backups away from the other. `crates/nvmimic-cli/tests/sister.rs` runs
+`~/.local/state/nvmimic-shared/record`, next to the backups of official
+nvm's scripts. It belongs to neither program, so removing one never takes
+the backups away from the other. The last one to be uninstalled removes
+the folder. Each program reaches it through a link named `shared` in its
+own state folder, so a sandbox that moves a program's files sets
+`NVMIMIC_SHARED_DIR` only for the `self` commands. `crates/nvmimic-cli/tests/sister.rs` runs
 nvmimic and `shelfy` through every one of these moves.
 
 The parity tests can compare your program with official nvm as well. You

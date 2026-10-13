@@ -3,8 +3,9 @@
 //! More than one program built on this library can be installed for the
 //! same nvm folder, and only one of them answers `nvm` at a time. This
 //! record is how they keep track of each other. It belongs to none of
-//! them, so it lives in a folder of its own ([`Dirs::shared`]) and removing
-//! one program never takes it away from the others.
+//! them, so it lives in a folder of its own ([`Dirs::shared_folder`]) and
+//! removing one program never takes it away from the others. The last
+//! program to be removed takes the folder with it.
 //!
 //! It holds three things:
 //!
@@ -49,7 +50,25 @@ pub struct Record {
     pub links: BTreeMap<String, PathBuf>,
     /// Scripts a program added where there were none.
     pub created: Vec<String>,
+    /// The shared folder was deleted while a program was installed, and
+    /// this record was written again from what that program knew. The
+    /// backup that was in the folder is gone.
+    pub lost: bool,
 }
+
+/// What the note in the shared folder says.
+pub const README: &str = "\
+This folder belongs to nvmimic and nvmise, two tools that do nvm's job
+(https://github.com/tsilenzio/nvmimic). They share it.
+
+  backup/   official nvm's own scripts, from before either tool replaced them
+  record    which of the two tools are set up, and which one answers `nvm`
+
+Please don't delete this folder while nvmimic or nvmise is installed. The
+backup is how `self uninstall` and `self eject` put official nvm back.
+
+The last of the two to be uninstalled removes this folder.
+";
 
 impl Record {
     /// The record as the text of its file.
@@ -78,6 +97,9 @@ impl Record {
         }
         for name in &self.created {
             text.push_str(&format!("created {name}\n"));
+        }
+        if self.lost {
+            text.push_str("lost backup\n");
         }
         text
     }
@@ -113,6 +135,7 @@ impl Record {
                     }
                 }
                 "created" => record.created.push(value.to_string()),
+                "lost" => record.lost = true,
                 _ => {}
             }
         }
@@ -131,17 +154,22 @@ impl Record {
             .map(|text| Record::parse(&text))
     }
 
-    /// Writes the record. The file holds the old record or the new one,
-    /// never part of each. A record with no program left in it is removed,
-    /// and its folders with it once they are empty.
+    /// Writes the record, and the note beside it when that is missing. The
+    /// file holds the old record or the new one, never part of each. With
+    /// no program left in the record, the whole shared folder is removed.
     pub fn write(&self, dirs: &Dirs) -> Result<(), String> {
+        let folder = dirs.shared_folder();
         if self.programs.is_empty() {
             let _ = fs::remove_file(dirs.record());
+            let _ = fs::remove_file(dirs.shared_readme());
             let _ = fs::remove_dir(dirs.backup());
-            let _ = fs::remove_dir(&dirs.shared);
+            let _ = fs::remove_dir(&folder);
             return Ok(());
         }
-        fs::create_dir_all(&dirs.shared).map_err(|e| format!("{}: {e}", dirs.shared.display()))?;
+        fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        if !dirs.shared_readme().is_file() {
+            crate::install::write_file(&dirs.shared_readme(), README, 0o644)?;
+        }
         crate::install::write_file(&dirs.record(), &self.render(), 0o644)
     }
 
@@ -168,6 +196,21 @@ impl Record {
             .map(String::as_str)
             .filter(move |name| *name != identity.name)
     }
+}
+
+/// Puts the program's link to the shared folder in place: a link named
+/// `shared` in its own state folder. A link that is missing, or points at
+/// nothing, is made again and points at the standard place.
+pub(crate) fn link(dirs: &Dirs) -> Result<(), String> {
+    let link = dirs.shared_link();
+    if fs::read_link(&link).is_ok() && fs::metadata(&link).is_ok_and(|meta| meta.is_dir()) {
+        return Ok(());
+    }
+    for dir in [&dirs.state, &dirs.shared] {
+        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
+    let _ = fs::remove_file(&link);
+    std::os::unix::fs::symlink(&dirs.shared, &link).map_err(|e| format!("{}: {e}", link.display()))
 }
 
 /// Tells the sister tool `name` to take over, by running its own `self
@@ -221,6 +264,7 @@ mod tests {
             backed_up: vec!["nvm.sh".into(), "nvm-exec".into()],
             links: [("nvm.sh".to_string(), PathBuf::from("/brew/opt/nvm/nvm.sh"))].into(),
             created: vec!["bash_completion".into()],
+            lost: true,
         };
         let text = record.render();
         assert_eq!(Record::parse(&text), record);

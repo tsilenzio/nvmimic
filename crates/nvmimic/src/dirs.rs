@@ -15,13 +15,16 @@
 //! Another program built on this library has the same layout under its own
 //! name, see [`Dirs::resolve_for`].
 //!
-//! One folder belongs to no program: the record that nvmimic and its sister
+//! One folder belongs to no single program: the one nvmimic and its sister
 //! tools share, see [`crate::handover`]. Every one of them has to find it
-//! in the same place, so its name and its variable have no program's name
-//! in them: `NVM_HANDOVER_DIR`, otherwise `$XDG_STATE_HOME/nvm-handover`,
-//! otherwise `~/.local/state/nvm-handover`.
+//! in the same place, so no program's own setting moves it. Its standard
+//! place is `NVMIMIC_SHARED_DIR`, otherwise `$XDG_STATE_HOME/nvmimic-shared`,
+//! otherwise `~/.local/state/nvmimic-shared`. Each program keeps a link
+//! named `shared` in its own state folder that points at it, and finds the
+//! folder through that link ([`Dirs::shared_folder`]).
 
 use crate::identity::Identity;
+use std::fs;
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -34,14 +37,15 @@ pub struct Dirs {
     pub state: PathBuf,
     /// Remembered answers.
     pub cache: PathBuf,
-    /// The record shared with sister tools, and official nvm's scripts
-    /// from before. The same folder under every identity.
+    /// The standard place of the folder shared with sister tools, the
+    /// same under every identity. The folder in use is
+    /// [`Dirs::shared_folder`].
     pub shared: PathBuf,
 }
 
 /// The name of the shared folder and the variable that moves it.
-const SHARED: &str = "nvm-handover";
-const SHARED_SETTING: &str = "NVM_HANDOVER_DIR";
+const SHARED: &str = "nvmimic-shared";
+const SHARED_SETTING: &str = "NVMIMIC_SHARED_DIR";
 
 impl Dirs {
     /// Works nvmimic's locations out from the environment. `var` returns
@@ -104,15 +108,40 @@ impl Dirs {
         self.state.join("manifest")
     }
 
+    /// The link in the program's own state folder that points at the
+    /// shared folder.
+    pub fn shared_link(&self) -> PathBuf {
+        self.state.join("shared")
+    }
+
+    /// The folder shared with sister tools: where the program's link
+    /// points, so the folder can be moved by moving it and pointing each
+    /// program's link at the new place. With the link missing, or pointing
+    /// at nothing, it is the standard place.
+    pub fn shared_folder(&self) -> PathBuf {
+        let link = self.shared_link();
+        match fs::read_link(&link) {
+            Ok(target) if fs::metadata(&link).is_ok_and(|meta| meta.is_dir()) => {
+                self.state.join(target)
+            }
+            _ => self.shared.clone(),
+        }
+    }
+
     /// The record shared with sister tools.
     pub fn record(&self) -> PathBuf {
-        self.shared.join("record")
+        self.shared_folder().join("record")
+    }
+
+    /// The note in the shared folder that says what the folder is.
+    pub fn shared_readme(&self) -> PathBuf {
+        self.shared_folder().join("README")
     }
 
     /// Where official nvm's own scripts wait while a program's are in
     /// `$NVM_DIR`.
     pub fn backup(&self) -> PathBuf {
-        self.shared.join("backup")
+        self.shared_folder().join("backup")
     }
 
     /// Where nvmimic 0.1.0 kept official nvm's scripts, before the shared
@@ -145,7 +174,7 @@ mod tests {
         assert_eq!(dirs.data, Path::new("/h/.local/share/nvmimic"));
         assert_eq!(dirs.state, Path::new("/h/.local/state/nvmimic"));
         assert!(dirs.cache.starts_with("/h"));
-        assert_eq!(dirs.shared, Path::new("/h/.local/state/nvm-handover"));
+        assert_eq!(dirs.shared, Path::new("/h/.local/state/nvmimic-shared"));
     }
 
     #[test]
@@ -162,7 +191,7 @@ mod tests {
         assert_eq!(dirs.data, Path::new("/x/data/nvmimic"));
         assert_eq!(dirs.state, Path::new("/own/state"));
         // The shared record goes by no program's variable.
-        assert_eq!(dirs.shared, Path::new("/x/state/nvm-handover"));
+        assert_eq!(dirs.shared, Path::new("/x/state/nvmimic-shared"));
     }
 
     #[test]
@@ -174,7 +203,7 @@ mod tests {
         for vars in [
             vec![("HOME", "/h")],
             vec![("HOME", "/h"), ("XDG_STATE_HOME", "/x")],
-            vec![("HOME", "/h"), ("NVM_HANDOVER_DIR", "/shared")],
+            vec![("HOME", "/h"), ("NVMIMIC_SHARED_DIR", "/shared")],
         ] {
             let var = |name: &str| {
                 vars.iter()
