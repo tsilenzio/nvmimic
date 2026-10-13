@@ -17,13 +17,21 @@
 //! A program that was told to step aside, by its own `self eject` or its
 //! disable, is marked `aside`. It stays set up, but the other program's
 //! uninstall doesn't hand `nvm` to it.
+//!
+//! Two programs write this record, so a command that changes it holds a
+//! lock for as long as it runs ([`lock`]). A second command started in the
+//! meantime waits a moment and then says who is in its way.
 
 use crate::dirs::Dirs;
 use crate::identity::Identity;
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::{Read, Seek, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{Duration, Instant};
 
 /// One program that is set up for the nvm folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -213,6 +221,100 @@ pub(crate) fn link(dirs: &Dirs) -> Result<(), String> {
     std::os::unix::fs::symlink(&dirs.shared, &link).map_err(|e| format!("{}: {e}", link.display()))
 }
 
+/// Set for a program that is run by a command holding the lock, such as
+/// the sister tool's `self install` during a hand-over. That program works
+/// under the lock of the command that started it and takes none itself.
+pub const LOCK_HELD: &str = "NVMIMIC_SHARED_LOCKED";
+
+/// How long a `self` command waits for another one to finish.
+pub const LOCK_WAIT: Duration = Duration::from_secs(2);
+
+/// The lock on the shared record, held until this is dropped.
+pub struct Lock {
+    held: Option<(fs::File, Dirs)>,
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        let Some((file, dirs)) = &self.held else {
+            return;
+        };
+        // The file names its holder only while it is held.
+        let _ = file.set_len(0);
+        // With no record there is no program set up, and nothing is left
+        // behind for the lock's sake either.
+        if !dirs.record().exists() {
+            let _ = fs::remove_file(dirs.shared_lock());
+        }
+    }
+}
+
+/// Takes the lock on the shared record for `identity`'s program, waiting
+/// up to `wait` for a command that holds it. `Err` says who holds it.
+///
+/// The lock is a file beside the shared folder's standard place, so every
+/// program finds the same one and the folder can come and go under it.
+/// Where the file can't be made or this kind of lock doesn't exist, the
+/// command carries on without one.
+pub fn lock(dirs: &Dirs, identity: &Identity, wait: Duration) -> Result<Lock, String> {
+    let unlocked = Ok(Lock { held: None });
+    if std::env::var_os(LOCK_HELD).is_some() {
+        return unlocked;
+    }
+    let path = dirs.shared_lock();
+    if let Some(folder) = path.parent() {
+        let _ = fs::create_dir_all(folder);
+    }
+    let started = Instant::now();
+    loop {
+        let opened = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path);
+        let Ok(mut file) = opened else {
+            return unlocked;
+        };
+        // SAFETY: flock only takes the descriptor, which `file` keeps open.
+        let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+        if taken {
+            // A command that finished in between may have removed the file
+            // this one opened. Then the lock is on a file nobody else sees.
+            let same = match (file.metadata(), fs::metadata(&path)) {
+                (Ok(mine), Ok(there)) => mine.ino() == there.ino() && mine.dev() == there.dev(),
+                _ => false,
+            };
+            if !same {
+                continue;
+            }
+            let holder = format!("{} {}\n", identity.name, std::process::id());
+            let _ = file.set_len(0);
+            let _ = file.write_all(holder.as_bytes());
+            return Ok(Lock {
+                held: Some((file, dirs.clone())),
+            });
+        }
+        if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK) {
+            return unlocked;
+        }
+        if started.elapsed() >= wait {
+            let mut holder = String::new();
+            let _ = file.rewind();
+            let _ = file.read_to_string(&mut holder);
+            let who = match holder.trim().split_once(' ') {
+                Some((name, process)) => format!(" ({name}, process {process})"),
+                None => String::new(),
+            };
+            return Err(format!(
+                "another `self` command is still running{who}, and two of them can't change the \
+                 same nvm setup at once. Run this again when it has finished. Nothing was changed."
+            ));
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
 /// Tells the sister tool `name` to take over, by running its own `self
 /// install --force`. Its scripts and its record are its own to write, so
 /// no other program writes them for it.
@@ -220,6 +322,7 @@ pub(crate) fn hand_to(name: &str, binary: &Path, nvm_dir: &Path) -> Result<(), S
     let output = Command::new(binary)
         .args(["self", "install", "--force"])
         .env("NVM_DIR", nvm_dir)
+        .env(LOCK_HELD, "1")
         // The program stays where it is, whatever the environment says now.
         .env(
             format!("{}_INSTALL_PATH", name.to_ascii_uppercase()),
@@ -270,6 +373,52 @@ mod tests {
         assert_eq!(Record::parse(&text), record);
         assert!(text.contains("program shelfy /opt/a b/shelfy\n"), "{text}");
         assert!(text.contains("aside nvmimic\n"), "{text}");
+    }
+
+    #[test]
+    fn one_command_at_a_time_holds_the_lock_and_the_second_says_who_does() {
+        let root = std::env::temp_dir().join(format!("nvmimic-lock-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let home = root.to_string_lossy().into_owned();
+        let dirs = Dirs::resolve(|name| (name == "HOME").then(|| home.clone())).unwrap();
+        let shelfy = Identity {
+            name: "shelfy",
+            ..Identity::NVMIMIC
+        };
+        let theirs = Dirs::resolve_for(&shelfy, |name| (name == "HOME").then(|| home.clone()));
+        let theirs = theirs.unwrap();
+        assert_eq!(dirs.shared_lock(), theirs.shared_lock());
+
+        let first = lock(&dirs, &Identity::NVMIMIC, Duration::ZERO).unwrap();
+        let started = Instant::now();
+        let second = lock(&theirs, &shelfy, Duration::from_millis(100));
+        let said = second.err().unwrap();
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        let holder = format!("(nvmimic, process {})", std::process::id());
+        assert!(said.contains(&holder), "{said}");
+        assert!(said.ends_with("Nothing was changed."), "{said}");
+
+        // With no record, nothing is left behind once the lock is let go.
+        drop(first);
+        assert!(!dirs.shared_lock().exists());
+        // With one, the file stays for the next command.
+        let record = Record {
+            programs: [(
+                "nvmimic".to_string(),
+                Program {
+                    binary: "/h/nvmimic".into(),
+                    aside: false,
+                },
+            )]
+            .into(),
+            ..Record::default()
+        };
+        let second = lock(&theirs, &shelfy, Duration::ZERO).unwrap();
+        record.write(&dirs).unwrap();
+        drop(second);
+        assert!(dirs.shared_lock().exists());
+        lock(&dirs, &Identity::NVMIMIC, Duration::ZERO).unwrap();
+        let _ = fs::remove_dir_all(&root);
     }
 
     #[test]

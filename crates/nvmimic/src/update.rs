@@ -134,7 +134,9 @@ fn write_scripts(identity: &Identity, binary: &Path, manifest: &Manifest) -> boo
     // The program stays where it is, whatever the environment says now.
     command
         .args(["self", "install", "--force"])
-        .env(identity.setting("INSTALL_PATH"), binary);
+        .env(identity.setting("INSTALL_PATH"), binary)
+        // It works under the lock this command holds.
+        .env(crate::handover::LOCK_HELD, "1");
     if let Some(nvm_dir) = &manifest.nvm_dir {
         // While a sister tool answers `nvm`, the scripts in the folder are
         // its own, and an update is no word to take over from it.
@@ -194,6 +196,7 @@ pub fn self_update(
     options: &Options,
     ui: &mut dyn Ui,
 ) -> Result<(), String> {
+    let _lock = crate::install::guard(env.dirs()?, env.identity, options)?;
     let (dirs, mut manifest, binary) = installed(env)?;
     let identity = env.identity;
     let app = identity.name;
@@ -341,6 +344,7 @@ fn update_in(
 
 /// `nvmimic self rollback`.
 pub fn self_rollback(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<(), String> {
+    let _lock = crate::install::guard(env.dirs()?, env.identity, options)?;
     let (dirs, mut manifest, binary) = installed(env)?;
     let identity = env.identity;
     let app = identity.name;

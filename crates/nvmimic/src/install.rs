@@ -815,8 +815,33 @@ pub fn self_install(
     self_install_with(env, running, options, ui, &NoSteps)
 }
 
+/// The lock a `self` command works under, so that two of them never change
+/// the shared record at once. A dry run changes nothing and takes none.
+pub(crate) fn guard(
+    dirs: &Dirs,
+    identity: &Identity,
+    options: &Options,
+) -> Result<Option<handover::Lock>, String> {
+    if options.dry_run {
+        return Ok(None);
+    }
+    handover::lock(dirs, identity, handover::LOCK_WAIT).map(Some)
+}
+
 /// [`self_install`] with steps of the embedding program's own.
 pub fn self_install_with(
+    env: &Env,
+    running: &Path,
+    options: &Options,
+    ui: &mut dyn Ui,
+    steps: &dyn Steps,
+) -> Result<(), String> {
+    let _lock = guard(env.dirs()?, env.identity, options)?;
+    install(env, running, options, ui, steps)
+}
+
+/// What `self install` does once it holds the lock.
+fn install(
     env: &Env,
     running: &Path,
     options: &Options,
@@ -1424,6 +1449,7 @@ pub fn self_enable_with(
     let identity = env.identity;
     let app = identity.name;
     let dirs = env.dirs()?;
+    let _lock = guard(dirs, identity, options)?;
     let Loaded {
         manifest, record, ..
     } = load(dirs, identity)?;
@@ -1439,7 +1465,7 @@ pub fn self_enable_with(
             nvm_dir.display()
         ));
     }
-    self_install_with(env, running, options, ui, steps)
+    install(env, running, options, ui, steps)
 }
 
 /// `nvmimic self uninstall`, with or without `--purge`.
@@ -1474,6 +1500,7 @@ fn leave(
     let identity = env.identity;
     let app = identity.name;
     let dirs = env.dirs()?;
+    let _lock = guard(dirs, identity, options)?;
     let mut loaded = load(dirs, identity)?;
     let Some(mut manifest) = loaded.manifest.clone() else {
         // An uninstall that was stopped at its very end took the manifest

@@ -128,6 +128,17 @@ impl Dirs {
         }
     }
 
+    /// The lock a `self` command holds while it changes what the programs
+    /// share, see [`crate::handover::lock`]. It is beside the standard
+    /// place of the shared folder and not inside it, so it is the same file
+    /// for every program wherever the folder is, and the folder can be
+    /// removed without it.
+    pub fn shared_lock(&self) -> PathBuf {
+        let mut name = self.shared.clone().into_os_string();
+        name.push(".lock");
+        name.into()
+    }
+
     /// The record shared with sister tools.
     pub fn record(&self) -> PathBuf {
         self.shared_folder().join("record")

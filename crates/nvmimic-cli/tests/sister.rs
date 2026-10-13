@@ -3,13 +3,15 @@
 //! installed, only one answers `nvm`, and every way of handing `nvm` from
 //! one to the other is run here with the real programs, in throwaway homes.
 
-use nvmimic::handover::Record;
-use nvmimic::identity::program_of;
+use nvmimic::dirs::Dirs;
+use nvmimic::handover::{Record, lock};
+use nvmimic::identity::{Identity, program_of};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 const SCRIPTS: [&str; 3] = ["nvm.sh", "nvm-exec", "bash_completion"];
 const NVMIMIC: &str = "nvmimic";
@@ -91,7 +93,13 @@ impl Home {
     /// that the file being run is where it is installed, so no copy of a
     /// program is made that macOS would have to scan.
     fn run(&self, name: &str, args: &[&str]) -> Output {
-        Command::new(program(name))
+        self.command(name, args).output().unwrap()
+    }
+
+    /// The command [`Home::run`] runs, not started yet.
+    fn command(&self, name: &str, args: &[&str]) -> Command {
+        let mut command = Command::new(program(name));
+        command
             .arg("self")
             .args(args)
             .env_clear()
@@ -101,8 +109,9 @@ impl Home {
             .env("NVMIMIC_INSTALL_PATH", program(NVMIMIC))
             .env("SHELFY_INSTALL_PATH", program(SHELFY))
             .stdin(std::process::Stdio::null())
-            .output()
-            .unwrap()
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        command
     }
 
     /// Runs a `self` command with `--force` and expects it to work.
@@ -477,9 +486,13 @@ fn as_0_1_0_left_it(home: &Home, ejected: bool) {
     } else {
         manifest.push_str("ejected scripts\n");
     }
+    let version = format!("version {}\n", env!("CARGO_PKG_VERSION"));
+    manifest = manifest.replace(&version, "version 0.1.0\n");
     fs::write(state.join("manifest"), manifest).unwrap();
     fs::remove_dir_all(home.shared()).unwrap();
     fs::remove_file(state.join("shared")).unwrap();
+    // 0.1.0 took no lock, so it left no file for one.
+    fs::remove_file(home.state("nvmimic-shared.lock")).unwrap();
 }
 
 /// Every file under `dir` with what it holds, and every link with where it
@@ -740,6 +753,98 @@ fn with_the_shared_folder_deleted_both_carry_on_and_say_there_is_no_backup() {
         assert!(!home.state(first).exists());
         assert!(!home.shared().exists());
         assert!(!home.official_is_back());
+    }
+}
+
+#[test]
+fn a_self_command_waits_for_the_lock_and_then_says_who_holds_it() {
+    let home = Home::new(true);
+    home.ok(NVMIMIC, "install");
+    home.ok(SHELFY, "install");
+    let root = home.root.to_string_lossy().into_owned();
+    let dirs = Dirs::resolve(|name| (name == "HOME").then(|| root.clone())).unwrap();
+    assert_eq!(dirs.shared_lock(), home.state("nvmimic-shared.lock"));
+
+    let held = lock(&dirs, &Identity::NVMIMIC, Duration::ZERO).unwrap();
+    let before = snapshot(&home.root);
+    let holder = format!("(nvmimic, process {})", std::process::id());
+    for (name, command) in [
+        (NVMIMIC, "install"),
+        (NVMIMIC, "eject"),
+        (NVMIMIC, "uninstall"),
+        (SHELFY, "uninstall"),
+        (SHELFY, "disable"),
+    ] {
+        let out = home.run(name, &[command, "--force"]);
+        let said = text(&out.stderr);
+        assert_eq!(out.status.code(), Some(1), "{name} self {command}: {said}");
+        assert!(said.contains(&holder), "{name} self {command}: {said}");
+        assert!(said.contains("Nothing was changed."), "{said}");
+        assert_eq!(snapshot(&home.root), before, "{name} self {command}");
+    }
+    // A dry run changes nothing, so it waits for nobody.
+    assert!(
+        home.run(NVMIMIC, &["uninstall", "--dry-run"])
+            .status
+            .success()
+    );
+
+    drop(held);
+    // A hand-over runs the sister's `self install` under the lock of the
+    // command that started it.
+    home.ok(SHELFY, "uninstall");
+    assert_eq!(home.answers(), NVMIMIC);
+    home.ok(NVMIMIC, "uninstall");
+    assert!(home.official_is_back());
+    assert!(!home.shared().exists() && !dirs.shared_lock().exists());
+}
+
+#[test]
+fn two_self_commands_at_once_leave_one_record_that_matches_the_folder() {
+    for round in 0..6 {
+        let home = Home::new(true);
+        // Each program starts three commands, all at the same moment.
+        let commands = ["install", "install", "install"];
+        let started: Vec<(&str, std::process::Child)> = commands
+            .iter()
+            .flat_map(|command| [NVMIMIC, SHELFY].map(|name| (name, *command)))
+            .map(|(name, command)| (name, home.command(name, &[command, "--force"])))
+            .map(|(name, mut command)| (name, command.spawn().unwrap()))
+            .collect();
+        for (name, child) in started {
+            let out = child.wait_with_output().unwrap();
+            let said = text(&out.stderr);
+            // A command either went through or found the lock taken.
+            assert!(
+                out.status.success() || said.contains("another `self` command is still running"),
+                "round {round}, {name}: {said}"
+            );
+        }
+        let record = home.record();
+        let answers = home.answers();
+        assert!(
+            answers == NVMIMIC || answers == SHELFY,
+            "round {round}: {answers}"
+        );
+        assert_eq!(record.answers.as_deref(), Some(answers.as_str()));
+        assert!(home.backup_is_whole(), "round {round}");
+        // Without the lock, two installs each read a record without the
+        // other and the later write drops the earlier program.
+        for name in [NVMIMIC, SHELFY] {
+            assert_eq!(
+                record.programs.contains_key(name),
+                home.installed(name),
+                "round {round}: {name} in {record:?}"
+            );
+        }
+        // Whatever order they ran in, both leave again and nvm is back.
+        for name in [NVMIMIC, SHELFY] {
+            if home.installed(name) {
+                home.ok(name, "uninstall");
+            }
+        }
+        assert!(home.official_is_back(), "round {round}");
+        assert!(!home.shared().exists(), "round {round}");
     }
 }
 
