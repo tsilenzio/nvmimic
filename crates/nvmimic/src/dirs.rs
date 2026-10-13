@@ -14,6 +14,12 @@
 //!
 //! Another program built on this library has the same layout under its own
 //! name, see [`Dirs::resolve_for`].
+//!
+//! One folder belongs to no program: the record that nvmimic and its sister
+//! tools share, see [`crate::handover`]. Every one of them has to find it
+//! in the same place, so its name and its variable have no program's name
+//! in them: `NVM_HANDOVER_DIR`, otherwise `$XDG_STATE_HOME/nvm-handover`,
+//! otherwise `~/.local/state/nvm-handover`.
 
 use crate::identity::Identity;
 use std::path::PathBuf;
@@ -24,11 +30,18 @@ pub struct Dirs {
     pub binary: PathBuf,
     /// Files that belong to the installation. Nothing is kept here now.
     pub data: PathBuf,
-    /// The manifest, the backups of nvm's scripts and earlier programs.
+    /// The manifest and earlier programs.
     pub state: PathBuf,
     /// Remembered answers.
     pub cache: PathBuf,
+    /// The record shared with sister tools, and official nvm's scripts
+    /// from before. The same folder under every identity.
+    pub shared: PathBuf,
 }
+
+/// The name of the shared folder and the variable that moves it.
+const SHARED: &str = "nvm-handover";
+const SHARED_SETTING: &str = "NVM_HANDOVER_DIR";
 
 impl Dirs {
     /// Works nvmimic's locations out from the environment. `var` returns
@@ -66,6 +79,12 @@ impl Dirs {
             data: pick("DATA_DIR", "XDG_DATA_HOME", ".local/share")?,
             state: pick("STATE_DIR", "XDG_STATE_HOME", ".local/state")?,
             cache: pick("CACHE_DIR", "XDG_CACHE_HOME", cache)?,
+            shared: absolute(SHARED_SETTING)
+                .or_else(|| absolute("XDG_STATE_HOME").map(|base| base.join(SHARED)))
+                .or_else(|| {
+                    home.as_ref()
+                        .map(|home| home.join(".local/state").join(SHARED))
+                })?,
         })
     }
 
@@ -85,8 +104,20 @@ impl Dirs {
         self.state.join("manifest")
     }
 
-    /// Where nvm's own scripts wait while nvmimic's are in `$NVM_DIR`.
+    /// The record shared with sister tools.
+    pub fn record(&self) -> PathBuf {
+        self.shared.join("record")
+    }
+
+    /// Where official nvm's own scripts wait while a program's are in
+    /// `$NVM_DIR`.
     pub fn backup(&self) -> PathBuf {
+        self.shared.join("backup")
+    }
+
+    /// Where nvmimic 0.1.0 kept official nvm's scripts, before the shared
+    /// record existed.
+    pub(crate) fn backup_before_sharing(&self) -> PathBuf {
         self.state.join("backup")
     }
 }
@@ -114,6 +145,7 @@ mod tests {
         assert_eq!(dirs.data, Path::new("/h/.local/share/nvmimic"));
         assert_eq!(dirs.state, Path::new("/h/.local/state/nvmimic"));
         assert!(dirs.cache.starts_with("/h"));
+        assert_eq!(dirs.shared, Path::new("/h/.local/state/nvm-handover"));
     }
 
     #[test]
@@ -129,6 +161,31 @@ mod tests {
         assert_eq!(dirs.binary, Path::new("/opt/tools/nvmimic"));
         assert_eq!(dirs.data, Path::new("/x/data/nvmimic"));
         assert_eq!(dirs.state, Path::new("/own/state"));
+        // The shared record goes by no program's variable.
+        assert_eq!(dirs.shared, Path::new("/x/state/nvm-handover"));
+    }
+
+    #[test]
+    fn every_program_finds_the_shared_record_in_the_same_place() {
+        let other = Identity {
+            name: "shelfy",
+            ..Identity::NVMIMIC
+        };
+        for vars in [
+            vec![("HOME", "/h")],
+            vec![("HOME", "/h"), ("XDG_STATE_HOME", "/x")],
+            vec![("HOME", "/h"), ("NVM_HANDOVER_DIR", "/shared")],
+        ] {
+            let var = |name: &str| {
+                vars.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string())
+            };
+            let ours = Dirs::resolve(var).unwrap();
+            let theirs = Dirs::resolve_for(&other, var).unwrap();
+            assert_eq!(ours.shared, theirs.shared);
+            assert_ne!(ours.state, theirs.state);
+        }
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod complete;
 pub mod context;
 pub mod dirs;
 pub mod functions;
+pub mod handover;
 pub mod host;
 pub mod identity;
 pub mod init;

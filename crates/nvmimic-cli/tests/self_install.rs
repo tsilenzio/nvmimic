@@ -51,8 +51,9 @@ impl Home {
     }
 
     /// nvmimic's own folders: installation files, install record, and
-    /// remembered answers.
-    fn own(&self) -> [PathBuf; 3] {
+    /// remembered answers. The last one is the record it shares with
+    /// sister tools, which goes when no program is left in it.
+    fn own(&self) -> [PathBuf; 4] {
         let cache = if cfg!(target_os = "macos") {
             "Library/Caches/nvmimic"
         } else {
@@ -62,11 +63,17 @@ impl Home {
             self.root.join(".local/share/nvmimic"),
             self.root.join(".local/state/nvmimic"),
             self.root.join(cache),
+            self.shared(),
         ]
     }
 
     fn state(&self) -> PathBuf {
         self.root.join(".local/state/nvmimic")
+    }
+
+    /// The record shared with sister tools, and official nvm's scripts.
+    fn shared(&self) -> PathBuf {
+        self.root.join(".local/state/nvm-handover")
     }
 
     /// Whether anything of nvmimic's own is left.
@@ -403,7 +410,7 @@ fn nvms_own_scripts_written_over_ours_are_left_alone() {
                     .exists()
             );
             // The older nvm nvmimic kept is still there, and stayed out.
-            assert!(home.state().join("backup").join(file).is_file());
+            assert!(home.shared().join("backup").join(file).is_file());
         }
         assert!(!said.contains("was edited"), "{said}");
     }
@@ -570,7 +577,7 @@ fn nothing_of_nvmimics_own_goes_into_nvm_dir() {
     for dir in home.own() {
         assert!(dir.is_dir(), "{} is missing", dir.display());
     }
-    let [_, _, cache] = home.own();
+    let [_, _, cache, _] = home.own();
     assert!(
         fs::read_dir(cache.join("node-version")).unwrap().count() == 1,
         "node's answer was remembered outside $NVM_DIR"
@@ -588,7 +595,7 @@ fn a_script_named_node_is_not_remembered() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     let out = home.shell("nvm use 22 >/dev/null; nvm current");
     assert_eq!(text(&out.stdout).trim(), "v22.1.0");
-    let [_, _, cache] = home.own();
+    let [_, _, cache, _] = home.own();
     assert!(
         !cache.join("node-version").exists(),
         "a script's answer was remembered"
@@ -604,6 +611,9 @@ fn own_folders_follow_their_variables() {
         ("NVMIMIC_DATA_DIR", elsewhere.join("data")),
         ("NVMIMIC_STATE_DIR", elsewhere.join("state")),
         ("NVMIMIC_CACHE_DIR", elsewhere.join("cache")),
+        // The record shared with sister tools has a variable of its own,
+        // with no program's name in it.
+        ("NVM_HANDOVER_DIR", elsewhere.join("shared")),
     ];
     let vars: Vec<(&str, &Path)> = vars.iter().map(|(k, v)| (*k, v.as_path())).collect();
     // Something of the user's own in the data folder has to survive.
@@ -614,6 +624,7 @@ fn own_folders_follow_their_variables() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert!(elsewhere.join("tools/nvmimic").is_file());
     assert!(elsewhere.join("state/manifest").is_file());
+    assert!(elsewhere.join("shared/record").is_file());
     assert!(!home.has_own_files());
     let nvm = home.shell("nvm --version");
     assert_eq!(text(&nvm.stdout), "0.40.8\n", "{}", text(&nvm.stderr));
@@ -622,6 +633,7 @@ fn own_folders_follow_their_variables() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert!(!elsewhere.join("tools/nvmimic").exists());
     assert!(!elsewhere.join("state").exists());
+    assert!(!elsewhere.join("shared").exists());
     assert_eq!(
         fs::read_to_string(elsewhere.join("data/mine")).unwrap(),
         "mine\n"
@@ -648,7 +660,7 @@ fn takeover_keeps_versions_and_uninstall_restores_nvm() {
         "22\n"
     );
     assert_eq!(
-        fs::read(home.state().join("backup/nvm.sh")).unwrap(),
+        fs::read(home.shared().join("backup/nvm.sh")).unwrap(),
         fs::read(reference().join("nvm.sh")).unwrap()
     );
     let nvm = home.shell("nvm alias default");
@@ -1004,9 +1016,9 @@ fn installer_rerun(method: &str) {
 
     let out = home.nvmimic(&["self", "install", "--force"]);
     assert!(out.status.success(), "{}", text(&out.stderr));
-    let manifest = fs::read_to_string(home.state().join("manifest")).unwrap();
+    let record = fs::read_to_string(home.shared().join("record")).unwrap();
     for file in SCRIPTS {
-        assert!(manifest.contains(&format!("backup {file}\n")), "{manifest}");
+        assert!(record.contains(&format!("backup {file}\n")), "{record}");
     }
     let ours: Vec<Vec<u8>> = SCRIPTS
         .iter()
@@ -1067,7 +1079,7 @@ fn installer_rerun(method: &str) {
     for (file, bytes) in SCRIPTS.iter().zip(&ours) {
         assert_eq!(&fs::read(dir.join(file)).unwrap(), bytes, "{file} is ours");
         assert_eq!(
-            fs::read(home.state().join("backup").join(file)).unwrap(),
+            fs::read(home.shared().join("backup").join(file)).unwrap(),
             fs::read(reference().join(file)).unwrap(),
             "{file} backup is nvm's"
         );

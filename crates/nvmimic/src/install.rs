@@ -7,6 +7,7 @@
 //! [`crate::dirs`].
 
 use crate::dirs::{CACHE_KINDS, Dirs};
+use crate::handover::{self, Program, Record};
 use crate::identity::{self, Identity};
 use std::collections::BTreeMap;
 use std::fs;
@@ -234,17 +235,21 @@ pub struct Manifest {
     pub data: Option<PathBuf>,
     pub cache: Option<PathBuf>,
     /// Scripts that were nvm's, with a copy of each in the backup folder.
+    /// Only a manifest written by nvmimic 0.1.0 has these three. They are
+    /// in the shared record now ([`crate::handover::Record`]), and the
+    /// first `self` command of a later version moves them there.
     pub backed_up: Vec<String>,
     /// Scripts that were links when nvmimic took over, and where each one
-    /// pointed. A link goes back only while its target is still there.
+    /// pointed.
     pub links: BTreeMap<String, PathBuf>,
     /// Scripts nvmimic added where there were none.
     pub created: Vec<String>,
     /// What each script held when nvmimic wrote it, as a SHA-256 sum. A file
     /// with another sum was changed by someone since.
     pub fingerprints: BTreeMap<String, String>,
-    /// `self eject` took nvmimic's scripts out of `$NVM_DIR` and left the
-    /// program installed.
+    /// nvmimic's scripts are out of `$NVM_DIR` and the program is still
+    /// installed. The `self` commands go by the shared record for this and
+    /// write the line for whoever reads the file.
     pub ejected: bool,
     /// The version of the earlier program `self update` set aside, which
     /// `self rollback` brings back.
@@ -400,9 +405,9 @@ fn is_ours(path: &Path, identity: &Identity) -> bool {
     fs::read_to_string(path).is_ok_and(|text| text.contains(&identity.own_marker()))
 }
 
-/// The other program built on this library whose `nvm.sh` is in `nvm_dir`,
-/// if there is one. Two such programs never share an nvm folder.
-fn other_program(nvm_dir: &Path, identity: &Identity) -> Option<String> {
+/// The sister tool whose `nvm.sh` is in `nvm_dir`, if there is one: another
+/// program built on this library, which answers `nvm` there now.
+pub(crate) fn sister_in_place(nvm_dir: &Path, identity: &Identity) -> Option<String> {
     let text = fs::read_to_string(nvm_dir.join("nvm.sh")).ok()?;
     identity::program_of(&text)
         .filter(|name| *name != identity.name)
@@ -440,6 +445,103 @@ fn same_file(a: &Path, b: &Path) -> bool {
         (Ok(a), Ok(b)) => a == b,
         _ => false,
     }
+}
+
+/// The program's own manifest and the shared record, as the `self`
+/// commands start from them.
+///
+/// nvmimic 0.1.0 kept official nvm's scripts and the lines about them in
+/// its own state folder. A manifest whose program isn't in the shared
+/// record yet is from then, and what it holds is moved over here, before
+/// the command does anything else. A dry run moves it too: nothing about
+/// the installation changes by it.
+fn load(dirs: &Dirs, identity: &Identity) -> Result<(Option<Manifest>, Record), String> {
+    let mut record = Record::read(dirs).unwrap_or_default();
+    let Some(mut manifest) = Manifest::read(dirs) else {
+        return Ok((None, record));
+    };
+    if !record.programs.contains_key(identity.name) {
+        join(dirs, identity, &mut manifest, &mut record)?;
+    }
+    manifest.ejected = !record.answers(identity);
+    Ok((Some(manifest), record))
+}
+
+/// Moves what a manifest from before the shared record holds into the
+/// record. Official nvm's scripts are copied first and the record that
+/// names them is written before the manifest lets go of them, so a stop at
+/// any moment leaves each script in a backup that one of the two files
+/// knows about.
+fn join(
+    dirs: &Dirs,
+    identity: &Identity,
+    manifest: &mut Manifest,
+    record: &mut Record,
+) -> Result<(), String> {
+    let app = identity.name;
+    if let (Some(theirs), Some(ours)) = (&record.nvm_dir, &manifest.nvm_dir)
+        && theirs != ours
+        && let Some(other) = record.others(identity).next()
+    {
+        return Err(format!(
+            "{app} is installed for {}, and {other} for {}. The two share one nvm folder. Run \
+             `{other} self uninstall` first. Nothing was changed.",
+            ours.display(),
+            theirs.display()
+        ));
+    }
+    let before = dirs.backup_before_sharing();
+    let backup = dirs.backup();
+    fs::create_dir_all(&backup).map_err(|e| format!("{}: {e}", backup.display()))?;
+    for name in &manifest.backed_up {
+        let kept = before.join(name);
+        if record.backed_up.contains(name) || fs::metadata(&kept).is_err() {
+            continue;
+        }
+        keep_copy(&kept, &backup.join(name))?;
+        record.backed_up.push(name.clone());
+    }
+    for (name, target) in &manifest.links {
+        record
+            .links
+            .entry(name.clone())
+            .or_insert_with(|| target.clone());
+    }
+    for name in &manifest.created {
+        if !record.created.contains(name) {
+            record.created.push(name.clone());
+        }
+    }
+    record.nvm_dir = manifest.nvm_dir.clone().or(record.nvm_dir.take());
+    record.programs.insert(
+        app.to_string(),
+        Program {
+            binary: manifest
+                .binary
+                .clone()
+                .unwrap_or_else(|| dirs.binary.clone()),
+            aside: manifest.ejected,
+        },
+    );
+    if !manifest.ejected {
+        record.answers = Some(app.to_string());
+    }
+    record.write(dirs)?;
+
+    let moved = std::mem::take(&mut manifest.backed_up);
+    manifest.links.clear();
+    manifest.created.clear();
+    manifest.write(dirs, identity)?;
+    for name in SCRIPTS
+        .iter()
+        .copied()
+        .chain(moved.iter().map(String::as_str))
+    {
+        let _ = fs::remove_file(before.join(name));
+        let _ = fs::remove_file(unfinished(&before.join(name)));
+    }
+    let _ = fs::remove_dir(&before);
+    Ok(())
 }
 
 /// How a question shows which answer an empty reply gives.
@@ -624,15 +726,8 @@ pub fn self_install_with(
     }
     let dirs = env.dirs()?;
     let nvm_dir = env.nvm_dir();
-    if let Some(other) = other_program(&nvm_dir, identity) {
-        return Err(format!(
-            "{other}'s scripts are in {}, and {app} and {other} can't share an nvm folder. Run \
-             `{other} self eject` or `{other} self uninstall` first. Nothing was changed.",
-            nvm_dir.display()
-        ));
-    }
     let backup = dirs.backup();
-    let previous = Manifest::read(dirs);
+    let (previous, mut record) = load(dirs, identity)?;
     let reinstall = previous.is_some();
     let mut manifest = previous.unwrap_or_default();
     if let Some(installed_for) = &manifest.nvm_dir
@@ -642,6 +737,29 @@ pub fn self_install_with(
             "{app} is already installed for {}, and NVM_DIR now names {}. Run `{app} self \
              uninstall` first if you want to move it.",
             installed_for.display(),
+            nvm_dir.display()
+        ));
+    }
+    if let Some(shared) = &record.nvm_dir
+        && *shared != nvm_dir
+        && let Some(other) = record.others(identity).next()
+    {
+        return Err(format!(
+            "{other} is set up for {}, and NVM_DIR now names {}. {app} and {other} share one \
+             nvm folder. Nothing was changed.",
+            shared.display(),
+            nvm_dir.display()
+        ));
+    }
+    // The sister tool that answers `nvm` now, if one does.
+    let sister = sister_in_place(&nvm_dir, identity);
+    if let Some(other) = &sister
+        && !record.programs.contains_key(other)
+    {
+        return Err(format!(
+            "{other}'s scripts are in {}, and that {other} is from before {app} and {other} \
+             could share an nvm folder. Update {other} and run `{other} self install`, then \
+             run this again. Nothing was changed.",
             nvm_dir.display()
         ));
     }
@@ -672,12 +790,35 @@ pub fn self_install_with(
     }
 
     // nvm-exec is the same file in nvm and nvmimic, so `nvm.sh` decides
-    // whose scripts these are: while it is nvmimic's, all three are.
+    // whose scripts these are: while it is nvmimic's, all three are. The
+    // same goes for a sister tool's, which are never official nvm's to keep.
     let existing: Vec<&str> = SCRIPTS
         .iter()
         .copied()
-        .filter(|name| present(&nvm_dir.join(name)) && !is_ours(&nvm_dir.join("nvm.sh"), identity))
+        .filter(|name| {
+            sister.is_none()
+                && present(&nvm_dir.join(name))
+                && !is_ours(&nvm_dir.join("nvm.sh"), identity)
+        })
         .collect();
+    if let Some(other) = &sister {
+        ui.say(&format!(
+            "{other} answers `nvm` in {} now. {app} and {other} are sister tools by the same",
+            nvm_dir.display()
+        ));
+        ui.say("author, and only one of them answers `nvm` at a time.");
+        ui.say(&format!(
+            "This puts {app}'s scripts in place of {other}'s. {other} stays installed and asleep,"
+        ));
+        ui.say(&format!(
+            "and takes over again when you tell it to. Nothing else in {} changes.",
+            nvm_dir.display()
+        ));
+        let question = format!("Let {app} answer `nvm` from now on?");
+        if !ask(ui, options, &question, false) {
+            return Err("stopped. Nothing was changed.".to_string());
+        }
+    }
     if !existing.is_empty() && !reinstall {
         ui.say(&format!("Found nvm in {}.", nvm_dir.display()));
         ui.say(&format!(
@@ -735,7 +876,7 @@ pub fn self_install_with(
         }
     }
 
-    if existing.is_empty() && !reinstall {
+    if existing.is_empty() && !reinstall && sister.is_none() {
         ui.say(&format!(
             "There is no nvm in {} yet, so {app} sets one up from scratch.",
             nvm_dir.display()
@@ -758,6 +899,11 @@ pub fn self_install_with(
 
     if options.dry_run {
         ui.say(&format!("Would install {app} for {}.", nvm_dir.display()));
+        if let Some(other) = &sister {
+            ui.say(&format!(
+                "Would put {app}'s scripts in place of {other}'s and leave {other} installed."
+            ));
+        }
         for name in &existing {
             ui.say(&format!(
                 "Would keep a copy of {} in {}.",
@@ -786,11 +932,12 @@ pub fn self_install_with(
 
     // From here on the order is what keeps a stop at any moment harmless,
     // whether it is a crash, a power cut or Ctrl-C. nvm's scripts are copied
-    // first, and the manifest that names the copies is written before
+    // first, and the shared record that names the copies is written before
     // anything of nvm's is replaced or uninstalled. So each of nvm's scripts
-    // is always in `$NVM_DIR` or in a backup the manifest knows about, and
+    // is always in `$NVM_DIR` or in a backup the record knows about, and
     // `self install` and `self uninstall` both work on whatever a stop left.
-    for dir in [&nvm_dir, &dirs.data, &backup, &dirs.cache] {
+    let record_before = record.clone();
+    for dir in [&nvm_dir, &dirs.data, &dirs.state, &backup, &dirs.cache] {
         fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     }
     let mut copied: Vec<&str> = Vec::new();
@@ -801,23 +948,34 @@ pub fn self_install_with(
             // own folder, and `brew uninstall nvm` deletes what they point
             // to. The copy holds the script itself, taken before that.
             match fs::read_link(&path) {
-                Ok(target) => manifest.links.insert(name.to_string(), target),
-                Err(_) => manifest.links.remove(*name),
+                Ok(target) => record.links.insert(name.to_string(), target),
+                Err(_) => record.links.remove(*name),
             };
             if !dead_link(&path) {
                 checkpoint()?;
                 keep_copy(&path, &backup.join(name))?;
                 copied.push(name);
-                if !manifest.backed_up.iter().any(|n| n == name) {
-                    manifest.backed_up.push(name.to_string());
+                if !record.backed_up.iter().any(|n| n == name) {
+                    record.backed_up.push(name.to_string());
                 }
             }
             // A script nvm has since put there is nvm's to keep on uninstall.
-            manifest.created.retain(|n| n != name);
-        } else if !present(&path) && !manifest.created.iter().any(|n| n == name) {
-            manifest.created.push(name.to_string());
+            record.created.retain(|n| n != name);
+        } else if !present(&path) && !record.created.iter().any(|n| n == name) {
+            record.created.push(name.to_string());
         }
     }
+    record.nvm_dir = Some(nvm_dir.clone());
+    record.answers = Some(app.to_string());
+    record.programs.insert(
+        app.to_string(),
+        Program {
+            binary: plan.path().to_path_buf(),
+            aside: false,
+        },
+    );
+    checkpoint()?;
+    record.write(dirs)?;
 
     let scripts: Vec<(&str, String)> = SCRIPTS
         .iter()
@@ -870,6 +1028,8 @@ pub fn self_install_with(
                     let _ = fs::remove_file(backup.join(name));
                 }
                 let _ = fs::remove_file(dirs.manifest());
+                let _ = fs::remove_dir(&dirs.state);
+                record_before.write(dirs)?;
             }
             return Err("`brew uninstall nvm` did not finish, so nothing was changed.".to_string());
         }
@@ -1100,7 +1260,48 @@ pub fn self_eject_with(
     ui: &mut dyn Ui,
     steps: &dyn Steps,
 ) -> Result<(), String> {
-    leave(env, options, ui, Leaving::Eject, steps)
+    leave(env, options, ui, Leaving::Eject, steps, false)
+}
+
+/// Hands `nvm` to the sister tool if one is set up, and otherwise to
+/// official nvm as [`self_eject_with`] does. The program stays installed
+/// and asleep until [`self_enable_with`] or `self install`. To the
+/// program's own steps this is [`Leaving::Eject`].
+pub fn self_disable_with(
+    env: &Env,
+    options: &Options,
+    ui: &mut dyn Ui,
+    steps: &dyn Steps,
+) -> Result<(), String> {
+    leave(env, options, ui, Leaving::Eject, steps, true)
+}
+
+/// Takes `nvm` back for a program that is installed and asleep, from the
+/// sister tool or from official nvm. It asks as [`self_install_with`] does.
+pub fn self_enable_with(
+    env: &Env,
+    running: &Path,
+    options: &Options,
+    ui: &mut dyn Ui,
+    steps: &dyn Steps,
+) -> Result<(), String> {
+    let identity = env.identity;
+    let app = identity.name;
+    let dirs = env.dirs()?;
+    let (manifest, record) = load(dirs, identity)?;
+    let Some(manifest) = manifest else {
+        return Err(format!(
+            "{app} is not installed yet. Run `{app} self install` first."
+        ));
+    };
+    let nvm_dir = manifest.nvm_dir.unwrap_or_else(|| env.nvm_dir());
+    if record.answers(identity) && is_ours(&nvm_dir.join("nvm.sh"), identity) {
+        return Err(format!(
+            "{app} already answers `nvm` in {}. Nothing was changed.",
+            nvm_dir.display()
+        ));
+    }
+    self_install_with(env, running, options, ui, steps)
 }
 
 /// `nvmimic self uninstall`, with or without `--purge`.
@@ -1120,26 +1321,33 @@ pub fn self_uninstall_with(
     } else {
         Leaving::Uninstall
     };
-    leave(env, options, ui, how, steps)
+    leave(env, options, ui, how, steps, false)
 }
 
+/// `disable` is the eject that prefers the sister tool to official nvm.
 fn leave(
     env: &Env,
     options: &Options,
     ui: &mut dyn Ui,
     how: Leaving,
     own: &dyn Steps,
+    disable: bool,
 ) -> Result<(), String> {
     let identity = env.identity;
     let app = identity.name;
     let dirs = env.dirs()?;
-    let Some(mut manifest) = Manifest::read(dirs) else {
+    let (manifest, mut record) = load(dirs, identity)?;
+    let Some(mut manifest) = manifest else {
         return Err(format!(
             "{app} is not installed. There is no record of an install in {}.",
             dirs.state.display()
         ));
     };
     let nvm_dir = manifest.nvm_dir.clone().unwrap_or_else(|| env.nvm_dir());
+    // The sister tool whose scripts are in the folder. This program is
+    // asleep then, and the scripts are not its own to touch.
+    let in_place = sister_in_place(&nvm_dir, identity);
+    manifest.ejected |= in_place.is_some();
     let backup = dirs.backup();
     let binary = manifest
         .binary
@@ -1151,7 +1359,7 @@ fn leave(
     // A backup someone deleted can't go back, and neither can one that is
     // a link to nothing, which is what an earlier nvmimic kept of a link
     // into Homebrew.
-    let mut restore: Vec<String> = manifest
+    let mut restore: Vec<String> = record
         .backed_up
         .iter()
         .filter(|name| fs::metadata(backup.join(name)).is_ok())
@@ -1166,7 +1374,7 @@ fn leave(
             let kept = backup.join(name);
             match dead_link(&kept) {
                 true => fs::read_link(&kept).ok(),
-                false => manifest.links.get(*name).cloned(),
+                false => record.links.get(*name).cloned(),
             }
             .map(|target| (*name, target))
         })
@@ -1188,8 +1396,38 @@ fn leave(
             .collect(),
     };
     let has_nvm_sh = |carried: &[(&str, String)]| carried.iter().any(|(name, _)| *name == "nvm.sh");
+    // With an `nvm.sh` that isn't nvmimic's, nobody can say whose
+    // `nvm-exec` is: nvm's and nvmimic's are the same file.
+    let nvm_sh_is_ours = found(
+        identity,
+        &nvm_dir.join("nvm.sh"),
+        "nvm.sh",
+        &manifest,
+        &binary,
+    ) != Found::NotOurs;
+    // The sister tool that gets `nvm`: on an uninstall and on a disable,
+    // while this program is the one in control.
+    let heir: Option<(String, PathBuf)> = match how {
+        Leaving::Uninstall => record.sister(identity),
+        Leaving::Eject if disable => record.sister(identity),
+        _ => None,
+    }
+    .filter(|_| !manifest.ejected && nvm_sh_is_ours)
+    .map(|(name, binary)| (name.to_string(), binary.to_path_buf()));
+    if heir.is_some() {
+        restore.clear();
+        dead.clear();
+        carried.clear();
+    }
 
-    if how == Leaving::Eject {
+    if how == Leaving::Eject && heir.is_none() {
+        if let Some(other) = &in_place {
+            return Err(format!(
+                "{other} answers `nvm` in {} now, so {app} has no scripts there to take out. \
+                 Nothing was changed.",
+                nvm_dir.display()
+            ));
+        }
         if manifest.ejected {
             return Err(format!(
                 "{app}'s scripts are already out of {}. Nothing was changed.",
@@ -1235,11 +1473,21 @@ fn leave(
     // nvm's older copy in the backup folder doesn't go back over them.
     let mut not_ours: Vec<&str> = Vec::new();
     if how == Leaving::Purge {
-        steps.push(Step::new(format!(
-            "delete {} and everything in it, your Node versions and aliases included ({})",
-            nvm_dir.display(),
-            human_size(folder_size(&nvm_dir))
-        )));
+        let others: Vec<&str> = record.others(identity).collect();
+        steps.push(Step {
+            note: (!others.is_empty()).then(|| {
+                format!(
+                    "{} is set up for {} too, and its scripts there go with the folder.",
+                    others.join(", "),
+                    nvm_dir.display()
+                )
+            }),
+            action: format!(
+                "delete {} and everything in it, your Node versions and aliases included ({})",
+                nvm_dir.display(),
+                human_size(folder_size(&nvm_dir))
+            ),
+        });
         if !restore.is_empty() {
             steps.push(Step::new(format!(
                 "delete the backup of nvm's own {} in {}",
@@ -1248,15 +1496,6 @@ fn leave(
             )));
         }
     } else if !manifest.ejected {
-        // With an `nvm.sh` that isn't nvmimic's, nobody can say whose
-        // `nvm-exec` is: nvm's and nvmimic's are the same file.
-        let nvm_sh_is_ours = found(
-            identity,
-            &nvm_dir.join("nvm.sh"),
-            "nvm.sh",
-            &manifest,
-            &binary,
-        ) != Found::NotOurs;
         for name in SCRIPTS {
             let path = nvm_dir.join(name);
             let state = match found(identity, &path, name, &manifest, &binary) {
@@ -1266,9 +1505,10 @@ fn leave(
             match state {
                 Found::OursEdited => {
                     let saved = saved_path(&path, app);
+                    let verb = if heir.is_some() { "copy" } else { "rename" };
                     steps.push(Step {
                         note: Some(format!("{name} was edited after {app} installed it.")),
-                        action: format!("rename {} to {}", path.display(), saved.display()),
+                        action: format!("{verb} {} to {}", path.display(), saved.display()),
                     });
                     edited.push((name, path, saved));
                 }
@@ -1290,7 +1530,12 @@ fn leave(
         carried.retain(|(name, _)| {
             !not_ours.contains(name) && !edited.iter().any(|(edited, _, _)| edited == name)
         });
-        if not_ours.len() < SCRIPTS.len() {
+        if let Some((other, program)) = &heir {
+            steps.push(Step::new(format!(
+                "hand `nvm` over to {other} by running `{} self install --force`",
+                program.display()
+            )));
+        } else if not_ours.len() < SCRIPTS.len() {
             steps.push(Step::new(format!(
                 "remove {app}'s scripts from {}",
                 nvm_dir.display()
@@ -1338,6 +1583,18 @@ fn leave(
 
     match how {
         Leaving::Purge => {}
+        _ if in_place.is_some() => ui.say(&format!(
+            "{} answers `nvm` in {} now, so the scripts there stay as they are.",
+            in_place.as_deref().unwrap_or_default(),
+            nvm_dir.display()
+        )),
+        _ if heir.is_some() => {
+            let other = heir.as_ref().map_or("", |(name, _)| name);
+            ui.say(&format!(
+                "{other} is set up for {} too, so it answers `nvm` from now on. {app} and {other} are sister tools by the same author.",
+                nvm_dir.display()
+            ));
+        }
         _ if manifest.ejected => ui.say(&format!(
             "{app}'s scripts are already out of {}.",
             nvm_dir.display()
@@ -1390,10 +1647,11 @@ fn leave(
         for step in &steps {
             ui.say(&step.line("This will"));
         }
-        let question = match how {
-            Leaving::Eject => format!("Put nvm back in {}?", nvm_dir.display()),
-            Leaving::Uninstall => format!("Remove {app} from {}?", nvm_dir.display()),
-            Leaving::Purge => format!("Delete {} for good?", nvm_dir.display()),
+        let question = match (how, &heir) {
+            (Leaving::Eject, Some((other, _))) => format!("Hand `nvm` over to {other}?"),
+            (Leaving::Eject, None) => format!("Put nvm back in {}?", nvm_dir.display()),
+            (Leaving::Uninstall, _) => format!("Remove {app} from {}?", nvm_dir.display()),
+            (Leaving::Purge, _) => format!("Delete {} for good?", nvm_dir.display()),
         };
         if !ui.ask(&question, false) {
             return Err("stopped. Nothing was changed.".to_string());
@@ -1407,9 +1665,25 @@ fn leave(
             }
             _ => {}
         }
-        for name in &manifest.backed_up {
+        for name in &record.backed_up {
             let _ = fs::remove_file(backup.join(name));
         }
+    } else if let Some((other, program)) = &heir {
+        // The sister tool writes its own scripts over these, so an edited
+        // one is copied aside first, and nothing is taken out of the folder.
+        for (name, path, saved) in &edited {
+            fs::copy(path, saved).map_err(|e| format!("{}: {e}", path.display()))?;
+            ui.say(&format!(
+                "{name} was edited after {app} installed it. Copied {} to {}.",
+                path.display(),
+                saved.display()
+            ));
+        }
+        handover::hand_to(other, program, &nvm_dir).map_err(|said| {
+            format!("{other} could not take over ({said}), so {app} stays as it was.")
+        })?;
+        // The sister tool wrote the record.
+        record = Record::read(dirs).unwrap_or(record);
     } else if !manifest.ejected {
         for (name, path, saved) in &edited {
             fs::rename(path, saved).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -1438,7 +1712,7 @@ fn leave(
         for name in &restore {
             let kept = backup.join(name);
             let path = nvm_dir.join(name);
-            match manifest.links.get(name) {
+            match record.links.get(name) {
                 // A link goes back as the link it was while its target is
                 // still there. `join` leaves a full path as it is.
                 Some(target) if fs::metadata(nvm_dir.join(target)).is_ok() => {
@@ -1473,19 +1747,43 @@ fn leave(
 
     own.leave(&site, how, &mut manifest, ui)?;
 
+    // What the shared record says afterwards. Scripts that went back are
+    // no longer in the backup, and with a sister tool in the folder the
+    // backup is as it was.
+    if how == Leaving::Purge {
+        record.backed_up.clear();
+    }
+    if in_place.is_none() && heir.is_none() {
+        record.backed_up.retain(|name| present(&backup.join(name)));
+        record.links.clear();
+        record.created.clear();
+    }
+    if let Some(other) = &in_place {
+        record.answers = Some(other.clone());
+    } else if record.answers(identity) {
+        record.answers = None;
+    }
+
     if how == Leaving::Eject {
-        manifest.backed_up.clear();
-        manifest.links.clear();
-        manifest.created.clear();
         manifest.fingerprints.clear();
         manifest.ejected = true;
         manifest.write(dirs, env.identity)?;
-        let _ = fs::remove_dir(&backup);
-        ui.say(&format!(
-            "Done. nvm is back in {}, and the {app} program stays at {}.",
-            nvm_dir.display(),
-            binary.display()
-        ));
+        if let Some(program) = record.programs.get_mut(app) {
+            program.aside = true;
+        }
+        record.write(dirs)?;
+        ui.say(&match &heir {
+            Some((other, _)) => format!(
+                "Done. {other} answers `nvm` in {} now, and the {app} program stays at {}.",
+                nvm_dir.display(),
+                binary.display()
+            ),
+            None => format!(
+                "Done. nvm is back in {}, and the {app} program stays at {}.",
+                nvm_dir.display(),
+                binary.display()
+            ),
+        });
         return Ok(());
     }
 
@@ -1509,17 +1807,32 @@ fn leave(
         let _ = fs::remove_file(crate::update::previous_path(dirs, identity, version));
     }
     let _ = fs::remove_dir(dirs.state.join("previous"));
-    let _ = fs::remove_dir(&backup);
+    let _ = fs::remove_dir(dirs.backup_before_sharing());
     let _ = fs::remove_dir(&dirs.state);
+    record.programs.remove(app);
+    record.write(dirs)?;
 
     // "nvmimic is gone" would be wrong while its program is still there.
     let back =
         !restore.is_empty() || manifest.ejected || !not_ours.is_empty() || has_nvm_sh(&carried);
+    // The sister tool that answers `nvm` afterwards, and since when.
+    let sister = match (&heir, &in_place) {
+        (Some((other, _)), _) => Some(format!("{other} answers `nvm` now")),
+        (None, Some(other)) => Some(format!("{other} keeps answering `nvm`")),
+        (None, None) => None,
+    };
     ui.say(&match (how, placed.is_some()) {
         (Leaving::Purge, true) => format!("Done. {app} and the nvm folder are gone."),
         (Leaving::Purge, false) => {
             format!("Done. The nvm folder is gone, and {app}'s own files with it.")
         }
+        (_, true) if sister.is_some() => {
+            format!("Done. {app} is gone, and {}.", sister.unwrap_or_default())
+        }
+        (_, false) if sister.is_some() => format!(
+            "Done. {app} is out of the nvm folder, and {}.",
+            sister.unwrap_or_default()
+        ),
         (_, true) if back => format!("Done. {app} is gone and nvm is back."),
         (_, true) => format!("Done. {app} is gone."),
         (_, false) if back => format!("Done. {app} is out of the nvm folder and nvm is back."),

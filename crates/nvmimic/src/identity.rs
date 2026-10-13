@@ -14,8 +14,10 @@
 //! | files it leaves | `nvm.sh.nvmimic-saved`, `previous/nvmimic-<version>` |
 //! | markers in its scripts | `as nvmimic provides it`, `Changed by nvmimic` |
 //!
-//! Two programs built on this library never share an nvm folder. Each one
-//! finds the other's marker in `nvm.sh` and refuses to install over it.
+//! Two programs built on this library can be installed for the same nvm
+//! folder. Only one of them answers `nvm` at a time, and each finds the
+//! other by the marker in `nvm.sh` and by the record they share, see
+//! [`crate::handover`].
 
 use crate::complete::Command;
 use std::borrow::Cow;

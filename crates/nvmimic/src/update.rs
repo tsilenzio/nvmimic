@@ -136,6 +136,11 @@ fn write_scripts(identity: &Identity, binary: &Path, manifest: &Manifest) -> boo
         .args(["self", "install", "--force"])
         .env(identity.setting("INSTALL_PATH"), binary);
     if let Some(nvm_dir) = &manifest.nvm_dir {
+        // While a sister tool answers `nvm`, the scripts in the folder are
+        // its own, and an update is no word to take over from it.
+        if crate::install::sister_in_place(nvm_dir, identity).is_some() {
+            return true;
+        }
         command.env("NVM_DIR", nvm_dir);
     }
     command.output().is_ok_and(|output| output.status.success())
@@ -372,4 +377,31 @@ pub fn self_rollback(env: &Env, options: &Options, ui: &mut dyn Ui) -> Result<()
         "{app} {previous} is back. `{app} self rollback` again returns to {current}."
     ));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_update_while_a_sister_tool_answers_writes_no_scripts() {
+        let root = std::env::temp_dir().join(format!("nvmimic-update-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let manifest = Manifest {
+            nvm_dir: Some(root.clone()),
+            ..Manifest::default()
+        };
+        // No program is at this path, so trying to run it fails.
+        let nowhere = root.join("no-program");
+        let me = &Identity::NVMIMIC;
+
+        fs::write(root.join("nvm.sh"), "# Node Version Manager\n").unwrap();
+        assert!(!write_scripts(me, &nowhere, &manifest));
+        let sisters = "# Node Version Manager, as shelfy provides it.\n";
+        fs::write(root.join("nvm.sh"), sisters).unwrap();
+        assert!(write_scripts(me, &nowhere, &manifest));
+        assert_eq!(fs::read_to_string(root.join("nvm.sh")).unwrap(), sisters);
+        let _ = fs::remove_dir_all(&root);
+    }
 }

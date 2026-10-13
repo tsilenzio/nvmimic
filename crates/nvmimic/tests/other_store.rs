@@ -1015,75 +1015,9 @@ fn a_step_of_the_programs_own_that_fails_leaves_official_nvm_working() {
     );
 }
 
-#[test]
-fn two_programs_never_share_an_nvm_folder() {
-    for (first, second) in [(&SHELFY, &Identity::NVMIMIC), (&Identity::NVMIMIC, &SHELFY)] {
-        let home = home("shared");
-        official_nvm(&home);
-        let program = program_file(&home);
-        install::self_install(
-            &env_for(first, &home),
-            &program,
-            &force(),
-            &mut Said::default(),
-        )
-        .unwrap();
-        let before = fs::read(home.join(".nvm/nvm.sh")).unwrap();
-
-        let mut ui = Said::default();
-        let refused = install::self_install(&env_for(second, &home), &program, &force(), &mut ui);
-        let (one, other) = (first.name, second.name);
-        assert_eq!(
-            refused,
-            Err(format!(
-                "{one}'s scripts are in {}, and {other} and {one} can't share an nvm folder. Run \
-                 `{one} self eject` or `{one} self uninstall` first. Nothing was changed.",
-                home.join(".nvm").display()
-            ))
-        );
-        assert_eq!(fs::read(home.join(".nvm/nvm.sh")).unwrap(), before);
-        assert!(!home.join(".local/state").join(other).exists());
-        assert!(!home.join(".local/bin").join(other).exists());
-        assert!(ui.0.is_empty(), "{:?}", ui.0);
-        // A dry run is refused the same way.
-        let dry = Options {
-            dry_run: true,
-            ..Options::default()
-        };
-        assert!(
-            install::self_install(
-                &env_for(second, &home),
-                &program,
-                &dry,
-                &mut Said::default()
-            )
-            .is_err()
-        );
-
-        // Once the first program is out, the second one takes over from
-        // official nvm like any other install.
-        install::self_eject(&env_for(first, &home), &force(), &mut Said::default()).unwrap();
-        install::self_install(
-            &env_for(second, &home),
-            &program,
-            &force(),
-            &mut Said::default(),
-        )
-        .unwrap();
-        let nvm_sh = fs::read_to_string(home.join(".nvm/nvm.sh")).unwrap();
-        assert_eq!(nvmimic::identity::program_of(&nvm_sh), Some(other));
-        // And now the first is the one that is refused.
-        assert!(
-            install::self_install(
-                &env_for(first, &home),
-                &program,
-                &force(),
-                &mut Said::default()
-            )
-            .is_err()
-        );
-    }
-}
+// Two programs in one nvm folder, and every way `nvm` goes from one to the
+// other, are in `crates/nvmimic-cli/tests/sister.rs`, where both are real
+// programs.
 
 #[test]
 fn unload_and_completion_go_by_the_programs_name() {

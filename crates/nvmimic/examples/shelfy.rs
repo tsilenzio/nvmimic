@@ -73,9 +73,9 @@ fn init(host: &Host, named: Option<Named>) -> ExitCode {
     }
 }
 
-/// `shelfy self install`, `eject` and `uninstall`. The library does each of
-/// them for the identity in `Env`, and `ShelfSteps` adds what only shelfy
-/// knows how to do.
+/// `shelfy self install`, `eject`, `uninstall`, `disable` and `enable`. The
+/// library does each of them for the identity in `Env`, and `ShelfSteps`
+/// adds what only shelfy knows how to do.
 fn self_command(shelf: &Shelf, action: &str, flags: &[&str]) -> ExitCode {
     let options = Options {
         force: flags.contains(&"--force"),
@@ -92,6 +92,13 @@ fn self_command(shelf: &Shelf, action: &str, flags: &[&str]) -> ExitCode {
             Err(error) => Err(error.to_string()),
         },
         "eject" => install::self_eject_with(&env, &options, &mut ui, &steps),
+        // Hands `nvm` to nvmimic or another sister tool if one is set up,
+        // and to official nvm otherwise. `enable` takes it back.
+        "disable" => install::self_disable_with(&env, &options, &mut ui, &steps),
+        "enable" => match env::current_exe() {
+            Ok(program) => install::self_enable_with(&env, &program, &options, &mut ui, &steps),
+            Err(error) => Err(error.to_string()),
+        },
         "uninstall" => install::self_uninstall_with(&env, &options, &mut ui, &steps),
         _ => Err(format!("there is no command self {action}.")),
     };
