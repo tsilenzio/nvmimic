@@ -208,11 +208,22 @@ fn cargo_with(args: &[&str], record: bool, run: &str, only: Option<&Path>, netwo
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 
 /// A macOS sandbox rule that lets everything through except starting the
-/// programs that ask for a password or a fingerprint. Some of nvm's own tests
-/// call `sudo`. The stand-in on each sandbox's `PATH` catches that by name,
-/// and this catches every other way to reach it, for every child process.
+/// programs that ask for a password or a fingerprint, and Homebrew. Some of
+/// nvm's own tests call `sudo`. The stand-in on each sandbox's `PATH` catches
+/// that by name, and this catches every other way to reach it, for every
+/// child process.
+///
+/// `brew` is here because `self install` runs `brew uninstall nvm` when it
+/// finds Homebrew's nvm, and a test must never do that to the machine it
+/// runs on. The library keeps a throwaway home away from the real Homebrew
+/// by itself. This holds even if that ever stops being true. `brew` is a
+/// script, so reading it is refused as well, or `bash /opt/homebrew/bin/brew`
+/// would still run it.
 const NO_SUDO: &str = "(version 1)(allow default)(deny process-exec \
-    (literal \"/usr/bin/sudo\") (literal \"/usr/bin/su\") (literal \"/usr/bin/security\"))";
+    (literal \"/usr/bin/sudo\") (literal \"/usr/bin/su\") (literal \"/usr/bin/security\") \
+    (literal \"/opt/homebrew/bin/brew\") (literal \"/usr/local/bin/brew\"))\
+    (deny file-read-data \
+    (literal \"/opt/homebrew/bin/brew\") (literal \"/usr/local/bin/brew\"))";
 
 /// Whether tests can run under [`NO_SUDO`]: on macOS, and not already inside
 /// a sandbox, which can't hold a second one. Says so once when it can't.
@@ -227,7 +238,7 @@ fn no_sudo() -> bool {
         .is_ok_and(|status| status.success());
     if !works {
         eprintln!(
-            "xtask: can't block sudo here (sandbox-exec failed), tests run without the block"
+            "xtask: can't block sudo and brew here (sandbox-exec failed), tests run without the block"
         );
     }
     works

@@ -418,6 +418,7 @@ mod tests {
             nvm_dir: None,
             xdg_config_home: None,
             homebrew_prefix: None,
+            homebrew_usual_places: false,
             cargo_home: None,
             path: None,
             dirs: Some(dirs.clone()),

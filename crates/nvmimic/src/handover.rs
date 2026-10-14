@@ -232,6 +232,8 @@ pub const LOCK_WAIT: Duration = Duration::from_secs(2);
 /// The lock on the shared record, held until this is dropped.
 pub struct Lock {
     held: Option<(fs::File, Dirs)>,
+    /// Folders that had to be made for the lock file, deepest first.
+    made: Vec<PathBuf>,
 }
 
 impl Drop for Lock {
@@ -245,6 +247,10 @@ impl Drop for Lock {
         // behind for the lock's sake either.
         if !dirs.record().exists() {
             let _ = fs::remove_file(dirs.shared_lock());
+            // A folder goes only if this made it and it is still empty.
+            for folder in &self.made {
+                let _ = fs::remove_dir(folder);
+            }
         }
     }
 }
@@ -257,11 +263,20 @@ impl Drop for Lock {
 /// Where the file can't be made or this kind of lock doesn't exist, the
 /// command carries on without one.
 pub fn lock(dirs: &Dirs, identity: &Identity, wait: Duration) -> Result<Lock, String> {
-    let unlocked = Ok(Lock { held: None });
+    let unlocked = Ok(Lock {
+        held: None,
+        made: Vec::new(),
+    });
     if std::env::var_os(LOCK_HELD).is_some() {
         return unlocked;
     }
     let path = dirs.shared_lock();
+    let made: Vec<PathBuf> = path
+        .ancestors()
+        .skip(1)
+        .take_while(|folder| !folder.exists())
+        .map(Path::to_path_buf)
+        .collect();
     if let Some(folder) = path.parent() {
         let _ = fs::create_dir_all(folder);
     }
@@ -293,6 +308,7 @@ pub fn lock(dirs: &Dirs, identity: &Identity, wait: Duration) -> Result<Lock, St
             let _ = file.write_all(holder.as_bytes());
             return Ok(Lock {
                 held: Some((file, dirs.clone())),
+                made,
             });
         }
         if std::io::Error::last_os_error().raw_os_error() != Some(libc::EWOULDBLOCK) {

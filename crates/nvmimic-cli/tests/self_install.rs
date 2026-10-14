@@ -782,6 +782,75 @@ fn homebrew_nvm_is_uninstalled_first() {
     assert_eq!(fs::read_to_string(&log).unwrap(), "uninstall nvm\n");
 }
 
+/// A `brew` that only writes down what it was asked, and the log it writes.
+fn stand_in_brew(dir: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    fs::create_dir_all(dir).unwrap();
+    let log = dir.join("brew.log");
+    let brew = dir.join("brew");
+    fs::write(
+        &brew,
+        format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+    log
+}
+
+/// A stand-in `brew` is first on `PATH` in every run here, where a real one
+/// would be for someone with Homebrew. None of the runs may start it.
+#[test]
+fn no_brew_is_started_that_the_environment_did_not_name() {
+    let run = |home: &Home, prefix: Option<&Path>| {
+        let on_path = home.root.join("on-path");
+        let log = stand_in_brew(&on_path);
+        let mut command = Command::new(env!("CARGO_BIN_EXE_nvmimic"));
+        command
+            .args(["self", "install", "--force"])
+            .env_clear()
+            .env("HOME", &home.root)
+            .env("PATH", format!("{}:/usr/bin:/bin", on_path.display()))
+            .stdin(std::process::Stdio::null());
+        if let Some(prefix) = prefix {
+            command.env("HOMEBREW_PREFIX", prefix);
+        }
+        (command.output().unwrap(), log)
+    };
+
+    // A throwaway home and no `HOMEBREW_PREFIX`: Homebrew's usual places
+    // are not looked in, so whatever this machine has there is not found.
+    let home = Home::new();
+    real_nvm(&home);
+    let (out, log) = run(&home, None);
+    let stdout = text(&out.stdout);
+    assert!(out.status.success(), "{stdout}{}", text(&out.stderr));
+    assert!(!stdout.contains("Homebrew"), "{stdout}");
+    assert!(!log.exists());
+
+    // A prefix that holds nvm and no `brew`: the one on `PATH` is not a
+    // substitute. The install stops with nothing changed.
+    let home = Home::new();
+    real_nvm(&home);
+    let prefix = home.root.join("brew");
+    fs::create_dir_all(prefix.join("opt/nvm")).unwrap();
+    let before = snapshot(&home.nvm_dir());
+    let (out, log) = run(&home, Some(&prefix));
+    assert_eq!(out.status.code(), Some(1));
+    let said = text(&out.stderr);
+    assert!(said.contains("there is no brew at"), "{said}");
+    assert!(said.contains("Nothing was changed."), "{said}");
+    assert!(!log.exists());
+    assert_eq!(snapshot(&home.nvm_dir()), before);
+    assert!(!home.root.join(".local").exists());
+
+    // With a `brew` under the prefix, that one is run and no other.
+    let named = stand_in_brew(&prefix.join("bin"));
+    let (out, log) = run(&home, Some(&prefix));
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert_eq!(fs::read_to_string(named).unwrap(), "uninstall nvm\n");
+    assert!(!log.exists());
+}
+
 /// Runs git in a directory with a throwaway identity and returns its stdout.
 fn git(home: &Home, dir: &Path, args: &[&str]) -> String {
     let out = Command::new("git")

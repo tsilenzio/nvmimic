@@ -704,6 +704,7 @@ fn env_for(identity: &'static Identity, home: &Path) -> Env {
         nvm_dir: None,
         xdg_config_home: None,
         homebrew_prefix: Some(format!("{at_home}/no-homebrew")),
+        homebrew_usual_places: false,
         cargo_home: None,
         path: None,
         dirs: Dirs::resolve_for(identity, |name| (name == "HOME").then(|| at_home.clone())),

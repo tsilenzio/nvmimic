@@ -160,7 +160,14 @@ pub struct Env {
     pub home: PathBuf,
     pub nvm_dir: Option<String>,
     pub xdg_config_home: Option<String>,
+    /// `HOMEBREW_PREFIX`. When it is set, it is the only place Homebrew's
+    /// nvm is looked for.
     pub homebrew_prefix: Option<String>,
+    /// Whether Homebrew's usual places are looked in when `HOMEBREW_PREFIX`
+    /// is not set. Only for someone in their own home folder, see
+    /// [`in_own_home`]. A struct built by hand for a throwaway home sets
+    /// `false`.
+    pub homebrew_usual_places: bool,
     pub cargo_home: Option<String>,
     pub path: Option<String>,
     /// Where nvmimic's own files go. `None` without a home folder.
@@ -185,6 +192,7 @@ impl Env {
             nvm_dir: var("NVM_DIR"),
             xdg_config_home: var("XDG_CONFIG_HOME"),
             homebrew_prefix: var("HOMEBREW_PREFIX"),
+            homebrew_usual_places: in_own_home(var("HOME").as_deref(), account_home().as_deref()),
             cargo_home: var("CARGO_HOME"),
             path: var("PATH"),
             dirs: Dirs::resolve_for(identity, var),
@@ -212,17 +220,74 @@ impl Env {
     }
 
     /// Homebrew's nvm, if it is installed: the prefix it lives under.
+    ///
+    /// Where this looks follows the environment, because finding it ends in
+    /// `brew uninstall nvm`. `HOMEBREW_PREFIX` is the only place when it is
+    /// set. Without it, Homebrew's usual places count only for someone in
+    /// their own home folder. A test in a throwaway home, or any other run
+    /// with `HOME` pointed somewhere else, never reaches the Homebrew that
+    /// is really on the machine.
     fn homebrew_nvm(&self) -> Option<PathBuf> {
-        let mut prefixes: Vec<PathBuf> = Vec::new();
-        if let Some(prefix) = &self.homebrew_prefix {
-            prefixes.push(prefix.into());
-        }
-        for prefix in ["/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"] {
-            prefixes.push(prefix.into());
-        }
-        prefixes
-            .into_iter()
-            .find(|prefix| prefix.join("opt/nvm").exists())
+        let usual: Vec<PathBuf> = HOMEBREW_USUAL_PLACES.iter().map(PathBuf::from).collect();
+        homebrew_nvm_in(
+            self.homebrew_prefix.as_deref(),
+            self.homebrew_usual_places,
+            &usual,
+        )
+    }
+}
+
+/// [`Env::homebrew_nvm`] with the usual places handed in.
+fn homebrew_nvm_in(prefix: Option<&str>, usual_count: bool, usual: &[PathBuf]) -> Option<PathBuf> {
+    let prefixes: Vec<PathBuf> = match prefix {
+        Some(prefix) => vec![prefix.into()],
+        None if usual_count => usual.to_vec(),
+        None => Vec::new(),
+    };
+    prefixes
+        .into_iter()
+        .find(|prefix| prefix.join("opt/nvm").exists())
+}
+
+/// Where Homebrew installs itself: Apple silicon, Intel Macs, Linux.
+const HOMEBREW_USUAL_PLACES: [&str; 3] =
+    ["/opt/homebrew", "/usr/local", "/home/linuxbrew/.linuxbrew"];
+
+/// The home folder the system has on record for whoever runs the program,
+/// whatever `HOME` says.
+fn account_home() -> Option<PathBuf> {
+    use std::ffi::{CStr, OsStr};
+    use std::os::unix::ffi::OsStrExt;
+    let mut buffer = vec![0; 4096];
+    // SAFETY: a zeroed passwd is a valid value for getpwuid_r to fill in.
+    let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+    let mut found: *mut libc::passwd = std::ptr::null_mut();
+    // SAFETY: every pointer is to a value that lives through the call, and
+    // the length is the buffer's own.
+    let status = unsafe {
+        libc::getpwuid_r(
+            libc::getuid(),
+            &mut entry,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut found,
+        )
+    };
+    if status != 0 || found.is_null() || entry.pw_dir.is_null() {
+        return None;
+    }
+    // SAFETY: getpwuid_r succeeded, so pw_dir points at a string in `buffer`.
+    let home = unsafe { CStr::from_ptr(entry.pw_dir) };
+    Some(PathBuf::from(OsStr::from_bytes(home.to_bytes())))
+}
+
+/// Whether `HOME` is the home folder of the account, and not a folder
+/// something pointed it at for one run. Not knowing counts as no.
+fn in_own_home(home: Option<&str>, account: Option<&Path>) -> bool {
+    let real = |path: &Path| fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    match (home, account) {
+        (Some(home), Some(account)) => real(Path::new(home)) == real(account),
+        _ => false,
     }
 }
 
@@ -978,7 +1043,7 @@ fn install(
             "Homebrew's nvm is installed at {}.",
             prefix.join("opt/nvm").display()
         ));
-        ui.say("Shells that load Homebrew's nvm.sh would keep running real nvm, so it has to");
+        ui.say("Shells that load Homebrew's nvm.sh would keep running official nvm, so it has to");
         ui.say(&format!(
             "go before {app} can take over. Your installed Node versions stay where they are."
         ));
@@ -986,6 +1051,16 @@ fn install(
             ui.say(&format!(
                 "  {} loads Homebrew's nvm. Change it to load $NVM_DIR/nvm.sh.",
                 file.display()
+            ));
+        }
+        // Only the `brew` of the Homebrew that has this nvm is ever run, and
+        // never whichever one is on `PATH`.
+        let brew = prefix.join("bin/brew");
+        if !brew.is_file() {
+            return Err(format!(
+                "there is no brew at {} to remove it with. Run `brew uninstall nvm` yourself, \
+                 then run this again. Nothing was changed.",
+                brew.display()
             ));
         }
         if !ask(ui, options, "Run `brew uninstall nvm` now?", false) {
@@ -1244,11 +1319,6 @@ fn install(
 
     if let Some(prefix) = &homebrew {
         let brew = prefix.join("bin/brew");
-        let brew = if brew.is_file() {
-            brew
-        } else {
-            PathBuf::from("brew")
-        };
         let status = Command::new(&brew).args(["uninstall", "nvm"]).status();
         if !status.is_ok_and(|status| status.success()) {
             // Nothing of nvm's was touched yet. A first install leaves no
@@ -2438,6 +2508,7 @@ mod tests {
             nvm_dir: None,
             xdg_config_home: None,
             homebrew_prefix: Some(format!("{home}/no-homebrew")),
+            homebrew_usual_places: false,
             cargo_home: None,
             path: None,
             dirs: Dirs::resolve(|name| (name == "HOME").then(|| home.clone())),
@@ -2718,6 +2789,67 @@ mod tests {
     }
 
     #[test]
+    fn homebrews_nvm_is_looked_for_where_the_environment_says() {
+        let root = std::env::temp_dir().join(format!("nvmimic-brew-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        // A stand-in for a Homebrew that is really on the machine, with nvm.
+        let on_the_machine = root.join("opt-homebrew");
+        fs::create_dir_all(on_the_machine.join("opt/nvm")).unwrap();
+        let usual = [root.join("nothing-here"), on_the_machine.clone()];
+        let named = root.join("named");
+        let named_text = named.to_string_lossy().into_owned();
+
+        // `HOMEBREW_PREFIX` is the only place when it is set, in one's own
+        // home folder or not.
+        for own_home in [false, true] {
+            assert_eq!(homebrew_nvm_in(Some(&named_text), own_home, &usual), None);
+        }
+        fs::create_dir_all(named.join("opt/nvm")).unwrap();
+        assert_eq!(
+            homebrew_nvm_in(Some(&named_text), true, &usual),
+            Some(named.clone())
+        );
+        // Without it, a run in a throwaway home finds none, and only
+        // someone in their own home folder finds the one on the machine.
+        assert_eq!(homebrew_nvm_in(None, false, &usual), None);
+        assert_eq!(homebrew_nvm_in(None, true, &usual), Some(on_the_machine));
+
+        // A home folder is one's own when it is the account's, by any path.
+        let home = root.join("home");
+        fs::create_dir_all(&home).unwrap();
+        std::os::unix::fs::symlink(&home, root.join("link")).unwrap();
+        let text = |path: &Path| path.to_string_lossy().into_owned();
+        assert!(in_own_home(Some(&text(&home)), Some(&home)));
+        assert!(in_own_home(Some(&text(&root.join("link"))), Some(&home)));
+        assert!(!in_own_home(Some(&text(&root.join("named"))), Some(&home)));
+        assert!(!in_own_home(None, Some(&home)));
+        assert!(!in_own_home(Some(&text(&home)), None));
+        // The account running the tests has a home folder on record.
+        assert!(account_home().is_some_and(|home| home.is_absolute()));
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_the_brew_under_the_prefix_is_ever_run() {
+        let mut env = home_with_nvm("no-brew");
+        let prefix = env.home.join("brew");
+        fs::create_dir_all(prefix.join("opt/nvm")).unwrap();
+        env.homebrew_prefix = Some(prefix.to_string_lossy().into_owned());
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        // No `brew` under the prefix: nothing is run, whatever `brew` is on
+        // the `PATH` of whoever runs the tests, and nothing is changed.
+        let said = self_install(&env, &env.home.join("program"), &force, &mut quiet()).unwrap_err();
+        assert!(said.starts_with("there is no brew at "), "{said}");
+        assert!(said.ends_with("Nothing was changed."), "{said}");
+        assert!(Manifest::read(env.dirs().unwrap()).is_none());
+        assert!(nvm_is_back(&env));
+        let _ = fs::remove_dir_all(&env.home);
+    }
+
+    #[test]
     fn force_takes_the_default_of_a_question_about_something_extra() {
         let copy = |env: &Env| env.home.join(".nvm.backup-1");
         let copy_question = |line: &String| line.starts_with("Copy all of ");
@@ -2795,6 +2927,7 @@ mod tests {
             nvm_dir: None,
             xdg_config_home: None,
             homebrew_prefix: Some(format!("{home}/no-homebrew")),
+            homebrew_usual_places: false,
             cargo_home: None,
             path: None,
             dirs: Dirs::resolve(|name| (name == "HOME").then(|| home.clone())),
@@ -2852,6 +2985,7 @@ mod tests {
             nvm_dir: None,
             xdg_config_home: None,
             homebrew_prefix: None,
+            homebrew_usual_places: false,
             cargo_home: None,
             path: None,
             dirs: None,
