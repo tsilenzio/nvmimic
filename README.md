@@ -26,9 +26,19 @@ commands to one fast program, so a new shell barely notices it.
 
 ## Status
 
-This is nvmimic 0.1.2, an early release. It copies nvm 0.40.8 and runs on
-macOS. It passes its own tests, but few people have used it yet, so expect
-rough edges and keep `nvmimic self eject` in mind as the way back.
+This is nvmimic 1.0.0, the first regular release. It copies nvm 0.40.8 and
+runs on macOS.
+
+Here is what the 1.0 covers. `nvm` in your shell does what nvm 0.40.8 does,
+apart from the differences listed further down. The `nvmimic` commands
+(`self install` and its siblings, and `init`) keep doing what this README
+says. A change that breaks one of those waits for 2.0.
+
+The Rust library in `crates/nvmimic` isn't covered yet. Its interface can
+still change in any release, so name an exact version if you build on it.
+
+nvmimic is new. If something doesn't work for you, `nvmimic self eject`
+hands your shell back to official nvm.
 
 Every nvm command now runs in nvmimic itself.
 For downloading and unpacking Node, and for npm, it starts the same programs
@@ -83,7 +93,11 @@ you start from scratch. If nvm is already there, nvmimic takes it over: it keeps
 settings, keeps a copy of nvm's own scripts in a backup folder, and offers to copy
 the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
-load Homebrew's copy would keep running official nvm.
+load Homebrew's copy would keep running official nvm. It looks for that nvm
+under `HOMEBREW_PREFIX` if the variable is set, and nowhere else then.
+Without it, nvmimic checks the folders Homebrew normally installs into, but
+only while `HOME` is your account's own home folder. The `brew` it runs is
+always the one under the folder where it found nvm.
 
 `--force` means "don't ask". The command goes ahead with what you told it
 to do. A question about something extra gets the answer you'd give by
@@ -518,6 +532,11 @@ names after itself is then named after your program: its folders
 (`~/.local/state/<name>`), its settings (`<NAME>_STATE_DIR`), its shell
 function (`__<name>_handoff`) and the name in every message.
 
+A few sentences of the installer are only true for nvmimic, such as the one
+that says it uses the Node versions already in the nvm folder. Those are
+part of the `Identity` too (`words`), so a program that keeps Node
+somewhere else says what's true for it.
+
 Three more pieces finish a program:
 
 - `Host` answers the shell functions and prints what `<name> init` prints.
@@ -555,8 +574,10 @@ nvmimic and `shelfy` through every one of these moves.
 The parity tests can compare your program with official nvm as well. You
 describe it as a `Subject` (in `tests/differential/src/subject.rs`): how it
 gets installed, which shell functions are its own, and where it differs on
-purpose. `tests/differential/tests/second_subject.rs` does that for
-`shelfy`.
+purpose. A rule about a difference can leave out a whole piece of a test's
+result, or only the lines you name, so the rest is still compared. The
+summary of a run says how many tests matched only because of such rules.
+`tests/differential/tests/second_subject.rs` does all of that for `shelfy`.
 
 `nvm.sh` talks to the nvmimic program through the `__nvmimic_handoff`
 function and an internal command of the program that isn't in its help.
@@ -631,6 +652,10 @@ The tests are built to avoid that now:
 - A guard runs a brand new script every two seconds and times it. If that
   gets slow, the tests pause until it's fast again. If it stays slow, the
   tests stop.
+
+The tests can't reach the Homebrew that is really on your machine either.
+They run in throwaway home folders, where nvmimic doesn't look in
+Homebrew's usual places, and `cargo xtask` refuses to start `brew` at all.
 
 If you change how the tests create files, try one test first, then a small
 group, and read the `gatekeeper guard:` line each run prints. You can also
