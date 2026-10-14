@@ -1,0 +1,11 @@
+# nvm stand-in from tsilenzio/tap, the Homebrew formula named nvm.
+#
+# It sits where Homebrew's own nvm keeps its bash completion, and loads the
+# completion of whatever nvm is in $NVM_DIR.
+#
+# MIT licensed: Copyright (c) 2026 Taylor Silenzio.
+
+# shellcheck disable=SC1091
+if [ -s "${NVM_DIR:-$HOME/.nvm}/bash_completion" ]; then
+  \. "${NVM_DIR:-$HOME/.nvm}/bash_completion"
+fi

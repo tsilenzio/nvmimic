@@ -93,7 +93,9 @@ you start from scratch. If nvm is already there, nvmimic takes it over: it keeps
 settings, keeps a copy of nvm's own scripts in a backup folder, and offers to copy
 the whole of `$NVM_DIR` somewhere safe first. If you installed nvm with
 Homebrew, it asks before running `brew uninstall nvm`, because shells that
-load Homebrew's copy would keep running official nvm. It looks for that nvm
+load Homebrew's copy would keep running official nvm. If one of your startup
+files loads Homebrew's copy, it swaps that copy for a stand-in instead, see
+[below](#when-a-startup-file-loads-homebrews-nvm). It looks for Homebrew's nvm
 under `HOMEBREW_PREFIX` if the variable is set, and nowhere else then.
 Without it, nvmimic checks the folders Homebrew normally installs into, but
 only while `HOME` is your account's own home folder. The `brew` it runs is
@@ -117,6 +119,44 @@ nvmimic's.
 That way you can type `nvmimic self install` again later without hunting for
 the file you downloaded. nvmimic never puts a program named `nvm` on your
 `PATH`, because official nvm is a shell function and scripts check for that.
+
+### When a startup file loads Homebrew's nvm
+
+Homebrew tells you to load its nvm with a line like this one:
+
+```sh
+[ -s "/opt/homebrew/opt/nvm/nvm.sh" ] && \. "/opt/homebrew/opt/nvm/nvm.sh"
+```
+
+That line names Homebrew's folder, not `$NVM_DIR`. Once Homebrew's nvm is
+uninstalled, the file it names is gone, the `[ -s ... ]` test quietly fails,
+and new shells have no `nvm` at all. Editing the line fixes that, unless
+something else writes your startup files. Some workplaces manage a block of
+them with their own tools, and those tools put the line back.
+
+So when nvmimic finds such a line, it doesn't just remove Homebrew's nvm. It
+swaps it for a stand-in: a Homebrew formula also named `nvm`, from
+`tsilenzio/tap`. The stand-in puts two small files where Homebrew's nvm kept
+its own, `nvm.sh` and `etc/bash_completion.d/nvm`. Each one loads whatever
+is in `$NVM_DIR`. So the old line keeps working, and it loads nvmimic. It
+would load nvmise or official nvm just the same, and it doesn't need
+nvmimic to be installed.
+
+nvmimic looks in `~/.zshrc`, `~/.bashrc`, `~/.profile` and the other files
+a shell reads when it starts, and in the files those files load with
+`source` or `.`, three levels deep. It shows you each line it found and the
+two commands it will run, `brew uninstall nvm` and then `brew install
+tsilenzio/tap/nvm`, and asks once. `--force` says yes. If you say no,
+nothing changes, Homebrew's nvm stays, and nvmimic tells you the two
+commands so you can run them yourself later. If the stand-in can't be
+installed, nvmimic puts Homebrew's nvm back and stops, so your shells are
+never left with no nvm.
+
+With no such line, nothing is swapped. Homebrew's nvm is uninstalled, as
+before.
+
+If you have the tap but not the stand-in, a plain `brew install nvm` still
+gets you Homebrew's own nvm.
 
 ### Loading nvm in your shell
 
@@ -240,12 +280,23 @@ the nvm folder are nvm's again, and likely newer than the ones nvmimic kept.
 `self eject` and `self uninstall` leave those where they are and tell you
 so. They don't put the older copies back over them.
 
-Homebrew's nvm puts links into the nvm folder that point into Homebrew's
-own folder, and `brew uninstall nvm` deletes what they point to. nvmimic
-copies the scripts themselves before that happens, so `self eject` and
-`self uninstall` give you working files back. A link whose target is still
-there goes back as a link. A link that pointed at nothing before nvmimic
-came along is never put back, and both commands tell you about it.
+If nvmimic removed Homebrew's nvm when it took over, `self eject` and
+`self uninstall` install it again: `brew uninstall nvm` first if the
+stand-in is there, then `brew install homebrew/core/nvm`, which names
+Homebrew's own nvm in full. They list those commands with
+everything else before they ask. This happens before nvm's scripts go back,
+because Homebrew's nvm puts links into the nvm folder that point into
+Homebrew's own folder. Once Homebrew's nvm is back, the links go back too,
+pointing where they did before. If nvmimic is set up together with nvmise,
+Homebrew's nvm comes back when official nvm does, not while nvmise still
+answers `nvm`.
+
+If `brew` can't install it again, your scripts still come back, as plain
+copies of the files the links pointed to, and nvmimic tells you to run
+`brew install nvm` to finish the job. nvmimic keeps those copies when it
+takes over, before `brew uninstall nvm` deletes what the links point to. A
+link that pointed at nothing before nvmimic came along is never put back,
+and both commands tell you about it.
 
 If Homebrew or cargo installed nvmimic, `self uninstall` leaves the program
 alone and tells you the command that removes it. Run `nvmimic self
@@ -571,6 +622,13 @@ own state folder, so a sandbox that moves a program's files sets
 `NVMIMIC_SHARED_DIR` only for the `self` commands. `crates/nvmimic-cli/tests/sister.rs` runs
 nvmimic and `shelfy` through every one of these moves.
 
+The record also notes when Homebrew's nvm was removed, and whether the
+stand-in from `tsilenzio/tap` went in its place. Your program gets the swap
+and the way back from `self_install_with` and the two ways out, with no code
+of its own. Homebrew's nvm comes back when official nvm's scripts do, so
+never while the other program still answers `nvm`. The stand-in's two files
+are `install::STAND_IN_NVM_SH` and `install::STAND_IN_BASH_COMPLETION`.
+
 The parity tests can compare your program with official nvm as well. You
 describe it as a `Subject` (in `tests/differential/src/subject.rs`): how it
 gets installed, which shell functions are its own, and where it differs on
@@ -597,8 +655,8 @@ don't call them from your own scripts.
 - `cargo xtask gen-shell` rebuilds `shell/nvm.sh` and `shell/init.sh` from nvm's own `nvm.sh`.
 - `cargo xtask release` builds the macOS program for a release into
   `target/dist/`: one file for both Apple silicon and Intel, signed and
-  checked by Apple, packed with the license, plus checksums and a Homebrew
-  formula. It needs a signing certificate. `--unsigned` skips that part so
+  checked by Apple, packed with the license, plus checksums and two Homebrew
+  formulas: `nvmimic.rb`, and `nvm.rb` for the stand-in. It needs a signing certificate. `--unsigned` skips that part so
   you can try the rest.
 
 ### How the parity tests stay quick
@@ -656,6 +714,9 @@ The tests are built to avoid that now:
 The tests can't reach the Homebrew that is really on your machine either.
 They run in throwaway home folders, where nvmimic doesn't look in
 Homebrew's usual places, and `cargo xtask` refuses to start `brew` at all.
+Tests of what nvmimic does with Homebrew use a small script named `brew`
+under a throwaway folder. It writes down what it was asked and changes only
+that folder.
 
 If you change how the tests create files, try one test first, then a small
 group, and read the `gatekeeper guard:` line each run prints. You can also

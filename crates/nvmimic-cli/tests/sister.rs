@@ -1128,3 +1128,72 @@ fn an_install_by_the_released_0_1_0_is_moved_ejected_and_uninstalled() {
     assert!(is_official(&home));
     assert!(!home.shared().exists() && !state.exists());
 }
+
+/// Homebrew's nvm, loaded by a startup file, goes when the first program
+/// takes over and comes back when the last one leaves. While the other
+/// program is still set up, nothing of Homebrew's changes. The `brew` here
+/// is a stand-in that writes down each call (decisions/0021).
+#[test]
+fn homebrews_nvm_comes_back_only_when_the_last_program_leaves() {
+    for (first, second) in ORDERS {
+        let home = Home::new(true);
+        let prefix = home.root.join("brew");
+        fs::create_dir_all(prefix.join("bin")).unwrap();
+        fs::create_dir_all(prefix.join("opt/nvm")).unwrap();
+        fs::write(prefix.join("opt/nvm/nvm.sh"), "official\n").unwrap();
+        let brew = prefix.join("bin/brew");
+        fs::write(
+            &brew,
+            format!(
+                "#!/bin/sh\ncd '{}' || exit 1\necho \"$*\" >> brew.log\ncase \"$*\" in\n\
+                 'uninstall nvm') rm -r opt/nvm ;;\n\
+                 'install homebrew/core/nvm') mkdir opt/nvm && echo official > opt/nvm/nvm.sh ;;\n\
+                 'install tsilenzio/tap/nvm') mkdir opt/nvm && echo '# nvm stand-in from tsilenzio/tap' > opt/nvm/nvm.sh ;;\n\
+                 *) exit 1 ;;\nesac\n",
+                prefix.display()
+            ),
+        )
+        .unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        fs::write(
+            home.root.join(".zshrc"),
+            format!(". {}/opt/nvm/nvm.sh\n", prefix.display()),
+        )
+        .unwrap();
+        let calls = || {
+            let log = fs::read_to_string(prefix.join("brew.log")).unwrap_or_default();
+            let _ = fs::remove_file(prefix.join("brew.log"));
+            log.lines().map(str::to_string).collect::<Vec<_>>()
+        };
+        let run = |name: &str, args: &[&str]| {
+            let out = home
+                .command(name, args)
+                .env("HOMEBREW_PREFIX", &prefix)
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "{name} {args:?}: {}",
+                text(&out.stderr)
+            );
+        };
+
+        run(first, &["install", "--force"]);
+        assert_eq!(calls(), ["uninstall nvm", "install tsilenzio/tap/nvm"]);
+        run(second, &["install", "--force"]);
+        assert!(calls().is_empty(), "{second} install");
+        // The second answers `nvm`, and its uninstall hands it back.
+        run(second, &["uninstall", "--force"]);
+        assert!(calls().is_empty(), "{second} uninstall");
+        assert_eq!(home.answers(), first);
+        run(first, &["uninstall", "--force"]);
+        assert_eq!(calls(), ["uninstall nvm", "install homebrew/core/nvm"]);
+        assert_eq!(
+            fs::read_to_string(prefix.join("opt/nvm/nvm.sh")).unwrap(),
+            "official\n"
+        );
+    }
+}

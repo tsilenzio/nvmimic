@@ -744,42 +744,450 @@ fn without_a_terminal_questions_need_yes() {
     assert!(text(&out.stderr).contains("--force"));
 }
 
-#[test]
-fn homebrew_nvm_is_uninstalled_first() {
-    let home = Home::new();
-    let prefix = home.root.join("brew");
-    fs::create_dir_all(prefix.join("opt/nvm")).unwrap();
-    fs::create_dir_all(prefix.join("bin")).unwrap();
-    let log = home.root.join("brew.log");
-    let brew = prefix.join("bin/brew");
-    fs::write(
-        &brew,
-        format!("#!/bin/sh\necho \"$@\" >> '{}'\n", log.display()),
-    )
-    .unwrap();
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+/// A Homebrew under `<home>/brew` with a stand-in `brew` that does what
+/// the real one does to `opt/nvm` for the three formulas `self install`
+/// names, and writes down every call in `brew.log` beside it. Homebrew's own
+/// nvm is installed, and `$NVM_DIR` has the links its `nvm.sh` makes. A
+/// call listed in `brew.fail` exits 1 and changes nothing.
+///
+/// The real `brew` is never run by a test (decisions/0021).
+struct Brew {
+    prefix: PathBuf,
+}
+
+impl Brew {
+    fn new(home: &Home) -> Brew {
+        let prefix = home.root.join("brew");
+        let stand_in = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../shell/homebrew");
+        fs::create_dir_all(prefix.join("bin")).unwrap();
+        let script = format!(
+            r#"#!/bin/sh
+prefix='{prefix}'
+echo "$*" >> "$prefix/brew.log"
+grep -qx "$*" "$prefix/brew.fail" 2>/dev/null && exit 1
+nvm="$prefix/opt/nvm"
+case "$*" in
+  'uninstall nvm')
+    [ -d "$nvm" ] || exit 1
+    rm -rf "$nvm"
+    ;;
+  'install homebrew/core/nvm'|'install nvm')
+    [ -d "$nvm" ] && exit 1
+    mkdir -p "$nvm/libexec" "$nvm/etc/bash_completion.d"
+    cp '{reference}/nvm.sh' '{reference}/nvm-exec' "$nvm/libexec/"
+    cp '{reference}/bash_completion' "$nvm/etc/bash_completion.d/nvm"
+    printf '%s\n' '[ -z "$NVM_DIR" ] && export NVM_DIR="$HOME/.nvm"' \
+      "\\. $nvm/libexec/nvm.sh" \
+      '[ -e "$NVM_DIR/nvm.sh" ] || ln -s '"$nvm"'/libexec/nvm.sh "$NVM_DIR/nvm.sh"' \
+      '[ -e "$NVM_DIR/nvm-exec" ] || ln -s '"$nvm"'/libexec/nvm-exec "$NVM_DIR/nvm-exec"' \
+      > "$nvm/nvm.sh"
+    ;;
+  'install tsilenzio/tap/nvm')
+    [ -d "$nvm" ] && exit 1
+    mkdir -p "$nvm/etc/bash_completion.d"
+    cp '{stand_in}/nvm.sh' "$nvm/nvm.sh"
+    cp '{stand_in}/bash_completion' "$nvm/etc/bash_completion.d/nvm"
+    ;;
+  *) exit 1 ;;
+esac
+"#,
+            prefix = prefix.display(),
+            reference = reference().display(),
+            stand_in = stand_in.display(),
+        );
+        fs::write(prefix.join("bin/brew"), script).unwrap();
+        fs::set_permissions(prefix.join("bin/brew"), fs::Permissions::from_mode(0o755)).unwrap();
+        let brew = Brew { prefix };
+        brew.run("install homebrew/core/nvm");
+        // What sourcing Homebrew's nvm.sh leaves in `$NVM_DIR`.
+        fs::create_dir_all(home.nvm_dir().join("alias")).unwrap();
+        fs::write(home.nvm_dir().join("alias/default"), "22\n").unwrap();
+        for file in ["nvm.sh", "nvm-exec"] {
+            std::os::unix::fs::symlink(
+                brew.prefix.join("opt/nvm/libexec").join(file),
+                home.nvm_dir().join(file),
+            )
+            .unwrap();
+        }
+        let _ = fs::remove_file(brew.log_path());
+        brew
     }
+
+    fn run(&self, call: &str) {
+        let out = Command::new(self.prefix.join("bin/brew"))
+            .args(call.split(' '))
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "brew {call}");
+    }
+
+    fn log_path(&self) -> PathBuf {
+        self.prefix.join("brew.log")
+    }
+
+    /// The calls since the last look, and the log emptied.
+    fn calls(&self) -> Vec<String> {
+        let log = fs::read_to_string(self.log_path()).unwrap_or_default();
+        let _ = fs::remove_file(self.log_path());
+        log.lines().map(str::to_string).collect()
+    }
+
+    fn fail(&self, call: &str) {
+        fs::write(self.prefix.join("brew.fail"), format!("{call}\n")).unwrap();
+    }
+
+    fn holds_stand_in(&self) -> bool {
+        fs::read_to_string(self.prefix.join("opt/nvm/nvm.sh"))
+            .is_ok_and(|text| text.contains("nvm stand-in from tsilenzio/tap"))
+    }
+
+    fn holds_official(&self) -> bool {
+        self.prefix.join("opt/nvm/libexec/nvm.sh").is_file()
+    }
+
+    fn vars(&self) -> [(&str, &Path); 1] {
+        [("HOMEBREW_PREFIX", self.prefix.as_path())]
+    }
+
+    /// Which nvm a shell gets from the line in a startup file that loads
+    /// Homebrew's nvm: `ours`, `official` or `none`, after nvm's version.
+    fn loads(&self, home: &Home, shell: &str) -> String {
+        let nvm_sh = self.prefix.join("opt/nvm/nvm.sh");
+        let out = Command::new(shell)
+            .arg("-c")
+            .arg(format!(
+                "[ -s \"{0}\" ] && \\. \"{0}\"\n\
+                 command -v nvm >/dev/null || {{ echo none; exit; }}\n\
+                 nvm --version\n\
+                 command -v __nvmimic_handoff >/dev/null && echo ours || echo official",
+                nvm_sh.display()
+            ))
+            .env_clear()
+            .env("HOME", &home.root)
+            .env("NVM_DIR", home.nvm_dir())
+            .env("PATH", "/usr/bin:/bin")
+            .output()
+            .unwrap();
+        text(&out.stdout).trim().replace('\n', " ")
+    }
+}
+
+/// The line a startup file holds when a tool other than the user manages
+/// it, as on the owner's work laptop.
+const LOADS_HOMEBREWS_NVM: &str =
+    "[ -s \"/opt/homebrew/opt/nvm/nvm.sh\" ] && \\. \"/opt/homebrew/opt/nvm/nvm.sh\"\n";
+
+#[test]
+fn a_startup_line_that_loads_homebrews_nvm_gets_the_stand_in_and_leaving_puts_homebrews_back() {
+    for leaving in ["eject", "uninstall"] {
+        let home = Home::new();
+        let brew = Brew::new(&home);
+        let line = format!("# nvm\n{}", LOADS_HOMEBREWS_NVM)
+            .replace("/opt/homebrew", &brew.prefix.display().to_string());
+        fs::write(home.root.join(".zshrc"), line).unwrap();
+        let nvm_before = snapshot(&home.nvm_dir());
+        let brew_before = snapshot(&brew.prefix.join("opt"));
+
+        let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+        let said = text(&out.stdout);
+        assert!(out.status.success(), "{said}{}", text(&out.stderr));
+        assert!(
+            said.contains(&format!(
+                "  {}, line 2:\n",
+                home.root.join(".zshrc").display()
+            )),
+            "{said}"
+        );
+        assert!(said.contains("Run `brew uninstall nvm`, then `brew install tsilenzio/tap/nvm` now? [y/N] y (--force)"), "{said}");
+        assert_eq!(brew.calls(), ["uninstall nvm", "install tsilenzio/tap/nvm"]);
+        assert!(brew.holds_stand_in());
+        for shell in ["/bin/zsh", "/bin/bash"] {
+            assert_eq!(brew.loads(&home, shell), "0.40.8 ours", "{shell}");
+        }
+
+        let out = home.nvmimic_with(&["self", leaving, "--force"], &brew.vars());
+        let said = text(&out.stdout);
+        assert!(
+            out.status.success(),
+            "{leaving}: {said}{}",
+            text(&out.stderr)
+        );
+        assert!(
+            said.contains("Homebrew's own nvm is installed again."),
+            "{said}"
+        );
+        assert_eq!(
+            brew.calls(),
+            ["uninstall nvm", "install homebrew/core/nvm"],
+            "{leaving}"
+        );
+        assert_eq!(snapshot(&home.nvm_dir()), nvm_before, "{leaving}");
+        assert_eq!(snapshot(&brew.prefix.join("opt")), brew_before, "{leaving}");
+        for shell in ["/bin/zsh", "/bin/bash"] {
+            assert_eq!(
+                brew.loads(&home, shell),
+                "0.40.8 official",
+                "{leaving} {shell}"
+            );
+        }
+
+        // After an eject, the uninstall has nothing of Homebrew's to change.
+        if leaving == "eject" {
+            let out = home.nvmimic_with(&["self", "uninstall", "--force"], &brew.vars());
+            assert!(out.status.success(), "{}", text(&out.stderr));
+            assert!(brew.calls().is_empty());
+            assert_eq!(snapshot(&home.nvm_dir()), nvm_before);
+        }
+        assert!(!home.has_own_files() || leaving == "eject");
+    }
+}
+
+#[test]
+fn a_line_in_a_file_that_a_startup_file_sources_counts() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
     fs::write(
         home.root.join(".zshrc"),
-        "\\. \"/opt/homebrew/opt/nvm/nvm.sh\"\n",
+        "export EDITOR=vi\n[ -f ~/.zshrc_platform ] && source ~/.zshrc_platform\n",
+    )
+    .unwrap();
+    fs::write(
+        home.root.join(".zshrc_platform"),
+        format!("# BEGIN managed block\n{LOADS_HOMEBREWS_NVM}# END managed block\n"),
     )
     .unwrap();
 
-    let out = Command::new(env!("CARGO_BIN_EXE_nvmimic"))
-        .args(["self", "install", "--force"])
-        .env_clear()
-        .env("HOME", &home.root)
-        .env("PATH", "/usr/bin:/bin")
-        .env("HOMEBREW_PREFIX", &prefix)
-        .output()
-        .unwrap();
-    let stdout = text(&out.stdout);
-    assert!(out.status.success(), "{stdout}{}", text(&out.stderr));
-    assert!(stdout.contains("Homebrew's nvm is installed"));
-    assert!(stdout.contains(".zshrc loads Homebrew's nvm"));
-    assert_eq!(fs::read_to_string(&log).unwrap(), "uninstall nvm\n");
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(
+        said.contains(&format!(
+            "This line in your shell's startup files loads it:\n  {}, line 2, which {} loads:\n    [ -s \"/opt/homebrew/opt/nvm/nvm.sh\"",
+            home.root.join(".zshrc_platform").display(),
+            home.root.join(".zshrc").display()
+        )),
+        "{said}"
+    );
+    assert!(
+        said.contains("Open a new shell to start using it."),
+        "{said}"
+    );
+    assert_eq!(brew.calls(), ["uninstall nvm", "install tsilenzio/tap/nvm"]);
+}
+
+/// The sequence from the owner's work laptop: Homebrew's nvm with no line
+/// of its own in a startup file, taken over, then ejected. Before 1.0.1 the
+/// eject put copies back and left Homebrew's nvm uninstalled.
+#[test]
+fn with_no_startup_line_homebrews_nvm_is_only_removed_and_eject_brings_it_back_with_its_links() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
+    let nvm_before = snapshot(&home.nvm_dir());
+    let brew_before = snapshot(&brew.prefix.join("opt"));
+
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(
+        said.contains("Run `brew uninstall nvm` now? [y/N] y (--force)"),
+        "{said}"
+    );
+    assert_eq!(brew.calls(), ["uninstall nvm"]);
+    assert!(!brew.prefix.join("opt/nvm").exists());
+
+    let out = home.nvmimic_with(&["self", "eject", "--force"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(
+        said.contains("Homebrew's own nvm is installed again."),
+        "{said}"
+    );
+    assert_eq!(brew.calls(), ["install homebrew/core/nvm"]);
+    assert_eq!(snapshot(&home.nvm_dir()), nvm_before);
+    assert_eq!(snapshot(&brew.prefix.join("opt")), brew_before);
+    assert!(is_link(&home.nvm_dir().join("nvm.sh")));
+    assert!(is_link(&home.nvm_dir().join("nvm-exec")));
+}
+
+/// An install made by 1.0.0 has no line in the shared record for
+/// Homebrew. A link it kept that points into Homebrew's nvm folder says
+/// that Homebrew's nvm was removed.
+#[test]
+fn an_install_made_by_1_0_0_gets_homebrews_nvm_back_by_its_links() {
+    for leaving in ["eject", "uninstall"] {
+        let home = Home::new();
+        let brew = Brew::new(&home);
+        let nvm_before = snapshot(&home.nvm_dir());
+        let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+        assert!(out.status.success(), "{}", text(&out.stderr));
+        brew.calls();
+        let record = home.shared().join("record");
+        let written = fs::read_to_string(&record).unwrap();
+        assert!(written.contains("homebrew-removed "), "{written}");
+        let old: String = written
+            .lines()
+            .filter(|line| !line.starts_with("homebrew-"))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(
+            old.contains(&format!(
+                "link nvm.sh {}/opt/nvm/libexec/nvm.sh",
+                brew.prefix.display()
+            )),
+            "{old}"
+        );
+        fs::write(&record, old).unwrap();
+
+        let out = home.nvmimic_with(&["self", leaving, "--force"], &brew.vars());
+        assert!(out.status.success(), "{leaving}: {}", text(&out.stderr));
+        assert_eq!(brew.calls(), ["install homebrew/core/nvm"], "{leaving}");
+        assert_eq!(snapshot(&home.nvm_dir()), nvm_before, "{leaving}");
+    }
+}
+
+#[test]
+fn when_the_stand_in_cannot_be_installed_homebrews_nvm_comes_back_and_nothing_changes() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
+    fs::write(home.root.join(".bashrc"), LOADS_HOMEBREWS_NVM).unwrap();
+    brew.fail("install tsilenzio/tap/nvm");
+    let nvm_before = snapshot(&home.nvm_dir());
+    let brew_before = snapshot(&brew.prefix.join("opt"));
+
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    assert_eq!(out.status.code(), Some(1));
+    let said = text(&out.stderr);
+    assert!(
+        said.contains("`brew install tsilenzio/tap/nvm` did not finish, so Homebrew's own nvm was put back. Nothing else was changed."),
+        "{said}"
+    );
+    assert_eq!(
+        brew.calls(),
+        [
+            "uninstall nvm",
+            "install tsilenzio/tap/nvm",
+            "install homebrew/core/nvm"
+        ]
+    );
+    assert_eq!(snapshot(&home.nvm_dir()), nvm_before);
+    assert_eq!(snapshot(&brew.prefix.join("opt")), brew_before);
+    assert!(!home.has_own_files());
+    assert_eq!(brew.loads(&home, "/bin/bash"), "0.40.8 official");
+}
+
+#[test]
+fn when_homebrews_nvm_cannot_come_back_its_scripts_come_back_as_copies() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
+    fs::write(home.root.join(".zshrc"), LOADS_HOMEBREWS_NVM).unwrap();
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    brew.calls();
+    brew.fail("install homebrew/core/nvm");
+
+    let out = home.nvmimic_with(&["self", "eject", "--force"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert_eq!(
+        brew.calls(),
+        [
+            "uninstall nvm",
+            "install homebrew/core/nvm",
+            "install tsilenzio/tap/nvm"
+        ]
+    );
+    assert!(
+        said.contains("`brew install homebrew/core/nvm` did not finish. Official nvm's scripts go back as copies. To finish the job, run:\n  brew uninstall nvm\n  brew install nvm\n"),
+        "{said}"
+    );
+    for file in ["nvm.sh", "nvm-exec"] {
+        let path = home.nvm_dir().join(file);
+        assert!(!is_link(&path), "{file}");
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            fs::read(reference().join(file)).unwrap()
+        );
+    }
+    // The stand-in went back in, and loads official nvm from `$NVM_DIR`.
+    assert!(brew.holds_stand_in());
+    assert_eq!(brew.loads(&home, "/bin/zsh"), "0.40.8 official");
+}
+
+#[test]
+fn a_dry_run_lists_the_brew_commands_and_runs_none() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
+    fs::write(home.root.join(".zshrc"), LOADS_HOMEBREWS_NVM).unwrap();
+    let out = home.nvmimic_with(&["self", "install", "--dry-run"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(
+        said.contains("Would run `brew uninstall nvm`, then `brew install tsilenzio/tap/nvm`.\n"),
+        "{said}"
+    );
+    assert!(brew.calls().is_empty());
+
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    brew.calls();
+    for leaving in ["eject", "uninstall"] {
+        let out = home.nvmimic_with(&["self", leaving, "--dry-run"], &brew.vars());
+        let said = text(&out.stdout);
+        assert!(out.status.success(), "{said}{}", text(&out.stderr));
+        assert!(
+            said.contains("Would run `brew uninstall nvm`, then `brew install homebrew/core/nvm`, to put Homebrew's own nvm back in place of the stand-in.\n"),
+            "{leaving}: {said}"
+        );
+        assert!(brew.calls().is_empty());
+    }
+    // Without a terminal and without --force, the steps are shown and
+    // nothing runs.
+    let out = home.nvmimic_with(&["self", "uninstall"], &brew.vars());
+    assert!(
+        text(&out.stdout)
+            .contains("Would run `brew uninstall nvm`, then `brew install homebrew/core/nvm`")
+    );
+    assert!(brew.calls().is_empty());
+}
+
+#[test]
+fn a_stand_in_that_is_already_there_is_left_alone() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
+    fs::write(home.root.join(".zshrc"), LOADS_HOMEBREWS_NVM).unwrap();
+    brew.run("uninstall nvm");
+    brew.run("install tsilenzio/tap/nvm");
+    brew.calls();
+
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(!said.contains("Homebrew"), "{said}");
+    let out = home.nvmimic_with(&["self", "uninstall", "--force"], &brew.vars());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    assert!(brew.calls().is_empty());
+    assert!(brew.holds_stand_in());
+}
+
+/// An install stopped after `brew uninstall nvm` and before the stand-in
+/// went in. The next install puts the stand-in in.
+#[test]
+fn a_swap_that_was_stopped_halfway_is_finished_by_the_next_install() {
+    let home = Home::new();
+    let brew = Brew::new(&home);
+    fs::write(home.root.join(".zshrc"), LOADS_HOMEBREWS_NVM).unwrap();
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    assert!(out.status.success(), "{}", text(&out.stderr));
+    brew.run("uninstall nvm");
+    brew.calls();
+
+    let out = home.nvmimic_with(&["self", "install", "--force"], &brew.vars());
+    let said = text(&out.stdout);
+    assert!(out.status.success(), "{said}{}", text(&out.stderr));
+    assert!(said.contains("It goes in now."), "{said}");
+    assert_eq!(brew.calls(), ["install tsilenzio/tap/nvm"]);
+    assert!(brew.holds_stand_in());
+    assert!(!brew.holds_official());
 }
 
 /// A `brew` that only writes down what it was asked, and the log it writes.

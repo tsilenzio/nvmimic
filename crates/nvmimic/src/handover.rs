@@ -62,6 +62,12 @@ pub struct Record {
     /// this record was written again from what that program knew. The
     /// backup that was in the folder is gone.
     pub lost: bool,
+    /// The Homebrew prefix whose own nvm a program removed when it took
+    /// over. Whoever puts official nvm back reinstalls it.
+    pub homebrew: Option<PathBuf>,
+    /// The stand-in from tsilenzio/tap went in where Homebrew's nvm was,
+    /// because a startup file loads Homebrew's nvm.
+    pub stand_in: bool,
 }
 
 /// What the note in the shared folder says.
@@ -109,6 +115,12 @@ impl Record {
         if self.lost {
             text.push_str("lost backup\n");
         }
+        if let Some(prefix) = &self.homebrew {
+            text.push_str(&format!("homebrew-removed {}\n", prefix.display()));
+        }
+        if self.stand_in {
+            text.push_str("homebrew-stand-in installed\n");
+        }
         text
     }
 
@@ -144,6 +156,8 @@ impl Record {
                 }
                 "created" => record.created.push(value.to_string()),
                 "lost" => record.lost = true,
+                "homebrew-removed" => record.homebrew = Some(value.into()),
+                "homebrew-stand-in" => record.stand_in = true,
                 _ => {}
             }
         }
@@ -384,10 +398,14 @@ mod tests {
             links: [("nvm.sh".to_string(), PathBuf::from("/brew/opt/nvm/nvm.sh"))].into(),
             created: vec!["bash_completion".into()],
             lost: true,
+            homebrew: Some("/opt/home brew".into()),
+            stand_in: true,
         };
         let text = record.render();
         assert_eq!(Record::parse(&text), record);
         assert!(text.contains("program shelfy /opt/a b/shelfy\n"), "{text}");
+        assert!(text.contains("homebrew-removed /opt/home brew\n"), "{text}");
+        assert!(text.contains("homebrew-stand-in installed\n"), "{text}");
         assert!(text.contains("aside nvmimic\n"), "{text}");
     }
 

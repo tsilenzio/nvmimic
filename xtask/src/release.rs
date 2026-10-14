@@ -6,7 +6,8 @@
 //! 3. Sends it to Apple to be checked (notarized), so macOS opens it without
 //!    a warning.
 //! 4. Packs it with `LICENSE` and `README.md`, and writes the checksums, a
-//!    `VERSION` file and a Homebrew formula.
+//!    `VERSION` file and two Homebrew formulas: `nvmimic`, and `nvm`, the
+//!    stand-in for Homebrew's nvm.
 //!
 //! Nothing here uploads anything. The files in `target/dist/` are attached
 //! to a release by hand.
@@ -209,12 +210,13 @@ fn release(unsigned: bool) -> Result<PathBuf, String> {
     fs::write(dist.join("SHA256SUMS"), format!("{sum}  {ARCHIVE}\n")).map_err(|e| e.to_string())?;
     fs::write(dist.join("VERSION"), format!("{version}\n")).map_err(|e| e.to_string())?;
     fs::write(dist.join("nvmimic.rb"), formula(version, &sum)).map_err(|e| e.to_string())?;
+    fs::write(dist.join("nvm.rb"), stand_in_formula(version, &sum)).map_err(|e| e.to_string())?;
     fs::remove_dir_all(&staging).map_err(|e| e.to_string())?;
 
     println!("release: {ARCHIVE} sha256 {sum}");
     println!(
         "release: attach {ARCHIVE}, SHA256SUMS and VERSION to the GitHub release v{version}, \
-         and copy nvmimic.rb into the Homebrew tap's Formula folder."
+         and copy nvmimic.rb and nvm.rb into the Homebrew tap's Formula folder."
     );
     Ok(dist)
 }
@@ -256,6 +258,59 @@ end
     )
 }
 
+/// The formula named `nvm` for the tap: the stand-in for Homebrew's nvm.
+/// It writes two files where Homebrew's nvm keeps them, and they load
+/// whatever nvm is in `$NVM_DIR`. It needs nothing from the release
+/// archive it downloads, which is there because a formula has to download
+/// something. The files' text is the library's, so `self install` and the
+/// formula can't disagree about what the stand-in is.
+fn stand_in_formula(version: &str, sha256: &str) -> String {
+    let releases = nvmimic::update::RELEASES;
+    let homepage = releases.trim_end_matches("/releases");
+    let heredoc = |text: &str| -> String {
+        text.lines()
+            .map(|line| match line {
+                "" => "\n".to_string(),
+                line => format!("      {line}\n"),
+            })
+            .collect()
+    };
+    format!(
+        r##"class Nvm < Formula
+  desc "Stand-in for Homebrew's nvm that loads whatever nvm is in $NVM_DIR"
+  homepage "{homepage}"
+  url "{releases}/download/v{version}/{ARCHIVE}"
+  sha256 "{sha256}"
+  license "MIT"
+
+  def install
+    (prefix/"nvm.sh").write <<~'SH'
+{nvm_sh}    SH
+    (bash_completion/"nvm").write <<~'SH'
+{completion}    SH
+  end
+
+  def caveats
+    <<~EOS
+      This nvm is a stand-in from nvmimic. It loads whatever nvm is in
+      $NVM_DIR, so startup files that load #{{opt_prefix}}/nvm.sh keep
+      working with nvmimic, nvmise or official nvm.
+    EOS
+  end
+
+  test do
+    (testpath/"nvm").mkpath
+    (testpath/"nvm/nvm.sh").write "echo \"loaded $1\"\n"
+    output = shell_output("NVM_DIR=#{{testpath}}/nvm bash -c '. #{{prefix}}/nvm.sh --no-use'")
+    assert_equal "loaded --no-use", output.strip
+  end
+end
+"##,
+        nvm_sh = heredoc(nvmimic::install::STAND_IN_NVM_SH),
+        completion = heredoc(nvmimic::install::STAND_IN_BASH_COMPLETION),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,5 +331,18 @@ mod tests {
         assert!(text.contains("sha256 \"abc\""));
         assert!(text.contains("nvmimic self install"));
         assert!(!text.contains("\n  version "), "{text}");
+    }
+
+    #[test]
+    fn the_stand_in_formula_writes_the_librarys_files() {
+        let text = stand_in_formula("1.2.3", "abc");
+        assert!(text.starts_with("class Nvm < Formula\n"));
+        assert!(text.contains("/download/v1.2.3/nvmimic-darwin-universal.tar.gz"));
+        assert!(
+            text.contains("      \\. \"$NVM_DIR/nvm.sh\" ${1+\"$@\"}\n"),
+            "{text}"
+        );
+        assert!(text.contains("nvm stand-in from tsilenzio/tap"));
+        assert!(!text.contains("depends_on"), "{text}");
     }
 }

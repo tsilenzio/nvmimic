@@ -235,18 +235,78 @@ impl Env {
             &usual,
         )
     }
+
+    /// Whether the environment lets `brew` under `prefix` be run, by the
+    /// same rule [`Env::homebrew_nvm`] looks by.
+    fn homebrew_allowed(&self, prefix: &Path) -> bool {
+        self.homebrew_places()
+            .iter()
+            .any(|allowed| allowed == prefix)
+    }
+
+    fn homebrew_places(&self) -> Vec<PathBuf> {
+        let usual: Vec<PathBuf> = HOMEBREW_USUAL_PLACES.iter().map(PathBuf::from).collect();
+        homebrew_prefixes(
+            self.homebrew_prefix.as_deref(),
+            self.homebrew_usual_places,
+            &usual,
+        )
+    }
 }
 
-/// [`Env::homebrew_nvm`] with the usual places handed in.
+/// [`Env::homebrew_nvm`] with the usual places handed in. Only Homebrew's
+/// own nvm counts. The stand-in from tsilenzio/tap is already what a
+/// program built on this library wants there.
 fn homebrew_nvm_in(prefix: Option<&str>, usual_count: bool, usual: &[PathBuf]) -> Option<PathBuf> {
-    let prefixes: Vec<PathBuf> = match prefix {
+    homebrew_prefixes(prefix, usual_count, usual)
+        .into_iter()
+        .find(|prefix| homebrews_nvm(prefix) == HomebrewNvm::Official)
+}
+
+fn homebrew_prefixes(prefix: Option<&str>, usual_count: bool, usual: &[PathBuf]) -> Vec<PathBuf> {
+    match prefix {
         Some(prefix) => vec![prefix.into()],
         None if usual_count => usual.to_vec(),
         None => Vec::new(),
-    };
-    prefixes
-        .into_iter()
-        .find(|prefix| prefix.join("opt/nvm").exists())
+    }
+}
+
+/// The Homebrew formula that stands in for Homebrew's nvm. It puts files at
+/// the paths Homebrew's nvm used, and they load whatever nvm is in
+/// `$NVM_DIR`, so a startup file that loads Homebrew's nvm keeps working.
+pub const STAND_IN_FORMULA: &str = "tsilenzio/tap/nvm";
+
+/// Homebrew's own nvm, named in full so that a tap with an `nvm` of its own
+/// is never the one installed.
+pub const OFFICIAL_FORMULA: &str = "homebrew/core/nvm";
+
+/// The stand-in's `nvm.sh`, which goes to `<prefix>/opt/nvm/nvm.sh`.
+pub const STAND_IN_NVM_SH: &str = include_str!("../../../shell/homebrew/nvm.sh");
+
+/// The stand-in's bash completion, which goes to
+/// `<prefix>/opt/nvm/etc/bash_completion.d/nvm`.
+pub const STAND_IN_BASH_COMPLETION: &str = include_str!("../../../shell/homebrew/bash_completion");
+
+/// What the first line of each of the stand-in's files says.
+const STAND_IN_MARKER: &str = "nvm stand-in from tsilenzio/tap";
+
+/// Which nvm a Homebrew prefix holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HomebrewNvm {
+    Official,
+    StandIn,
+    Missing,
+}
+
+fn homebrews_nvm(prefix: &Path) -> HomebrewNvm {
+    let folder = prefix.join("opt/nvm");
+    if !folder.exists() {
+        return HomebrewNvm::Missing;
+    }
+    match fs::read_to_string(folder.join("nvm.sh")) {
+        Ok(text) if text.contains(STAND_IN_MARKER) => HomebrewNvm::StandIn,
+        _ => HomebrewNvm::Official,
+    }
 }
 
 /// Where Homebrew installs itself: Apple silicon, Intel Macs, Linux.
@@ -1037,39 +1097,10 @@ fn install(
     )?;
     let was_ejected = loaded.manifest.as_ref().is_some_and(|m| m.ejected);
 
-    let homebrew = env.homebrew_nvm();
-    if let Some(prefix) = &homebrew {
-        ui.say(&format!(
-            "Homebrew's nvm is installed at {}.",
-            prefix.join("opt/nvm").display()
-        ));
-        ui.say("Shells that load Homebrew's nvm.sh would keep running official nvm, so it has to");
-        ui.say(&format!(
-            "go before {app} can take over. Your installed Node versions stay where they are."
-        ));
-        for file in startup_files_mentioning(env, "opt/nvm/nvm.sh") {
-            ui.say(&format!(
-                "  {} loads Homebrew's nvm. Change it to load $NVM_DIR/nvm.sh.",
-                file.display()
-            ));
-        }
-        // Only the `brew` of the Homebrew that has this nvm is ever run, and
-        // never whichever one is on `PATH`.
-        let brew = prefix.join("bin/brew");
-        if !brew.is_file() {
-            return Err(format!(
-                "there is no brew at {} to remove it with. Run `brew uninstall nvm` yourself, \
-                 then run this again. Nothing was changed.",
-                brew.display()
-            ));
-        }
-        if !ask(ui, options, "Run `brew uninstall nvm` now?", false) {
-            return Err("stopped. Homebrew's nvm is still installed.".to_string());
-        }
-        if options.dry_run {
-            ui.say("Would run `brew uninstall nvm`.");
-        }
-    }
+    let homebrew = match env.homebrew_nvm() {
+        Some(prefix) => Some(plan_homebrew(env, prefix, options, ui)?),
+        None => unfinished_swap(env, &loaded.record, options, ui)?,
+    };
 
     // nvm-exec is the same file in nvm and nvmimic, so `nvm.sh` decides
     // whose scripts these are: while it is nvmimic's, all three are. The
@@ -1268,6 +1299,12 @@ fn install(
     }
     record.nvm_dir = Some(nvm_dir.clone());
     record.answers = Some(app.to_string());
+    // Written before brew runs, so whatever stops it, the record says that
+    // Homebrew's own nvm is to come back with official nvm's scripts.
+    if let Some(plan) = &homebrew {
+        record.homebrew = Some(plan.prefix().to_path_buf());
+        record.stand_in = !matches!(plan, Homebrew::Remove(_));
+    }
     record.programs.insert(
         app.to_string(),
         Program {
@@ -1316,23 +1353,27 @@ fn install(
         manifest.write(dirs, env.identity)?;
     }
 
-    if let Some(prefix) = &homebrew {
-        let brew = prefix.join("bin/brew");
-        let status = Command::new(&brew).args(["uninstall", "nvm"]).status();
-        if !status.is_ok_and(|status| status.success()) {
-            // Nothing of nvm's was touched yet. A first install leaves no
-            // record behind either.
-            if !reinstall {
-                for name in copied {
-                    let _ = fs::remove_file(backup.join(name));
-                }
-                let _ = fs::remove_file(dirs.manifest());
-                record_before.write(dirs)?;
-                let _ = fs::remove_file(dirs.shared_link());
-                let _ = fs::remove_dir(&dirs.state);
+    if let Some(plan) = &homebrew
+        && let Err(said) = change_homebrew(plan, ui)?
+    {
+        // Nothing of nvm's was touched yet. A first install leaves no
+        // record behind either.
+        if !reinstall {
+            for name in copied {
+                let _ = fs::remove_file(backup.join(name));
             }
-            return Err("`brew uninstall nvm` did not finish, so nothing was changed.".to_string());
+            let _ = fs::remove_file(dirs.manifest());
+            record_before.write(dirs)?;
+            let _ = fs::remove_file(dirs.shared_link());
+            for dir in [&dirs.state, &dirs.data, &dirs.cache] {
+                let _ = fs::remove_dir(dir);
+            }
+        } else if record.homebrew != record_before.homebrew {
+            record.homebrew = record_before.homebrew.clone();
+            record.stand_in = record_before.stand_in;
+            record.write(dirs)?;
         }
+        return Err(said);
     }
 
     ui.say(&format!("Installing {app} for {}.", nvm_dir.display()));
@@ -1357,7 +1398,7 @@ fn install(
             plan.path().display()
         ));
     }
-    if startup_files_mentioning(env, "/nvm.sh").is_empty() {
+    if startup_lines(env, |line| line.contains("/nvm.sh")).is_empty() {
         ui.say(
             "To get the `nvm` command in new shells, add these lines to your shell's startup file:",
         );
@@ -1367,6 +1408,296 @@ fn install(
         ui.say("Open a new shell to start using it.");
     }
     Ok(())
+}
+
+/// What `self install` does with Homebrew's nvm.
+enum Homebrew {
+    /// `brew uninstall nvm`. No startup file loads Homebrew's nvm.
+    Remove(PathBuf),
+    /// `brew uninstall nvm`, then `brew install tsilenzio/tap/nvm`, because
+    /// a startup file loads Homebrew's nvm and would load nothing after.
+    Swap(PathBuf),
+    /// An earlier install was stopped between the two steps of a swap, and
+    /// the stand-in goes in now.
+    Finish(PathBuf),
+}
+
+impl Homebrew {
+    fn prefix(&self) -> &Path {
+        match self {
+            Homebrew::Remove(prefix) | Homebrew::Swap(prefix) | Homebrew::Finish(prefix) => prefix,
+        }
+    }
+}
+
+/// Says what happens to Homebrew's nvm under `prefix` and asks. A startup
+/// file that loads it decides between removing it and swapping it for the
+/// stand-in.
+fn plan_homebrew(
+    env: &Env,
+    prefix: PathBuf,
+    options: &Options,
+    ui: &mut dyn Ui,
+) -> Result<Homebrew, String> {
+    let app = env.identity.name;
+    ui.say(&format!(
+        "Homebrew's nvm is installed at {}.",
+        prefix.join("opt/nvm").display()
+    ));
+    let loaders = startup_lines(env, |line| loads_homebrews_nvm(line, &prefix));
+    if loaders.is_empty() {
+        ui.say("Shells that load Homebrew's nvm.sh would keep running official nvm, so it has to");
+        ui.say(&format!(
+            "go before {app} can take over. Your installed Node versions stay where they are."
+        ));
+        brew_is_there(&prefix, "brew uninstall nvm")?;
+        if !ask(ui, options, "Run `brew uninstall nvm` now?", false) {
+            return Err("stopped. Homebrew's nvm is still installed.".to_string());
+        }
+        if options.dry_run {
+            ui.say("Would run `brew uninstall nvm`.");
+        }
+        return Ok(Homebrew::Remove(prefix));
+    }
+    ui.say(match loaders.len() {
+        1 => "This line in your shell's startup files loads it:",
+        _ => "These lines in your shell's startup files load it:",
+    });
+    for loader in &loaders {
+        let by = match &loader.sourced_by {
+            Some(parent) => format!(", which {} loads", parent.display()),
+            None => String::new(),
+        };
+        ui.say(&format!(
+            "  {}, line {}{by}:",
+            loader.file.display(),
+            loader.line
+        ));
+        ui.say(&format!("    {}", loader.text.trim()));
+    }
+    ui.say("Removing Homebrew's nvm alone would leave new shells with no nvm. So it is swapped");
+    ui.say("for a stand-in from tsilenzio/tap with the same name and the same files. The");
+    ui.say("stand-in loads whatever nvm is in $NVM_DIR, so these lines keep working.");
+    ui.say("Your installed Node versions stay where they are.");
+    brew_is_there(&prefix, "brew uninstall nvm")?;
+    let swap = format!("`brew uninstall nvm`, then `brew install {STAND_IN_FORMULA}`");
+    if !ask(ui, options, &format!("Run {swap} now?"), false) {
+        ui.say("Nothing was changed. To make the swap yourself, run these two:");
+        ui.say("  brew uninstall nvm");
+        ui.say(&format!("  brew install {STAND_IN_FORMULA}"));
+        ui.say(&format!("Then run `{app} self install` again."));
+        return Err("stopped. Homebrew's nvm is still installed.".to_string());
+    }
+    if options.dry_run {
+        ui.say(&format!("Would run {swap}."));
+    }
+    Ok(Homebrew::Swap(prefix))
+}
+
+/// A swap that an earlier install started and didn't finish: the record
+/// says the stand-in goes in, and Homebrew has no nvm at all.
+fn unfinished_swap(
+    env: &Env,
+    record: &Record,
+    options: &Options,
+    ui: &mut dyn Ui,
+) -> Result<Option<Homebrew>, String> {
+    let Some(prefix) = record.homebrew.clone() else {
+        return Ok(None);
+    };
+    if !record.stand_in
+        || !env.homebrew_allowed(&prefix)
+        || homebrews_nvm(&prefix) != HomebrewNvm::Missing
+    {
+        return Ok(None);
+    }
+    ui.say("An earlier install removed Homebrew's nvm and was stopped before the stand-in from");
+    ui.say("tsilenzio/tap went in its place. It goes in now.");
+    brew_is_there(&prefix, &format!("brew install {STAND_IN_FORMULA}"))?;
+    if options.dry_run {
+        ui.say(&format!("Would run `brew install {STAND_IN_FORMULA}`."));
+    }
+    Ok(Some(Homebrew::Finish(prefix)))
+}
+
+/// Only the `brew` of the Homebrew that has this nvm is ever run, and
+/// never whichever one is on `PATH`.
+fn brew_is_there(prefix: &Path, command: &str) -> Result<(), String> {
+    let brew = prefix.join("bin/brew");
+    if brew.is_file() {
+        return Ok(());
+    }
+    Err(format!(
+        "there is no brew at {} to run `{command}` with. Run it yourself, then run this again. \
+         Nothing was changed.",
+        brew.display()
+    ))
+}
+
+/// Runs `brew` under `prefix` and says whether it succeeded.
+fn brew(prefix: &Path, args: &[&str]) -> bool {
+    Command::new(prefix.join("bin/brew"))
+        .args(args)
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+/// Carries out the plan for Homebrew's nvm. The outer error is a stop
+/// before a step, the inner one says what brew didn't do. If the stand-in
+/// can't be installed, Homebrew's own nvm is put back, so a startup file
+/// that loads it never loads nothing.
+fn change_homebrew(plan: &Homebrew, ui: &mut dyn Ui) -> Result<Result<(), String>, String> {
+    let prefix = plan.prefix();
+    if !matches!(plan, Homebrew::Finish(_)) {
+        checkpoint()?;
+        if !brew(prefix, &["uninstall", "nvm"]) {
+            return Ok(Err(
+                "`brew uninstall nvm` did not finish, so nothing was changed.".to_string(),
+            ));
+        }
+    }
+    if matches!(plan, Homebrew::Remove(_)) {
+        return Ok(Ok(()));
+    }
+    checkpoint()?;
+    if brew(prefix, &["install", STAND_IN_FORMULA]) {
+        ui.say(&format!(
+            "Swapped Homebrew's nvm for the stand-in from {STAND_IN_FORMULA}."
+        ));
+        return Ok(Ok(()));
+    }
+    let failed = format!("`brew install {STAND_IN_FORMULA}` did not finish");
+    checkpoint()?;
+    Ok(Err(match brew(prefix, &["install", OFFICIAL_FORMULA]) {
+        true => format!("{failed}, so Homebrew's own nvm was put back. Nothing else was changed."),
+        false => format!(
+            "{failed}, and putting Homebrew's own nvm back failed too. Run `brew install \
+             {OFFICIAL_FORMULA}` to get it back. Nothing else was changed."
+        ),
+    }))
+}
+
+/// Whether a line of a startup file loads Homebrew's nvm from `prefix` or
+/// from one of the places Homebrew usually lives. Only the text is read.
+fn loads_homebrews_nvm(line: &str, prefix: &Path) -> bool {
+    let named = HOMEBREW_USUAL_PLACES
+        .iter()
+        .map(|place| format!("{place}/opt/nvm/"))
+        .chain([format!("{}/opt/nvm/", prefix.display())])
+        .chain(
+            [
+                "HOMEBREW_PREFIX/opt/nvm/",
+                "HOMEBREW_PREFIX}/opt/nvm/",
+                "--prefix)/opt/nvm/",
+                "--prefix`/opt/nvm/",
+            ]
+            .map(String::from),
+        )
+        .any(|needle| line.contains(&needle));
+    named || line.contains("brew --prefix nvm")
+}
+
+/// A line of a shell startup file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct StartupLine {
+    file: PathBuf,
+    /// Counted from 1.
+    line: usize,
+    text: String,
+    /// The startup file that sources `file`, when `file` isn't one of the
+    /// usual ones itself.
+    sourced_by: Option<PathBuf>,
+}
+
+/// The shell startup files in the home folder that a shell reads by itself.
+const STARTUP_FILES: &[&str] = &[
+    ".bashrc",
+    ".bash_profile",
+    ".bash_login",
+    ".profile",
+    ".zshenv",
+    ".zprofile",
+    ".zshrc",
+    ".zlogin",
+];
+
+/// How many files deep `source` is followed from a startup file.
+const SOURCED_DEPTH: usize = 3;
+
+/// Lines that `matches` picks out, in the usual startup files and in the
+/// files they source, followed [`SOURCED_DEPTH`] deep. A commented-out line
+/// doesn't count, and a file read once isn't read again.
+fn startup_lines(env: &Env, matches: impl Fn(&str) -> bool) -> Vec<StartupLine> {
+    let mut found = Vec::new();
+    let mut seen: Vec<PathBuf> = Vec::new();
+    let mut files: Vec<(PathBuf, Option<PathBuf>)> = STARTUP_FILES
+        .iter()
+        .map(|name| (env.home.join(name), None))
+        .collect();
+    for _ in 0..=SOURCED_DEPTH {
+        let mut sourced = Vec::new();
+        for (file, sourced_by) in files {
+            let real = fs::canonicalize(&file).unwrap_or_else(|_| file.clone());
+            if seen.contains(&real) {
+                continue;
+            }
+            seen.push(real);
+            let Ok(text) = fs::read_to_string(&file) else {
+                continue;
+            };
+            for (number, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with('#') {
+                    continue;
+                }
+                if matches(line) {
+                    found.push(StartupLine {
+                        file: file.clone(),
+                        line: number + 1,
+                        text: line.to_string(),
+                        sourced_by: sourced_by.clone(),
+                    });
+                }
+                for path in sourced_paths(line, &env.home) {
+                    sourced.push((path, Some(file.clone())));
+                }
+            }
+        }
+        files = sourced;
+    }
+    found
+}
+
+/// The files a line sources with `.` or `source`, where the path can be
+/// worked out without running anything: a plain path, or one that starts
+/// with `~` or `$HOME`. A relative path is taken from the home folder,
+/// where a login shell starts.
+fn sourced_paths(line: &str, home: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    for part in line.split([';', '&', '|']) {
+        let mut words = part
+            .split_whitespace()
+            .skip_while(|word| matches!(*word, "then" | "do" | "else" | "{" | "("));
+        let command = words.next().unwrap_or_default().trim_start_matches('\\');
+        if command != "." && command != "source" {
+            continue;
+        }
+        let Some(word) = words.next() else {
+            continue;
+        };
+        let word = word.trim_matches(['"', '\'']);
+        let home_text = home.display().to_string();
+        let expanded = if let Some(rest) = word.strip_prefix("~/") {
+            format!("{home_text}/{rest}")
+        } else {
+            word.replacen("${HOME}", &home_text, 1)
+                .replacen("$HOME", &home_text, 1)
+        };
+        if expanded.is_empty() || expanded.contains(['$', '`', '*', '?', '[']) {
+            continue;
+        }
+        paths.push(home.join(expanded));
+    }
+    paths
 }
 
 /// A short name for what a script holds. The manifest keeps one per script,
@@ -1739,6 +2070,13 @@ fn leave(
         dead.clear();
         carried.clear();
     }
+    // Homebrew's own nvm, removed when a program took over, comes back
+    // with official nvm's scripts and before them, so the links into its
+    // folder have something to point to again.
+    let homebrew = match (&heir, &in_place) {
+        (None, None) => homebrew_to_restore(env, &record, ui),
+        _ => None,
+    };
 
     if how == Leaving::Eject && heir.is_none() {
         if let Some(other) = &in_place {
@@ -1790,6 +2128,15 @@ fn leave(
         None => None,
     };
     let mut steps: Vec<Step> = Vec::new();
+    if let Some((_, state)) = &homebrew {
+        steps.push(Step::new(match state {
+            HomebrewNvm::StandIn => format!(
+                "run `brew uninstall nvm`, then `brew install {OFFICIAL_FORMULA}`, to put \
+                 Homebrew's own nvm back in place of the stand-in"
+            ),
+            _ => format!("run `brew install {OFFICIAL_FORMULA}` to put Homebrew's own nvm back"),
+        }));
+    }
     // Scripts someone changed since nvmimic wrote them: name, path, new path.
     let mut edited: Vec<(&str, PathBuf, PathBuf)> = Vec::new();
     // Scripts that aren't nvmimic's any more. They stay as they are, and
@@ -2003,6 +2350,10 @@ fn leave(
     manifest.links.clear();
     manifest.created.clear();
     backup = dirs.backup();
+    let homebrew_back = match &homebrew {
+        Some((prefix, state)) => restore_homebrew(prefix, *state, ui)?,
+        None => false,
+    };
 
     // From here on the order is what keeps a stop at any moment harmless,
     // as it is for an install. A script of nvm's goes back as a copy, in
@@ -2111,6 +2462,12 @@ fn leave(
         record.links.clear();
         record.created.clear();
         record.answers = None;
+        // Back now, or already back after a run that was stopped.
+        let official = |prefix: &PathBuf| homebrews_nvm(prefix) == HomebrewNvm::Official;
+        if homebrew_back || record.homebrew.as_ref().is_some_and(official) {
+            record.homebrew = None;
+            record.stand_in = false;
+        }
     } else if let Some(other) = &in_place {
         record.answers = Some(other.clone());
     }
@@ -2225,6 +2582,84 @@ fn leave(
         }
     }
     Ok(())
+}
+
+/// Homebrew's own nvm that a program removed when it took over, and what
+/// its prefix holds now. An install made by 1.0.0 has no line for it in
+/// the record, and a link it kept that points into Homebrew's nvm folder
+/// says the same. Where the environment doesn't let `brew` under the
+/// prefix run, or there is none, this only says what to run.
+fn homebrew_to_restore(
+    env: &Env,
+    record: &Record,
+    ui: &mut dyn Ui,
+) -> Option<(PathBuf, HomebrewNvm)> {
+    // Only a link with a copy kept counts. One that was dead at the install
+    // says nothing about what brew removed then.
+    let prefix = record.homebrew.clone().or_else(|| {
+        env.homebrew_places().into_iter().find(|place| {
+            let folder = place.join("opt/nvm");
+            record.links.iter().any(|(name, target)| {
+                target.starts_with(&folder) && record.backed_up.contains(name)
+            })
+        })
+    })?;
+    let state = homebrews_nvm(&prefix);
+    if state == HomebrewNvm::Official {
+        return None;
+    }
+    if !env.homebrew_allowed(&prefix) || !prefix.join("bin/brew").is_file() {
+        ui.say(&format!(
+            "Homebrew's nvm under {} was removed when nvm was taken over. To put it back, run:",
+            prefix.display()
+        ));
+        if state == HomebrewNvm::StandIn {
+            ui.say("  brew uninstall nvm");
+        }
+        ui.say("  brew install nvm");
+        return None;
+    }
+    Some((prefix, state))
+}
+
+/// Puts Homebrew's own nvm back under `prefix`, in place of the stand-in
+/// when that is there. Says whether it worked. When it didn't, official
+/// nvm's scripts go back as copies, as they did before 1.0.1, and the
+/// stand-in, if it was there, is put back to load them.
+fn restore_homebrew(prefix: &Path, state: HomebrewNvm, ui: &mut dyn Ui) -> Result<bool, String> {
+    let finish = |ui: &mut dyn Ui, first: &str| {
+        ui.say(&format!(
+            "{first} Official nvm's scripts go back as copies. To finish the job, run:"
+        ));
+        if homebrews_nvm(prefix) == HomebrewNvm::StandIn {
+            ui.say("  brew uninstall nvm");
+        }
+        ui.say("  brew install nvm");
+    };
+    if state == HomebrewNvm::StandIn {
+        checkpoint()?;
+        if !brew(prefix, &["uninstall", "nvm"]) {
+            finish(
+                ui,
+                "`brew uninstall nvm` did not finish, so the stand-in stays.",
+            );
+            return Ok(false);
+        }
+    }
+    checkpoint()?;
+    if brew(prefix, &["install", OFFICIAL_FORMULA]) {
+        ui.say("Homebrew's own nvm is installed again.");
+        return Ok(true);
+    }
+    if state == HomebrewNvm::StandIn {
+        checkpoint()?;
+        brew(prefix, &["install", STAND_IN_FORMULA]);
+    }
+    finish(
+        ui,
+        &format!("`brew install {OFFICIAL_FORMULA}` did not finish."),
+    );
+    Ok(false)
 }
 
 /// Takes the program out of the shared record and removes its link to the
@@ -2347,22 +2782,6 @@ fn copy_dir(from: &Path, to: &Path) -> Result<(), String> {
             to.display()
         )),
     }
-}
-
-/// Shell startup files that contain `needle`.
-fn startup_files_mentioning(env: &Env, needle: &str) -> Vec<PathBuf> {
-    [
-        ".bashrc",
-        ".bash_profile",
-        ".profile",
-        ".zshrc",
-        ".zprofile",
-        ".zshenv",
-    ]
-    .iter()
-    .map(|name| env.home.join(name))
-    .filter(|path| fs::read_to_string(path).is_ok_and(|text| text.contains(needle)))
-    .collect()
 }
 
 /// Asks on the terminal. Without one, a question cannot be answered.
@@ -2849,6 +3268,246 @@ mod tests {
         assert!(Manifest::read(env.dirs().unwrap()).is_none());
         assert!(nvm_is_back(&env));
         let _ = fs::remove_dir_all(&env.home);
+    }
+
+    /// A Homebrew with its own nvm under `<home>/brew`, a stand-in `brew`
+    /// that does to `opt/nvm` what the real one does for the three formulas
+    /// `self install` names and writes each call to `brew.log`, and a
+    /// `.zshrc` line that loads that nvm.
+    fn with_homebrews_nvm(env: &mut Env) -> PathBuf {
+        let prefix = env.home.join("brew");
+        fs::create_dir_all(prefix.join("bin")).unwrap();
+        let brew = prefix.join("bin/brew");
+        fs::write(
+            &brew,
+            format!(
+                "#!/bin/sh\n\
+                 cd '{}' || exit 1\n\
+                 echo \"$*\" >> brew.log\n\
+                 case \"$*\" in\n\
+                 'uninstall nvm') [ -d opt/nvm ] && rm -r opt/nvm ;;\n\
+                 'install {OFFICIAL_FORMULA}') mkdir opt/nvm && echo official > opt/nvm/nvm.sh ;;\n\
+                 'install {STAND_IN_FORMULA}') mkdir opt/nvm && echo '# {STAND_IN_MARKER}' > opt/nvm/nvm.sh ;;\n\
+                 *) exit 1 ;;\n\
+                 esac\n",
+                prefix.display()
+            ),
+        )
+        .unwrap();
+        set_mode(&brew, 0o755).unwrap();
+        fs::create_dir_all(prefix.join("opt")).unwrap();
+        assert!(brew_ran(&prefix, &["install", OFFICIAL_FORMULA]));
+        let _ = fs::remove_file(prefix.join("brew.log"));
+        fs::write(
+            env.home.join(".zshrc"),
+            format!(". {}/opt/nvm/nvm.sh\n", prefix.display()),
+        )
+        .unwrap();
+        env.homebrew_prefix = Some(prefix.to_string_lossy().into_owned());
+        prefix
+    }
+
+    fn brew_ran(prefix: &Path, args: &[&str]) -> bool {
+        brew(prefix, args)
+    }
+
+    fn brew_log(prefix: &Path) -> String {
+        fs::read_to_string(prefix.join("brew.log")).unwrap_or_default()
+    }
+
+    /// The stand-in's files load what is in `$NVM_DIR` under every shell
+    /// nvm supports, with `set -eu`, from inside a function, with the
+    /// arguments they were given. dash hands a sourced file no arguments of
+    /// its own, so there it passes on the caller's.
+    #[test]
+    fn the_stand_ins_files_load_whatever_nvm_is_in_nvm_dir() {
+        let root = std::env::temp_dir().join(format!("nvmimic-stand-in-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let nvm_dir = root.join("my nvm");
+        fs::create_dir_all(&nvm_dir).unwrap();
+        fs::write(root.join("nvm.sh"), STAND_IN_NVM_SH).unwrap();
+        fs::write(root.join("completion"), STAND_IN_BASH_COMPLETION).unwrap();
+        fs::write(nvm_dir.join("nvm.sh"), "loaded=\"$# $*\"\n").unwrap();
+        fs::write(nvm_dir.join("bash_completion"), "completion=yes\n").unwrap();
+        let script = format!(
+            "set -eu\n\
+             load() {{ \\. '{0}/nvm.sh' --no-use; \\. '{0}/completion'; }}\n\
+             load\n\
+             echo \"$loaded $completion $NVM_DIR\"\n\
+             rm \"$NVM_DIR/nvm.sh\"\n\
+             set +e\n\
+             \\. '{0}/nvm.sh'\n\
+             echo \"status $?\"\n",
+            root.display()
+        );
+        for shell in ["/bin/bash", "/bin/zsh", "/bin/sh", "/bin/dash"] {
+            if !Path::new(shell).exists() {
+                continue;
+            }
+            fs::write(nvm_dir.join("nvm.sh"), "loaded=\"$# $*\"\n").unwrap();
+            let out = Command::new(shell)
+                .arg("-c")
+                .arg(&script)
+                .env_clear()
+                .env("HOME", &root)
+                .env("NVM_DIR", &nvm_dir)
+                .output()
+                .unwrap();
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let loaded = match shell {
+                "/bin/dash" => "0 ",
+                _ => "1 --no-use",
+            };
+            assert_eq!(
+                stdout,
+                format!("{loaded} yes {}\nstatus 1\n", nvm_dir.display()),
+                "{shell}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&out.stderr),
+                format!(
+                    "nvm: there is no nvm.sh in {}, so nvm was not loaded.\n",
+                    nvm_dir.display()
+                ),
+                "{shell}"
+            );
+        }
+        // Without NVM_DIR, the stand-in uses ~/.nvm as Homebrew's nvm does.
+        fs::create_dir_all(root.join(".nvm")).unwrap();
+        fs::write(root.join(".nvm/nvm.sh"), "echo \"loaded $NVM_DIR\"\n").unwrap();
+        let out = Command::new("/bin/sh")
+            .arg("-c")
+            .arg(format!("set -u; \\. '{}/nvm.sh'", root.display()))
+            .env_clear()
+            .env("HOME", &root)
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            format!("loaded {}/.nvm\n", root.display())
+        );
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn no_to_the_swap_changes_nothing_and_says_how_to_do_it_by_hand() {
+        let mut env = home_with_nvm("swap-no");
+        let prefix = with_homebrews_nvm(&mut env);
+        let mut ui = Recorded {
+            answer: false,
+            ..quiet()
+        };
+        let said = self_install(
+            &env,
+            &env.home.join("program"),
+            &Options::default(),
+            &mut ui,
+        );
+        assert_eq!(
+            said,
+            Err("stopped. Homebrew's nvm is still installed.".to_string())
+        );
+        assert_eq!(
+            ui.asked,
+            [format!(
+                "Run `brew uninstall nvm`, then `brew install {STAND_IN_FORMULA}` now?"
+            )]
+        );
+        let tail = &ui.said[ui.said.len() - 4..];
+        assert_eq!(
+            tail,
+            [
+                "Nothing was changed. To make the swap yourself, run these two:",
+                "  brew uninstall nvm",
+                "  brew install tsilenzio/tap/nvm",
+                "Then run `nvmimic self install` again.",
+            ]
+        );
+        assert_eq!(brew_log(&prefix), "");
+        assert_eq!(homebrews_nvm(&prefix), HomebrewNvm::Official);
+        assert!(Manifest::read(env.dirs().unwrap()).is_none());
+        assert!(leftovers(&env).is_empty(), "{:?}", leftovers(&env));
+        assert!(nvm_is_back(&env));
+        let _ = fs::remove_dir_all(&env.home);
+    }
+
+    /// Stops an install that swaps Homebrew's nvm before each of its steps,
+    /// and an eject and an uninstall after it, then does what someone would
+    /// do next. Each way ends with official nvm's scripts and Homebrew's own
+    /// nvm back.
+    #[test]
+    fn a_swap_stopped_at_any_step_ends_with_homebrews_nvm_back() {
+        let force = Options {
+            force: true,
+            ..Options::default()
+        };
+        let back = |env: &Env, prefix: &Path, said: &str| {
+            assert!(nvm_is_back(env), "{said}: nvm's scripts did not come back");
+            assert_eq!(homebrews_nvm(prefix), HomebrewNvm::Official, "{said}");
+        };
+        for command in ["install", "eject", "uninstall"] {
+            let mut stopped_at = 0;
+            loop {
+                let mut finished = false;
+                for again in [false, true] {
+                    let mut env = home_with_nvm("swap-stopped");
+                    let prefix = with_homebrews_nvm(&mut env);
+                    let program = env.home.join("program");
+                    if command != "install" {
+                        self_install(&env, &program, &force, &mut quiet()).unwrap();
+                        assert_eq!(homebrews_nvm(&prefix), HomebrewNvm::StandIn);
+                    }
+                    let run = |env: &Env| match command {
+                        "install" => self_install(env, &program, &force, &mut quiet()),
+                        "eject" => self_eject(env, &force, &mut quiet()),
+                        _ => self_uninstall(env, &force, &mut quiet()),
+                    };
+                    STEPS.set(0);
+                    STOP_BEFORE.set(Some(stopped_at));
+                    let result = run(&env);
+                    STOP_BEFORE.set(None);
+                    finished = result.is_ok();
+                    if finished {
+                        break;
+                    }
+                    assert_eq!(result, Err("interrupted".to_string()));
+                    let said =
+                        format!("{command} stopped before step {stopped_at}, again: {again}");
+                    // An eject stopped once its record was written, and an
+                    // uninstall stopped at its very end, are done as far as
+                    // running them again can tell.
+                    let done = |e: &String| {
+                        e.contains("are already out of") || e.contains("is not installed")
+                    };
+                    if again
+                        && let Err(e) = run(&env).as_ref().map_err(|e| e.clone())
+                        && !done(&e)
+                    {
+                        panic!("{said}: {e}");
+                    }
+                    if Manifest::read(env.dirs().unwrap()).is_some() {
+                        let leaving = match command {
+                            "eject" if again => self_uninstall(&env, &force, &mut quiet()),
+                            "eject" => self_eject(&env, &force, &mut quiet()),
+                            _ => self_uninstall(&env, &force, &mut quiet()),
+                        };
+                        if let Err(e) = leaving
+                            && !done(&e)
+                        {
+                            panic!("{said}, leaving: {e}");
+                        }
+                    }
+                    back(&env, &prefix, &said);
+                    let _ = fs::remove_dir_all(&env.home);
+                }
+                if finished {
+                    break;
+                }
+                stopped_at += 1;
+            }
+            assert!(stopped_at >= 3, "{command}: only {stopped_at} steps");
+        }
     }
 
     #[test]
