@@ -1,4 +1,4 @@
-//! Reference cases: each file in `cases/` runs against real nvm and nvmimic,
+//! Reference cases: each file in `cases/` runs against official nvm and nvmimic,
 //! and the two must agree. A case file starts with header comments:
 //!
 //! ```text
@@ -202,7 +202,7 @@ fn workers() -> usize {
         })
 }
 
-/// What a run does about recordings of real nvm, see [`crate::golden`].
+/// What a run does about recordings of official nvm, see [`crate::golden`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Recordings {
     /// Runs the left side every time and keeps nothing.
@@ -220,7 +220,7 @@ pub struct Plan {
     pub left: Impl,
     pub right: Impl,
     pub recordings: Recordings,
-    /// Run a case under one shell when real nvm did the same in all of them.
+    /// Run a case under one shell when official nvm did the same in all of them.
     pub one_shell: bool,
 }
 
@@ -252,7 +252,7 @@ impl Plan {
         }
     }
 
-    /// nvmimic against recordings of real nvm.
+    /// nvmimic against recordings of official nvm.
     pub fn everyday(one_shell: bool) -> Plan {
         Plan::everyday_for(harness::NVMIMIC, one_shell)
     }
@@ -399,7 +399,7 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
                                 .collect();
                         if let Some(changes) = stale {
                             differences.push(format!(
-                                "real nvm no longer does what was recorded for this pair, so \
+                                "official nvm no longer does what was recorded for this pair, so \
                                  everyday runs compared against a stale recording:\n{}",
                                 changes.join("\n")
                             ));
@@ -422,7 +422,7 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
     eprintln!("{}", guard.finish());
     if plan.recordings != Recordings::Unused {
         eprintln!(
-            "recordings of real nvm: {} replayed, {} recorded",
+            "recordings of official nvm: {} replayed, {} recorded",
             replayed.into_inner(),
             recorded.into_inner()
         );
@@ -447,7 +447,7 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
 }
 
 /// Measures what each case's body runs in nvm.sh: every case once, under
-/// its first shell, against a traced copy of real nvm. Goes through the same
+/// its first shell, against a traced copy of official nvm. Goes through the same
 /// guard as a parity run.
 pub fn measure_covers(
     cases: &[Case],

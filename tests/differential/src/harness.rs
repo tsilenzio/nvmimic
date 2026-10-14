@@ -1,4 +1,4 @@
-//! Runs a shell snippet against real nvm and against nvmimic in isolated
+//! Runs a shell snippet against official nvm and against nvmimic in isolated
 //! homes that share one fake mirror, then reports what differs.
 
 use crate::mirror::{self, Mirror};
@@ -242,7 +242,7 @@ pub type Phases = Option<(Duration, Duration)>;
 pub struct Options {
     pub timeout: Duration,
     pub count_launches: bool,
-    /// Run real nvm from a copy that notes which of its parts run.
+    /// Run official nvm from a copy that notes which of its parts run.
     pub trace_covers: bool,
 }
 
@@ -591,7 +591,7 @@ fn settle_progress(text: &str) -> String {
     lines.join("\n")
 }
 
-/// Runs real nvm through a case's sourcing and setup and stops there. What
+/// Runs official nvm through a case's sourcing and setup and stops there. What
 /// this leaves behind is where the case's body starts from, so comparing a
 /// full run against it shows what the body itself did.
 pub fn before_body(shell: &Shell, case: &crate::cases::Case) -> Outcome {

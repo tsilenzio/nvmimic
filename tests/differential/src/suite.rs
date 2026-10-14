@@ -2,7 +2,7 @@
 //! vendored `test/` directory is one test. Each side keeps one copy of that
 //! directory at `$NVM_DIR/test`, where the tests expect it, and runs every
 //! test there the way nvm's test runner (urchin 0.0.5) does. A test that
-//! passes against real nvm has to behave the same against nvmimic.
+//! passes against official nvm has to behave the same against nvmimic.
 //!
 //! Tests that cannot be compared are listed in `cases/NVM_SUITE_SKIPPED`,
 //! each with the reason.

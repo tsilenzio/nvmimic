@@ -865,6 +865,45 @@ fn no_forced_command_and_no_hand_over_copies_the_nvm_folder() {
     }
 }
 
+/// nvmimic uses the Node versions and aliases in the nvm folder, and says
+/// so. A program with a store of its own says what is true for it, in the
+/// same places.
+#[test]
+fn each_program_says_what_is_true_for_it_about_the_nvm_folder() {
+    let ours = [
+        "nvmimic aims to be a drop-in replacement: it uses the Node versions, aliases\n\
+         and settings that are already there, and only swaps out nvm's scripts.\n",
+        "Your Node versions and aliases stay as they are.\n",
+        "so `nvmimic self install` can take over again.\n",
+    ];
+    let home = Home::new(true);
+    let said = home.ok(NVMIMIC, "install") + &home.ok(NVMIMIC, "eject");
+    for sentence in ours {
+        assert!(said.contains(sentence), "{sentence}: {said}");
+    }
+    let said = home.ok(NVMIMIC, "uninstall");
+    assert!(said.contains(ours[1]), "{said}");
+
+    let home = Home::new(true);
+    let said = home.ok(SHELFY, "install") + &home.ok(SHELFY, "eject");
+    assert!(
+        said.contains(
+            "shelfy keeps Node versions and aliases on a shelf of its own and uses none of\n\
+             the ones in the nvm folder. It only swaps out nvm's scripts.\n"
+        ),
+        "{said}"
+    );
+    assert!(
+        said.contains("so `shelfy self enable` can take over again.\n"),
+        "{said}"
+    );
+    let said = said + &home.ok(SHELFY, "uninstall");
+    for word in ["drop-in", "stay as they are", "shelfy self install` can"] {
+        assert!(!said.contains(word), "{word}: {said}");
+    }
+    assert!(home.official_is_back());
+}
+
 #[test]
 fn a_self_command_waits_for_the_lock_and_then_says_who_holds_it() {
     let home = Home::new(true);

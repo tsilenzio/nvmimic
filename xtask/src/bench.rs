@@ -1,4 +1,4 @@
-//! `cargo xtask bench`: how long sourcing `nvm.sh` takes, for real nvm and
+//! `cargo xtask bench`: how long sourcing `nvm.sh` takes, for official nvm and
 //! for nvmimic, with real Node installs, under every shell and scenario.
 //!
 //! The fixture lives in `target/bench/`. Building it the first time runs the
@@ -234,7 +234,7 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
 
     if !base.join(".nvm/alias/default").is_file() {
         eprintln!(
-            "bench: installing Node {} with real nvm (needs network)",
+            "bench: installing Node {} with official nvm (needs network)",
             VERSIONS.join(", ")
         );
         let _ = fs::remove_dir_all(root.join("base"));
@@ -264,7 +264,7 @@ fn prepare(root: &Path) -> Result<Fixture, String> {
             .status()
             .map_err(|e| e.to_string())?;
         if !status.success() {
-            return Err("installing Node with real nvm failed".to_string());
+            return Err("installing Node with official nvm failed".to_string());
         }
     }
 

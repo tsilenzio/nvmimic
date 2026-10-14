@@ -1,6 +1,6 @@
-//! Recorded outcomes of real nvm, so an everyday run only has to run nvmimic.
+//! Recorded outcomes of official nvm, so an everyday run only has to run nvmimic.
 //!
-//! Real nvm at the pinned version gives the same answer every time for the
+//! Official nvm at the pinned version gives the same answer every time for the
 //! same case, shell and machine. So the first run records what it did for
 //! each case under each shell, one file per pair in `target/parity-golden/`,
 //! and later runs read the file instead of running nvm again.
@@ -171,13 +171,13 @@ fn write(path: &Path, key: &str, label: &str, shell: &Shell, outcome: &Outcome) 
     fs::write(path, serde_json::to_string_pretty(&value).unwrap() + "\n").unwrap();
 }
 
-/// What real nvm did for this pair when it was last recorded, if the
+/// What official nvm did for this pair when it was last recorded, if the
 /// recording is still good for the case, shell and machine as they are now.
 pub fn load(case: &Case, shell: &Shell) -> Option<Outcome> {
     read(&file(case, shell), &key(case, shell))
 }
 
-/// Records what real nvm did for this pair, and makes sure the state the
+/// Records what official nvm did for this pair, and makes sure the state the
 /// case's body started from is on record too.
 pub fn store(case: &Case, shell: &Shell, outcome: &Outcome) {
     write(
@@ -284,7 +284,7 @@ fn body_effect(case: &Case, shell: &Shell, outcome: &Outcome) -> BTreeMap<String
     effect
 }
 
-/// The parts of what a case's body did under real nvm that are not the same
+/// The parts of what a case's body did under official nvm that are not the same
 /// in every shell. A case with none tells little more under four shells than
 /// under one.
 pub fn shell_differences(case: &Case, recorded: &[(&Shell, &Outcome)]) -> BTreeSet<String> {

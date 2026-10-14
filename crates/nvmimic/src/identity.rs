@@ -39,6 +39,40 @@ pub struct Identity {
     /// Where `self update` gets a newer program. `None` for a program that
     /// doesn't update itself.
     pub release: Option<Release>,
+    /// What the installer says about the Node versions and aliases in the
+    /// nvm folder, which depends on where the program keeps its own.
+    pub words: Words,
+}
+
+/// Sentences of `self install`, `self eject` and `self uninstall` that are
+/// true for nvmimic and not for every program built on this library.
+/// nvmimic uses the Node versions and aliases in the nvm folder. A program
+/// with a store of its own doesn't, and says what it does in their place.
+///
+/// `{app}` in a sentence stands for the program's name.
+#[derive(Debug)]
+pub struct Words {
+    /// What `self install` says after `Found nvm in <folder>.`, one entry
+    /// per line: what the program does with what is already there.
+    pub takes_over: &'static [&'static str],
+    /// What `self eject` and `self uninstall` say is left untouched.
+    /// `None` says nothing, for a program whose own steps say it.
+    pub stays: Option<&'static str>,
+    /// The command that takes over again after an eject, as it goes into
+    /// "so `<command>` can take over again".
+    pub takes_over_again: &'static str,
+}
+
+impl Words {
+    /// nvmimic's own.
+    pub const NVMIMIC: Words = Words {
+        takes_over: &[
+            "{app} aims to be a drop-in replacement: it uses the Node versions, aliases",
+            "and settings that are already there, and only swaps out nvm's scripts.",
+        ],
+        stays: Some("Your Node versions and aliases stay as they are."),
+        takes_over_again: "{app} self install",
+    };
 }
 
 #[derive(Debug)]
@@ -75,7 +109,13 @@ impl Identity {
             url: crate::update::RELEASES,
             team_id: crate::update::TEAM_ID,
         }),
+        words: Words::NVMIMIC,
     };
+
+    /// One of the program's [`Words`] with its name in it.
+    pub fn worded(&self, sentence: &str) -> String {
+        sentence.replace("{app}", self.name)
+    }
 
     /// Whether the name can be part of a shell function name, a variable
     /// name and a file name. `nvm` is taken.
@@ -173,6 +213,7 @@ mod tests {
             cargo: "shelfy",
         },
         release: None,
+        words: Words::NVMIMIC,
     };
 
     #[test]

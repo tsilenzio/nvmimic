@@ -4,7 +4,7 @@
 //! script. This test installs nvmimic with `nvmimic self install` into a
 //! throwaway home and then installs three real Node releases, switches
 //! between them and asks `node` and `npm` for their versions. It compares
-//! nothing with real nvm. It answers one question: does an installed nvmimic
+//! nothing with official nvm. It answers one question: does an installed nvmimic
 //! still do its everyday job.
 //!
 //! The Node archives come through the mirror's network mode, so each one is

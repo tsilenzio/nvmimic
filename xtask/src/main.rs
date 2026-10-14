@@ -16,16 +16,16 @@ const USAGE: &str = "\
 usage: cargo xtask <task>
 
 tasks:
-  parity                            the everyday run: nvmimic against recordings of real nvm
+  parity                            the everyday run: nvmimic against recordings of official nvm
   parity --all-shells               the same, with every case under every shell
   parity --changed                  the everyday run on the cases a change can affect
-  parity --full [--record]          run real nvm and nvmimic side by side on everything
+  parity --full [--record]          run official nvm and nvmimic side by side on everything
   parity --network                  run nvm's tests that install real Node, against nodejs.org
   parity covers                     measure what each case runs in nvm.sh, write `# covers:`
-  parity determinism [--record]     run real nvm against itself on every case
+  parity determinism [--record]     run official nvm against itself on every case
   parity launches                   check everyday commands start only nvmimic
   smoke                             install nvmimic and three real Node releases, then use them
-  bench [--check] [--runs=N]        time sourcing nvm.sh for real nvm and nvmimic
+  bench [--check] [--runs=N]        time sourcing nvm.sh for official nvm and nvmimic
   gen-shell [--check]               write shell/nvm.sh and shell/init.sh from the pinned nvm.sh
   trace [--strict]                  map nvm.sh's functions to nvmimic's code and cases
   nvm-diff <old> <new> [--repo P]   report what changed in nvm between two revisions
@@ -33,9 +33,9 @@ tasks:
   release [--unsigned]              build, sign and notarize the macOS program into target/dist/
   help                              show this list
 
-The everyday run records what real nvm does the first time and reads it back
+The everyday run records what official nvm does the first time and reads it back
 after that. It records a case again when the case, the vendored nvm, the shell
-or the OS version changes. Cases where real nvm did the same in every shell
+or the OS version changes. Cases where official nvm did the same in every shell
 run under one shell, a different one each run. --full trusts no recording and
 is the run for releases and for moving the nvm pin. --changed compares the
 source files with the last run that passed and runs the cases whose `# covers:`

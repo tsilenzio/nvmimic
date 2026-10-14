@@ -12,7 +12,7 @@ fn recording() -> bool {
 }
 
 /// `NVMIMIC_PARITY_RUN` picks how much runs: `everyday` replays recordings of
-/// real nvm and runs shell-independent cases under one shell, `all-shells`
+/// official nvm and runs shell-independent cases under one shell, `all-shells`
 /// replays and runs every shell, and anything else is the full run.
 fn plan() -> Plan {
     if nvmimic_parity::mirror::network_pass() {
@@ -36,7 +36,7 @@ fn report(results: &[Result]) -> usize {
     passing
 }
 
-/// The harness itself works: real nvm sources and answers in every shell.
+/// The harness itself works: official nvm sources and answers in every shell.
 #[test]
 fn harness_runs_real_nvm() {
     let world = World::new();
@@ -77,7 +77,7 @@ fn probe_sees_leaked_variables() {
     }
 }
 
-/// Real nvm run twice must agree with itself. Pairs that do not are
+/// Official nvm run twice must agree with itself. Pairs that do not are
 /// nondeterministic and get listed in `cases/NONDETERMINISTIC`, which the
 /// comparison against nvmimic skips. `NVMIMIC_PARITY_RECORD=1` rewrites the list.
 #[test]
@@ -89,7 +89,7 @@ fn nvm_is_deterministic() {
     if recording() {
         cases::record(
             NONDETERMINISTIC,
-            "# Case-shell pairs where real nvm disagrees with itself across two runs.\n\
+            "# Case-shell pairs where official nvm disagrees with itself across two runs.\n\
              # Regenerate with `cargo xtask parity determinism --record`.\n",
             &results,
         );
@@ -127,7 +127,7 @@ fn reference_cases_match_or_are_known() {
     if recording() {
         cases::record(
             KNOWN_FAILING,
-            "# Case-shell pairs where nvmimic does not match real nvm yet.\n\
+            "# Case-shell pairs where nvmimic does not match official nvm yet.\n\
              # Regenerate with `cargo xtask parity --record`. The list only shrinks.\n",
             &results,
         );

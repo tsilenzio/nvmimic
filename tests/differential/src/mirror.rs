@@ -1,4 +1,4 @@
-//! A local stand-in for nodejs.org/dist that both real nvm and nvmimic
+//! A local stand-in for nodejs.org/dist that both official nvm and nvmimic
 //! install from. Each release is a tiny tree whose `node` and `npm` are shell
 //! scripts, packed the way the real dist directory packs them.
 //!
@@ -25,7 +25,7 @@
 //! iojs.org serve, fetched once each and kept in `target/parity-network/`.
 //!
 //! The files are built once and kept in `target/parity-mirror/`, so every
-//! run serves the very same archives. Recorded outcomes of real nvm (see
+//! run serves the very same archives. Recorded outcomes of official nvm (see
 //! [`crate::golden`]) hold the hashes of downloaded archives, and those only
 //! stay true while the archives do.
 

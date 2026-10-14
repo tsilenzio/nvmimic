@@ -1,7 +1,7 @@
 //! Where nvmimic keeps its own files.
 //!
 //! None of them go into `$NVM_DIR`. That folder holds what nvm keeps there
-//! and nothing else, so a folder made by real nvm and one used by nvmimic
+//! and nothing else, so a folder made by official nvm and one used by nvmimic
 //! look the same. nvmimic's own files follow the layout many command line
 //! tools use, with one variable to move each part:
 //!

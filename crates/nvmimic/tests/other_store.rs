@@ -889,6 +889,7 @@ fn a_second_program_updates_itself_from_its_own_releases() {
             url: "https://example.invalid/shelfy/releases",
             team_id: None,
         }),
+        words: shelf::WORDS,
     };
     let home = home("update");
     let env = env_for(&RELEASED, &home);

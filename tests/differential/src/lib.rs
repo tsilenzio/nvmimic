@@ -1,4 +1,4 @@
-//! The parity harness: real nvm and nvmimic run the same shell snippets in
+//! The parity harness: official nvm and nvmimic run the same shell snippets in
 //! isolated homes that share one fake Node mirror, and everything they print,
 //! return, export, define or write is compared.
 

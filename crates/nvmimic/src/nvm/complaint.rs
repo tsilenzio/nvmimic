@@ -1,6 +1,6 @@
 //! What the calling shell itself prints when nvm's code asks it for something
 //! it cannot do: start a command that is not there, or enter a directory
-//! that is not one. Real nvm is shell code, so these lines come from the
+//! that is not one. Official nvm is shell code, so these lines come from the
 //! shell and name a place in `nvm.sh`. nvmimic prints the same lines, with
 //! the line numbers taken from the pinned `nvm.sh` when nvmimic is built.
 //!

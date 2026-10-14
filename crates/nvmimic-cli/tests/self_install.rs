@@ -922,7 +922,7 @@ fn install_puts_the_program_in_local_bin() {
     assert!(out.status.success(), "{}", text(&out.stderr));
     assert!(fs::symlink_metadata(&command).unwrap().is_file());
     assert!(text(&out.stdout).contains("isn't on your PATH yet"));
-    // Nothing named nvm goes on PATH: real nvm is only a shell function.
+    // Nothing named nvm goes on PATH: official nvm is only a shell function.
     assert!(!home.root.join(".local/bin/nvm").exists());
 
     // The installed program can install again, and stays the same file.

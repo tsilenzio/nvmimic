@@ -5,7 +5,7 @@
 use nvmimic::backend::{self, Backend, Flavor, Flavors, InstallRequest, Installed, Reason};
 use nvmimic::complete::{Command, Needs, command, flag};
 use nvmimic::context::Nvm;
-use nvmimic::identity::{Identity, Packages};
+use nvmimic::identity::{Identity, Packages, Words};
 use nvmimic::install::{Leaving, Manifest, Site, Steps, Ui};
 use nvmimic::nvm::paths;
 use nvmimic::shell::Vars;
@@ -50,6 +50,18 @@ pub static SHELFY: Identity = Identity {
         cargo: "shelfy-cli",
     },
     release: None,
+    words: WORDS,
+};
+
+/// The shelf keeps its own Node versions and aliases, so the sentences
+/// nvmimic has about the ones in the nvm folder would be false here.
+pub const WORDS: Words = Words {
+    takes_over: &[
+        "{app} keeps Node versions and aliases on a shelf of its own and uses none of",
+        "the ones in the nvm folder. It only swaps out nvm's scripts.",
+    ],
+    stays: None,
+    takes_over_again: "{app} self enable",
 };
 
 pub struct Shelf {

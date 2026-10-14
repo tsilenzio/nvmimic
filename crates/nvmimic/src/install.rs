@@ -1115,10 +1115,9 @@ fn install(
     }
     if !existing.is_empty() && !reinstall {
         ui.say(&format!("Found nvm in {}.", nvm_dir.display()));
-        ui.say(&format!(
-            "{app} aims to be a drop-in replacement: it uses the Node versions, aliases"
-        ));
-        ui.say("and settings that are already there, and only swaps out nvm's scripts.");
+        for sentence in identity.words.takes_over {
+            ui.say(&identity.worded(sentence));
+        }
         ui.say(&format!(
             "The scripts it replaces ({}) are kept in {} and come back with `{app} self uninstall`.",
             existing.join(", "),
@@ -1940,8 +1939,9 @@ fn leave(
             nvm_dir.display()
         )),
         Leaving::Eject => ui.say(&format!(
-            "This puts nvm's own {} back and keeps the {app} program, so `{app} self install` can take over again.",
-            restore.join(", ")
+            "This puts nvm's own {} back and keeps the {app} program, so `{}` can take over again.",
+            restore.join(", "),
+            identity.worded(identity.words.takes_over_again)
         )),
         _ if !restore.is_empty() => ui.say(&format!(
             "This puts nvm's own {} back, so nvm works as it did before {app}.",
@@ -1963,7 +1963,9 @@ fn leave(
         if record.lost && restore.is_empty() {
             ui.say(&no_backup);
         }
-        ui.say("Your Node versions and aliases stay as they are.");
+        if let Some(sentence) = identity.words.stays {
+            ui.say(&identity.worded(sentence));
+        }
     }
 
     if options.dry_run {
