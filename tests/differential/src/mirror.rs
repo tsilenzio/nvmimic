@@ -381,6 +381,12 @@ const INDEX_HEADER: &str =
 /// The two files of a release that get run.
 const SCRIPTS: [&str; 2] = ["bin/node", "lib/node_modules/npm/bin/npm-cli.js"];
 
+/// The line of the stand-in `node` that runs npm when it is handed the path
+/// of an `npm-cli.js`, as real node would. Some programs put a script of
+/// their own in place of `bin/npm`, and that script starts npm as `node
+/// <path>/npm-cli.js <arguments>`.
+const NODE_RUNS_NPM: &str = "*/npm-cli.js) script=$1; shift; exec \"$script\" \"$@\" ;;\n";
+
 fn mode_of(path: &Path) -> u32 {
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path).map_or(0, |meta| meta.permissions().mode() & 0o7777)
@@ -501,7 +507,7 @@ fn build_tree(top: &Path, version: &str, shared: Option<&Path>) {
             write_script(
                 &top.join(node),
                 &format!(
-                    "#!/bin/sh\n{log}\nif [ \"$1\" = --version ] || [ \"$1\" = -v ]; then echo {version}; else echo \"node {version}: $*\"; fi\n"
+                    "#!/bin/sh\n{log}\ncase \"${{1-}}\" in\n--version|-v) echo {version} ;;\n{NODE_RUNS_NPM}*) echo \"node {version}: $*\" ;;\nesac\n"
                 ),
             );
             write_script(
@@ -557,4 +563,38 @@ pub fn sha256(path: &Path) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn the_stand_in_node_runs_npm_when_handed_its_script() {
+        let top = std::env::temp_dir().join(format!("nvmimic-node-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&top);
+        build_tree(&top, "v24.15.0", None);
+        let node = |args: &[&str]| {
+            let out = Command::new(top.join("bin/node"))
+                .args(args)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let npm_cli = top.join("lib/node_modules/npm/bin/npm-cli.js");
+        let npm_cli = npm_cli.to_str().unwrap();
+
+        assert_eq!(node(&["--version"]), "v24.15.0\n");
+        assert_eq!(node(&["-v"]), "v24.15.0\n");
+        assert_eq!(node(&["a.js", "b"]), "node v24.15.0: a.js b\n");
+        assert_eq!(node(&[]), "node v24.15.0: \n");
+        // The way a wrapper script in place of `bin/npm` starts npm.
+        assert_eq!(node(&[npm_cli, "--version"]), format!("{NPM_VERSION}\n"));
+        assert_eq!(
+            node(&[npm_cli, "config", "get", "prefix"]),
+            "npm: config get prefix\n"
+        );
+        let _ = fs::remove_dir_all(&top);
+    }
 }

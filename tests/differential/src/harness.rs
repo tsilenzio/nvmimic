@@ -653,6 +653,9 @@ impl SuiteSide {
             .root
             .join(format!("{}-{}", self.label, self.generation));
         prepare_suite_side(which, &side, options);
+        if let Some(subject) = which.subject() {
+            subject.tidy(&side);
+        }
         side
     }
 

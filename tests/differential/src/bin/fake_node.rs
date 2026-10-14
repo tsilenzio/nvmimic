@@ -5,7 +5,8 @@
 //! that wants to see an answer remembered links this program in under the
 //! name `node`. It reports the version named by the folder it was started
 //! from, `<version>/bin/node`, and notes each launch in
-//! `$NVMIMIC_LAUNCH_LOG` like the scripts do.
+//! `$NVMIMIC_LAUNCH_LOG` like the scripts do. Like them, it runs npm when
+//! it is handed the path of an `npm-cli.js`.
 
 use std::io::Write;
 use std::path::Path;
@@ -31,6 +32,13 @@ fn main() {
     let rest: Vec<String> = args.collect();
     match rest.first().map(String::as_str) {
         Some("--version" | "-v") => println!("{version}"),
+        // Handed the path of an `npm-cli.js`, real node runs npm.
+        Some(script) if script.ends_with("/npm-cli.js") => {
+            use std::os::unix::process::CommandExt;
+            let failed = std::process::Command::new(script).args(&rest[1..]).exec();
+            eprintln!("node: {script}: {failed}");
+            std::process::exit(127);
+        }
         _ => println!("node {version}: {}", rest.join(" ")),
     }
 }

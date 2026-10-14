@@ -183,6 +183,10 @@ pub struct Result {
     pub id: String,
     pub shell: String,
     pub differences: Vec<String>,
+    /// How many differences a rule of the subject's left out or trimmed
+    /// (see [`crate::subject::Expected`]). A pair with none in
+    /// `differences` and some here matches only under those rules.
+    pub covered: usize,
     /// How long each side took, left then right.
     pub elapsed: (Duration, Duration),
     /// Each side's sourcing and sourcing-plus-setup times, when measured.
@@ -387,6 +391,27 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
                             Impl::Subject(subject) => Some(subject.expected()),
                             Impl::Nvm => None,
                         };
+                        let raw = differences((&labels.0, &a), (&labels.1, &b));
+                        // Lines a rule names come out of both sides, and
+                        // the rest of that key is compared again.
+                        let (mut a, mut b) = (a, b);
+                        if let Some(expected) = expected {
+                            for (key, _) in &raw {
+                                for side in [&mut a, &mut b] {
+                                    let text = match key.as_str() {
+                                        "stdout" => Some(&mut side.stdout),
+                                        "stderr" => Some(&mut side.stderr),
+                                        key => side.state.get_mut(key),
+                                    };
+                                    if let Some(text) = text
+                                        && let Some(kept) =
+                                            expected.without_lines(&case.id, &shell.name, key, text)
+                                    {
+                                        *text = kept;
+                                    }
+                                }
+                            }
+                        }
                         let mut differences: Vec<String> =
                             differences((&labels.0, &a), (&labels.1, &b))
                                 .into_iter()
@@ -397,6 +422,7 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
                                 })
                                 .map(|(_, text)| text)
                                 .collect();
+                        let covered = raw.len() - differences.len();
                         if let Some(changes) = stale {
                             differences.push(format!(
                                 "official nvm no longer does what was recorded for this pair, so \
@@ -408,6 +434,7 @@ pub fn run_all(cases: &[Case], plan: Plan) -> std::result::Result<Vec<Result>, S
                             id: case.id.clone(),
                             shell: shell.name.clone(),
                             differences,
+                            covered,
                             elapsed: (a.elapsed, b.elapsed),
                             phases: (a.phases, b.phases),
                         });

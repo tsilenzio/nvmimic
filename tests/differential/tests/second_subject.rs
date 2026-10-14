@@ -11,8 +11,16 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct Shelfy;
+
+/// How often the harness asked shelfy to tidy a sandbox of nvm's own suite.
+static TIDIED: AtomicUsize = AtomicUsize::new(0);
+
+/// A line shelfy prints under `nvm --help` that official nvm doesn't, so
+/// that one case has a difference only a rule about lines can cover.
+const OWN_LINE: &str = "shelfy: a line of its own\n";
 
 /// Where shelfy keeps its own files in a sandbox: beside the home folder,
 /// each with the setting that moves it there.
@@ -74,7 +82,17 @@ impl Subject for Shelfy {
 
     /// The shelf names a version's folder without the `v`.
     fn normalize(&self, text: String) -> String {
-        text.replace("<home>/shelf/", "<install>/v")
+        let mut text = text.replace("<home>/shelf/", "<install>/v");
+        if text.contains("  nvm --help ") {
+            text.push_str(OWN_LINE);
+        }
+        text
+    }
+
+    /// What a suite test left on the shelf is gone before the next one.
+    fn tidy(&self, side: &Path) {
+        TIDIED.fetch_add(1, Ordering::SeqCst);
+        let _ = fs::remove_dir_all(side.join("home/shelf"));
     }
 
     /// Downloads and locks are the shelf's own business.
@@ -94,7 +112,9 @@ impl Subject for Shelfy {
                  # What shelfy sets for itself.\n\
                  * * var:SHELFY_*\n\
                  * * var:SHELF_NODE_VERSION\n\
-                 * * var:SHELF_SWITCH\n",
+                 * * var:SHELF_SWITCH\n\
+                 # One line of the help is shelfy's own. The rest is compared.\n\
+                 HLP-01a * stdout ~ shelfy: *\n",
             )
         })
     }
@@ -103,7 +123,14 @@ impl Subject for Shelfy {
 /// A few cases that install a version, switch to it and ask where it is.
 /// The same case files nvmimic runs, against the same recordings of
 /// official nvm.
-const CASES: [&str; 4] = ["VER-01", "VER-02", "LST-01", "HLP-01a"];
+const CASES: [&str; 5] = [
+    "VER-01",
+    "VER-02",
+    "LST-01",
+    "HLP-01a",
+    // One test of nvm's own suite, which runs in a sandbox used again.
+    "NVT-fast/Unit_tests/nvm_has",
+];
 
 #[test]
 fn a_second_program_is_compared_like_nvmimic() {
@@ -123,4 +150,12 @@ fn a_second_program_is_compared_like_nvmimic() {
     if let Err(message) = cases::judge(&results, &known, "no list") {
         panic!("{message}");
     }
+    // The help matches with shelfy's own line taken out, and the count says
+    // that a rule was needed for it.
+    for result in results.iter().filter(|result| result.id == "HLP-01a") {
+        assert!(result.covered >= 1, "{} ({})", result.id, result.shell);
+    }
+    // The suite test ran in a sandbox the harness had shelfy tidy first.
+    assert!(results.iter().any(|result| result.id.starts_with("NVT-")));
+    assert!(TIDIED.load(Ordering::SeqCst) >= 1);
 }

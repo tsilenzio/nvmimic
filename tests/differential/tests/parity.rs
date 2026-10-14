@@ -33,6 +33,15 @@ fn stopped(reason: String) -> Vec<Result> {
 fn report(results: &[Result]) -> usize {
     let passing = results.iter().filter(|r| r.differences.is_empty()).count();
     eprintln!("{passing}/{} case-shell pairs match", results.len());
+    // A subject with rules of its own: say how many pairs match only
+    // because a rule left a difference out. nvmimic has no rules.
+    let under_rules = results
+        .iter()
+        .filter(|r| r.differences.is_empty() && r.covered > 0)
+        .count();
+    if under_rules > 0 {
+        eprintln!("{under_rules} of them match only with differences a rule leaves out");
+    }
     passing
 }
 
