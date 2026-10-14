@@ -61,6 +61,10 @@ pub struct Words {
     /// The command that takes over again after an eject, as it goes into
     /// "so `<command>` can take over again".
     pub takes_over_again: &'static str,
+    /// The command that goes back to the program from before `self
+    /// update`, named in the line that ends an update. `None` names none,
+    /// for a program whose command line has no such command.
+    pub goes_back: Option<&'static str>,
 }
 
 impl Words {
@@ -72,6 +76,7 @@ impl Words {
         ],
         stays: Some("Your Node versions and aliases stay as they are."),
         takes_over_again: "{app} self install",
+        goes_back: Some("{app} self rollback"),
     };
 }
 

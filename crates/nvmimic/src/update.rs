@@ -346,14 +346,22 @@ fn update_in(
 
     let old = manifest.version.clone();
     swap(identity, dirs, manifest, binary, &new, &newest)?;
-    ui.say(&match before_sharing(identity, &old) {
-        true => format!("Updated {app} from {old} to {newest}."),
-        false => format!(
-            "Updated {app} from {old} to {newest}. `{app} self rollback` goes back to {old}."
-        ),
-    });
+    ui.say(&updated(identity, &old, &newest));
     ui.say("Open a new shell to use it.");
     Ok(())
+}
+
+/// The line that ends an update. It names the command that goes back
+/// where the program has one, and where there is something to go back to.
+fn updated(identity: &Identity, old: &str, new: &str) -> String {
+    let app = identity.name;
+    match identity.words.goes_back {
+        Some(command) if !before_sharing(identity, old) => format!(
+            "Updated {app} from {old} to {new}. `{}` goes back to {old}.",
+            identity.worded(command)
+        ),
+        _ => format!("Updated {app} from {old} to {new}."),
+    }
 }
 
 /// `nvmimic self rollback`.
@@ -474,6 +482,31 @@ mod tests {
         assert!(!before_sharing(&shelfy, "0.1.0"));
         assert!(!before_sharing(&Identity::NVMIMIC, "0.1.1"));
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_last_line_of_an_update_names_a_way_back_only_where_there_is_one() {
+        let me = &Identity::NVMIMIC;
+        assert_eq!(
+            updated(me, "1.0.0", "1.0.1"),
+            "Updated nvmimic from 1.0.0 to 1.0.1. `nvmimic self rollback` goes back to 1.0.0."
+        );
+        assert_eq!(
+            updated(me, "0.1.0", "1.0.0"),
+            "Updated nvmimic from 0.1.0 to 1.0.0."
+        );
+        let without = Identity {
+            name: "shelfy",
+            words: crate::identity::Words {
+                goes_back: None,
+                ..crate::identity::Words::NVMIMIC
+            },
+            ..Identity::NVMIMIC
+        };
+        assert_eq!(
+            updated(&without, "3.1.4", "3.2.0"),
+            "Updated shelfy from 3.1.4 to 3.2.0."
+        );
     }
 
     #[test]

@@ -62,6 +62,7 @@ pub const WORDS: Words = Words {
     ],
     stays: None,
     takes_over_again: "{app} self enable",
+    goes_back: Some("{app} self rollback"),
 };
 
 pub struct Shelf {
