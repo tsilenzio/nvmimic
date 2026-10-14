@@ -427,6 +427,7 @@ mod tests {
             xdg_config_home: None,
             homebrew_prefix: None,
             homebrew_usual_places: false,
+            zdotdir: None,
             cargo_home: None,
             path: None,
             dirs: Some(dirs.clone()),

@@ -168,6 +168,8 @@ pub struct Env {
     /// [`in_own_home`]. A struct built by hand for a throwaway home sets
     /// `false`.
     pub homebrew_usual_places: bool,
+    /// `ZDOTDIR`, where zsh reads its startup files when it is set.
+    pub zdotdir: Option<String>,
     pub cargo_home: Option<String>,
     pub path: Option<String>,
     /// Where nvmimic's own files go. `None` without a home folder.
@@ -193,6 +195,7 @@ impl Env {
             xdg_config_home: var("XDG_CONFIG_HOME"),
             homebrew_prefix: var("HOMEBREW_PREFIX"),
             homebrew_usual_places: in_own_home(var("HOME").as_deref(), account_home().as_deref()),
+            zdotdir: var("ZDOTDIR"),
             cargo_home: var("CARGO_HOME"),
             path: var("PATH"),
             dirs: Dirs::resolve_for(identity, var),
@@ -1621,18 +1624,27 @@ const STARTUP_FILES: &[&str] = &[
     ".zlogin",
 ];
 
+/// The files zsh reads from `ZDOTDIR` when that is set.
+const ZSH_STARTUP_FILES: &[&str] = &[".zshenv", ".zprofile", ".zshrc", ".zlogin"];
+
 /// How many files deep `source` is followed from a startup file.
 const SOURCED_DEPTH: usize = 3;
 
-/// Lines that `matches` picks out, in the usual startup files and in the
-/// files they source, followed [`SOURCED_DEPTH`] deep. A commented-out line
+/// Lines that `matches` picks out, in the usual startup files, in zsh's
+/// under `ZDOTDIR`, and in the files they source, followed [`SOURCED_DEPTH`] deep. A commented-out line
 /// doesn't count, and a file read once isn't read again.
 fn startup_lines(env: &Env, matches: impl Fn(&str) -> bool) -> Vec<StartupLine> {
     let mut found = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
+    let zdotdir = env.zdotdir.as_deref().map(Path::new);
+    let zsh_files = ZSH_STARTUP_FILES
+        .iter()
+        .filter_map(|name| Some(zdotdir?.join(name)));
     let mut files: Vec<(PathBuf, Option<PathBuf>)> = STARTUP_FILES
         .iter()
-        .map(|name| (env.home.join(name), None))
+        .map(|name| env.home.join(name))
+        .chain(zsh_files)
+        .map(|file| (file, None))
         .collect();
     for _ in 0..=SOURCED_DEPTH {
         let mut sourced = Vec::new();
@@ -2930,6 +2942,7 @@ mod tests {
             xdg_config_home: None,
             homebrew_prefix: Some(format!("{home}/no-homebrew")),
             homebrew_usual_places: false,
+            zdotdir: None,
             cargo_home: None,
             path: None,
             dirs: Dirs::resolve(|name| (name == "HOME").then(|| home.clone())),
@@ -3596,6 +3609,7 @@ mod tests {
             xdg_config_home: None,
             homebrew_prefix: Some(format!("{home}/no-homebrew")),
             homebrew_usual_places: false,
+            zdotdir: None,
             cargo_home: None,
             path: None,
             dirs: Dirs::resolve(|name| (name == "HOME").then(|| home.clone())),
@@ -3654,6 +3668,7 @@ mod tests {
             xdg_config_home: None,
             homebrew_prefix: None,
             homebrew_usual_places: false,
+            zdotdir: None,
             cargo_home: None,
             path: None,
             dirs: None,

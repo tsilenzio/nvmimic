@@ -985,6 +985,39 @@ fn a_line_in_a_file_that_a_startup_file_sources_counts() {
     assert_eq!(brew.calls(), ["uninstall nvm", "install tsilenzio/tap/nvm"]);
 }
 
+/// zsh reads its startup files from `ZDOTDIR` when that is set, so a line
+/// there counts, and only then.
+#[test]
+fn a_line_in_zdotdir_counts_when_zdotdir_is_set() {
+    for set in [false, true] {
+        let home = Home::new();
+        let brew = Brew::new(&home);
+        let zdotdir = home.root.join(".config/zsh");
+        fs::create_dir_all(&zdotdir).unwrap();
+        fs::write(zdotdir.join(".zshrc"), LOADS_HOMEBREWS_NVM).unwrap();
+        let mut vars = brew.vars().to_vec();
+        if set {
+            vars.push(("ZDOTDIR", zdotdir.as_path()));
+        }
+        let out = home.nvmimic_with(&["self", "install", "--force"], &vars);
+        let said = text(&out.stdout);
+        assert!(out.status.success(), "{said}{}", text(&out.stderr));
+        if set {
+            assert!(
+                said.contains(&format!(
+                    "  {}, line 1:\n",
+                    zdotdir.join(".zshrc").display()
+                )),
+                "{said}"
+            );
+            assert_eq!(brew.calls(), ["uninstall nvm", "install tsilenzio/tap/nvm"]);
+        } else {
+            assert!(!said.contains("startup files load"), "{said}");
+            assert_eq!(brew.calls(), ["uninstall nvm"]);
+        }
+    }
+}
+
 /// The sequence from the owner's work laptop: Homebrew's nvm with no line
 /// of its own in a startup file, taken over, then ejected. Before 1.0.1 the
 /// eject put copies back and left Homebrew's nvm uninstalled.

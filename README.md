@@ -143,8 +143,9 @@ would load nvmise or official nvm just the same, and it doesn't need
 nvmimic to be installed.
 
 nvmimic looks in `~/.zshrc`, `~/.bashrc`, `~/.profile` and the other files
-a shell reads when it starts, and in the files those files load with
-`source` or `.`, three levels deep. It shows you each line it found and the
+a shell reads when it starts, in zsh's files under `$ZDOTDIR` when that is
+set, and in the files those files load with `source` or `.`, three levels
+deep. It shows you each line it found and the
 two commands it will run, `brew uninstall nvm` and then `brew install
 tsilenzio/tap/nvm`, and asks once. `--force` says yes. If you say no,
 nothing changes, Homebrew's nvm stays, and nvmimic tells you the two
@@ -154,6 +155,18 @@ never left with no nvm.
 
 With no such line, nothing is swapped. Homebrew's nvm is uninstalled, as
 before.
+
+Two cases this doesn't cover yet:
+
+- A file loaded through a pattern or a loop, such as
+  `for f in ~/.zshrc.d/*; do source "$f"; done`, isn't looked in. If the
+  line is in such a file, nvmimic doesn't see it and only uninstalls
+  Homebrew's nvm. Run the two commands above yourself in that case.
+- Between `brew uninstall nvm` and `brew install tsilenzio/tap/nvm` there
+  is a moment when the line loads nothing. If the computer crashes right
+  then, it stays that way until you run `nvmimic self install` again,
+  which installs the stand-in, or `nvmimic self eject` or `self
+  uninstall`, which put Homebrew's nvm back.
 
 If you have the tap but not the stand-in, a plain `brew install nvm` still
 gets you Homebrew's own nvm.
