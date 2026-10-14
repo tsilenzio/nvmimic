@@ -3278,8 +3278,9 @@ mod tests {
         let prefix = env.home.join("brew");
         fs::create_dir_all(prefix.join("bin")).unwrap();
         let brew = prefix.join("bin/brew");
+        let written = prefix.join("brew.script");
         fs::write(
-            &brew,
+            &written,
             format!(
                 "#!/bin/sh\n\
                  cd '{}' || exit 1\n\
@@ -3294,7 +3295,11 @@ mod tests {
             ),
         )
         .unwrap();
-        set_mode(&brew, 0o755).unwrap();
+        set_mode(&written, 0o755).unwrap();
+        // Placed with `cp`, since Linux refuses to start a program that any
+        // process still has open for writing.
+        let placed = Command::new("cp").arg(&written).arg(&brew).status();
+        assert!(placed.unwrap().success());
         fs::create_dir_all(prefix.join("opt")).unwrap();
         assert!(brew_ran(&prefix, &["install", OFFICIAL_FORMULA]));
         let _ = fs::remove_file(prefix.join("brew.log"));
@@ -3354,9 +3359,11 @@ mod tests {
                 .output()
                 .unwrap();
             let stdout = String::from_utf8_lossy(&out.stdout);
-            let loaded = match shell {
-                "/bin/dash" => "0 ",
-                _ => "1 --no-use",
+            // On Linux `/bin/sh` is often dash.
+            let real = fs::canonicalize(shell).unwrap_or_else(|_| shell.into());
+            let loaded = match real.file_name().is_some_and(|name| name == "dash") {
+                true => "0 ",
+                false => "1 --no-use",
             };
             assert_eq!(
                 stdout,

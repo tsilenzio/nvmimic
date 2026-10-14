@@ -1142,8 +1142,9 @@ fn homebrews_nvm_comes_back_only_when_the_last_program_leaves() {
         fs::create_dir_all(prefix.join("opt/nvm")).unwrap();
         fs::write(prefix.join("opt/nvm/nvm.sh"), "official\n").unwrap();
         let brew = prefix.join("bin/brew");
+        let written = prefix.join("brew.script");
         fs::write(
-            &brew,
+            &written,
             format!(
                 "#!/bin/sh\ncd '{}' || exit 1\necho \"$*\" >> brew.log\ncase \"$*\" in\n\
                  'uninstall nvm') rm -r opt/nvm ;;\n\
@@ -1156,8 +1157,12 @@ fn homebrews_nvm_comes_back_only_when_the_last_program_leaves() {
         .unwrap();
         {
             use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&brew, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::set_permissions(&written, fs::Permissions::from_mode(0o755)).unwrap();
         }
+        // Placed with `cp`, since Linux refuses to start a program that any
+        // process still has open for writing.
+        let placed = Command::new("cp").arg(&written).arg(&brew).status();
+        assert!(placed.unwrap().success());
         fs::write(
             home.root.join(".zshrc"),
             format!(". {}/opt/nvm/nvm.sh\n", prefix.display()),

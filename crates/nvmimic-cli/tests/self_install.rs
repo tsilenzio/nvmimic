@@ -795,8 +795,18 @@ esac
             reference = reference().display(),
             stand_in = stand_in.display(),
         );
-        fs::write(prefix.join("bin/brew"), script).unwrap();
-        fs::set_permissions(prefix.join("bin/brew"), fs::Permissions::from_mode(0o755)).unwrap();
+        // Written beside it and placed with `cp`: Linux refuses to start a
+        // program that any process still has open for writing, and another
+        // test forking at the wrong moment would hold a file written here.
+        let written = prefix.join("brew.script");
+        fs::write(&written, script).unwrap();
+        fs::set_permissions(&written, fs::Permissions::from_mode(0o755)).unwrap();
+        let placed = Command::new("cp")
+            .arg(&written)
+            .arg(prefix.join("bin/brew"))
+            .status()
+            .unwrap();
+        assert!(placed.success());
         let brew = Brew { prefix };
         brew.run("install homebrew/core/nvm");
         // What sourcing Homebrew's nvm.sh leaves in `$NVM_DIR`.
